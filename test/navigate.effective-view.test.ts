@@ -19,11 +19,11 @@ const tmp = useTempDirs();
 const PANE = { entity: { repository: "r", id: "watch", kind: "vigil/watch" }, snapshotId: "snap-1", viewDefinitionId: "def-example" };
 const RESULT = { repository: "r", id: "result-r1", kind: "json/value" };
 
-async function sessionWithRecordedRun(): Promise<string> {
+async function sessionWithRecordedRun(output = passOutput("r1")): Promise<string> {
   const dir = tmp("navigate-effective");
   const session = await openOk(dir);
   await importAll(session);
-  must(await session.recordExampleRun(EXAMPLE_KEY, passOutput("r1")));
+  must(await session.recordExampleRun(EXAMPLE_KEY, output));
   return dir;
 }
 
@@ -70,6 +70,24 @@ describe("[S12] navigate resolves items in the same effective view as inspect", 
     for (const [adapter, answer] of Object.entries(navigated)) {
       expect(answer.exitCode, `${adapter}: ${answer.body}`).toBe(0);
       expect(JSON.parse(answer.body), adapter).toMatchObject({ pane: null, notice: { code: "NO_TARGET", itemId: "a1" } });
+    }
+    expect(navigated.cli.body).toBe(navigated.core.body);
+    expect(navigated.mcp.body).toBe(navigated.core.body);
+  }, 60_000);
+
+  // why: the source action resolves the same item; "no such item" would be wrong for an item inspect lists. The view records tests/mcp_e2e.rs (its source s1) and no
+  //      stored source view covers it, so the honest answer for an anchored recorded assertion is that no stored excerpt covers the anchor.
+  it("open-source on an anchored assertion of the recorded run finds the assertion, and says that no stored excerpt covers its anchor, in every adapter", async () => {
+    const output = passOutput("r1");
+    output.run.assertions[0].anchor = { repository: "r", path: "tests/mcp_e2e.rs", lines: [1, 2] };
+    const dir = await sessionWithRecordedRun(output);
+    const navigated = await throughAdapters(dir, "navigate", { pane: PANE, itemId: "a1", action: "open-source", format: "json" });
+    for (const [adapter, answer] of Object.entries(navigated)) {
+      expect(answer.exitCode, adapter).toBe(1);
+      const error = JSON.parse(answer.body);
+      expect(error, adapter).toMatchObject({ code: "UNRESOLVED_TARGET" });
+      expect(error.message, adapter).toContain("no stored source excerpt");
+      expect(error.message, adapter).not.toContain("does not exist");
     }
     expect(navigated.cli.body).toBe(navigated.core.body);
     expect(navigated.mcp.body).toBe(navigated.core.body);
