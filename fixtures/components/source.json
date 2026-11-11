@@ -1,0 +1,92 @@
+{
+  "schemaVersion": "paneweft.view/1",
+  "id": "check-source",
+  "title": "Denial branch",
+  "question": "Which exact code supports this statement?",
+  "entity": {
+    "repository": "r",
+    "id": "watch",
+    "kind": "vigil/watch"
+  },
+  "snapshotId": "snap-1",
+  "component": "source",
+  "viewDefinitionId": "def-source",
+  "scope": {
+    "repositories": [
+      "r"
+    ],
+    "roots": [
+      "/work/r"
+    ],
+    "excludes": [],
+    "limits": [
+      "fixture"
+    ]
+  },
+  "sources": [
+    {
+      "id": "s1",
+      "kind": "file",
+      "repository": "r",
+      "path": "src/check.ts",
+      "sha256": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+      "capturedAt": "2026-11-11T00:00:00Z",
+      "method": "read"
+    }
+  ],
+  "generatedAt": "2026-11-11T00:00:00Z",
+  "freshness": {
+    "repositories": [
+      {
+        "id": "r",
+        "root": "/work/r",
+        "gitRev": "0123456789abcdef0123456789abcdef01234567",
+        "dirty": false,
+        "files": {
+          "src/check.ts": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+        }
+      }
+    ]
+  },
+  "links": [],
+  "completeness": {
+    "status": "complete",
+    "criterion": "the cited line of src/check.ts"
+  },
+  "data": {
+    "excerpt": {
+      "id": "x",
+      "anchor": {
+        "repository": "r",
+        "path": "src/check.ts",
+        "lines": [
+          4,
+          4
+        ]
+      },
+      "language": "typescript",
+      "text": "if (!allowed) return denied;",
+      "provenance": "read",
+      "evidence": [
+        "s1"
+      ]
+    },
+    "annotations": [
+      {
+        "id": "a",
+        "lines": [
+          4,
+          4
+        ],
+        "message": "Denial branch",
+        "claimIds": [
+          "C1"
+        ],
+        "provenance": "read",
+        "evidence": [
+          "s1"
+        ]
+      }
+    ]
+  }
+}

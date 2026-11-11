@@ -1,0 +1,73 @@
+{
+  "schemaVersion": "paneweft.view/1",
+  "id": "watch-shape",
+  "title": "Watch shape",
+  "question": "What does this value or boundary payload contain?",
+  "entity": {
+    "repository": "r",
+    "id": "watch",
+    "kind": "vigil/watch"
+  },
+  "snapshotId": "snap-1",
+  "component": "shape",
+  "viewDefinitionId": "def-shape",
+  "scope": {
+    "repositories": [
+      "r"
+    ],
+    "roots": [
+      "/work/r"
+    ],
+    "excludes": [],
+    "limits": [
+      "fixture"
+    ]
+  },
+  "sources": [
+    {
+      "id": "s1",
+      "kind": "file",
+      "repository": "r",
+      "path": "src/watch.rs",
+      "sha256": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+      "capturedAt": "2026-11-11T00:00:00Z",
+      "method": "read"
+    }
+  ],
+  "generatedAt": "2026-11-11T00:00:00Z",
+  "freshness": {
+    "repositories": [
+      {
+        "id": "r",
+        "root": "/work/r",
+        "gitRev": "0123456789abcdef0123456789abcdef01234567",
+        "dirty": false,
+        "files": {
+          "src/watch.rs": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+        }
+      }
+    ]
+  },
+  "links": [],
+  "completeness": {
+    "status": "complete",
+    "criterion": "the declared fields of the fixture"
+  },
+  "data": {
+    "basis": "declared",
+    "root": "f",
+    "fields": [
+      {
+        "id": "f",
+        "path": "watch_id",
+        "type": "string",
+        "presence": "required",
+        "children": [],
+        "provenance": "read",
+        "evidence": [
+          "s1"
+        ]
+      }
+    ]
+  }
+}

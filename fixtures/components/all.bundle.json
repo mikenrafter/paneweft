@@ -1,0 +1,714 @@
+{
+  "schemaVersion": "paneweft.bundle/1",
+  "entities": [
+    {
+      "repository": "r",
+      "id": "watch",
+      "kind": "vigil/watch",
+      "snapshotId": "snap-1",
+      "label": "watch",
+      "dataRoles": [
+        "modules",
+        "layout",
+        "delivery",
+        "source",
+        "shape",
+        "example"
+      ],
+      "relations": [
+        {
+          "name": "module",
+          "target": {
+            "repository": "r",
+            "id": "mcp",
+            "kind": "code/module"
+          }
+        }
+      ]
+    },
+    {
+      "repository": "r",
+      "id": "mcp",
+      "kind": "code/module",
+      "snapshotId": "snap-1",
+      "label": "mcp.rs",
+      "dataRoles": [],
+      "relations": []
+    },
+    {
+      "repository": "r",
+      "id": "notes",
+      "kind": "notes/page",
+      "snapshotId": "snap-1",
+      "label": "notes",
+      "dataRoles": [
+        "story"
+      ],
+      "relations": []
+    }
+  ],
+  "definitions": [
+    {
+      "id": "def-modules",
+      "entityKind": "vigil/watch",
+      "title": "Modules",
+      "priority": 10,
+      "component": "list",
+      "requires": [],
+      "dataRole": "modules"
+    },
+    {
+      "id": "def-layout",
+      "entityKind": "vigil/watch",
+      "title": "Layout",
+      "priority": 20,
+      "component": "tree",
+      "requires": [],
+      "dataRole": "layout"
+    },
+    {
+      "id": "def-delivery",
+      "entityKind": "vigil/watch",
+      "title": "Delivery path",
+      "priority": 30,
+      "component": "graph",
+      "requires": [],
+      "dataRole": "delivery"
+    },
+    {
+      "id": "def-source",
+      "entityKind": "vigil/watch",
+      "title": "Denial branch",
+      "priority": 40,
+      "component": "source",
+      "requires": [],
+      "dataRole": "source"
+    },
+    {
+      "id": "def-shape",
+      "entityKind": "vigil/watch",
+      "title": "Watch shape",
+      "priority": 50,
+      "component": "shape",
+      "requires": [],
+      "dataRole": "shape"
+    },
+    {
+      "id": "def-example",
+      "entityKind": "vigil/watch",
+      "title": "One change fires",
+      "priority": 60,
+      "component": "example",
+      "requires": [],
+      "dataRole": "example"
+    },
+    {
+      "id": "def-story",
+      "entityKind": "notes/page",
+      "title": "Cancellation notebook",
+      "priority": 10,
+      "component": "notebook",
+      "requires": [],
+      "dataRole": "story"
+    }
+  ],
+  "views": [
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "modules",
+      "title": "Modules",
+      "question": "What is in this set, and which members matter?",
+      "entity": {
+        "repository": "r",
+        "id": "watch",
+        "kind": "vigil/watch"
+      },
+      "snapshotId": "snap-1",
+      "component": "list",
+      "viewDefinitionId": "def-modules",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/mcp.rs",
+          "sha256": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": "0123456789abcdef0123456789abcdef01234567",
+            "dirty": false,
+            "files": {
+              "src/mcp.rs": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "all modules in the fixture"
+      },
+      "data": {
+        "columns": [
+          {
+            "key": "name",
+            "title": "Module",
+            "format": "text"
+          }
+        ],
+        "rows": [
+          {
+            "id": "mcp",
+            "cells": {
+              "name": "mcp.rs"
+            },
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "entity": {
+              "repository": "r",
+              "id": "mcp",
+              "kind": "code/module"
+            }
+          }
+        ],
+        "order": {
+          "key": "name",
+          "direction": "asc"
+        }
+      }
+    },
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "layout",
+      "title": "Layout",
+      "question": "How is this entity composed?",
+      "entity": {
+        "repository": "r",
+        "id": "watch",
+        "kind": "vigil/watch"
+      },
+      "snapshotId": "snap-1",
+      "component": "tree",
+      "viewDefinitionId": "def-layout",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/mcp.rs",
+          "sha256": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": "0123456789abcdef0123456789abcdef01234567",
+            "dirty": false,
+            "files": {
+              "src/mcp.rs": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "all directory entries of the fixture"
+      },
+      "data": {
+        "columns": [
+          {
+            "key": "name",
+            "title": "Name",
+            "format": "text"
+          }
+        ],
+        "roots": [
+          "r"
+        ],
+        "nodes": [
+          {
+            "id": "r",
+            "cells": {
+              "name": "src"
+            },
+            "children": [
+              "c"
+            ],
+            "childrenState": "complete",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ]
+          },
+          {
+            "id": "c",
+            "cells": {
+              "name": "mcp.rs"
+            },
+            "children": [],
+            "childrenState": "complete",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "delivery-path",
+      "title": "Delivery path",
+      "question": "What connects these entities, and by which relation?",
+      "entity": {
+        "repository": "r",
+        "id": "watch",
+        "kind": "vigil/watch"
+      },
+      "snapshotId": "snap-1",
+      "component": "graph",
+      "viewDefinitionId": "def-delivery",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/mcp.rs",
+          "sha256": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": "0123456789abcdef0123456789abcdef01234567",
+            "dirty": false,
+            "files": {
+              "src/mcp.rs": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "all direct invocations in the fixture"
+      },
+      "data": {
+        "nodes": [
+          {
+            "id": "a",
+            "label": "MCP",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ]
+          },
+          {
+            "id": "b",
+            "label": "Engine",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ]
+          }
+        ],
+        "edges": [
+          {
+            "id": "e",
+            "from": "a",
+            "to": "b",
+            "relation": "invokes",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ]
+          }
+        ],
+        "layout": "layered",
+        "paths": [
+          {
+            "id": "p",
+            "edgeIds": [
+              "e"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "check-source",
+      "title": "Denial branch",
+      "question": "Which exact code supports this statement?",
+      "entity": {
+        "repository": "r",
+        "id": "watch",
+        "kind": "vigil/watch"
+      },
+      "snapshotId": "snap-1",
+      "component": "source",
+      "viewDefinitionId": "def-source",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/check.ts",
+          "sha256": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": "0123456789abcdef0123456789abcdef01234567",
+            "dirty": false,
+            "files": {
+              "src/check.ts": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "the cited line of src/check.ts"
+      },
+      "data": {
+        "excerpt": {
+          "id": "x",
+          "anchor": {
+            "repository": "r",
+            "path": "src/check.ts",
+            "lines": [
+              4,
+              4
+            ]
+          },
+          "language": "typescript",
+          "text": "if (!allowed) return denied;",
+          "provenance": "read",
+          "evidence": [
+            "s1"
+          ]
+        },
+        "annotations": [
+          {
+            "id": "a",
+            "lines": [
+              4,
+              4
+            ],
+            "message": "Denial branch",
+            "claimIds": [
+              "C1"
+            ],
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "watch-shape",
+      "title": "Watch shape",
+      "question": "What does this value or boundary payload contain?",
+      "entity": {
+        "repository": "r",
+        "id": "watch",
+        "kind": "vigil/watch"
+      },
+      "snapshotId": "snap-1",
+      "component": "shape",
+      "viewDefinitionId": "def-shape",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/watch.rs",
+          "sha256": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": "0123456789abcdef0123456789abcdef01234567",
+            "dirty": false,
+            "files": {
+              "src/watch.rs": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "the declared fields of the fixture"
+      },
+      "data": {
+        "basis": "declared",
+        "root": "f",
+        "fields": [
+          {
+            "id": "f",
+            "path": "watch_id",
+            "type": "string",
+            "presence": "required",
+            "children": [],
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "cancellation-notebook",
+      "title": "Cancellation notebook",
+      "question": "How do the evidence and views answer this investigation?",
+      "entity": {
+        "repository": "r",
+        "id": "notes",
+        "kind": "notes/page"
+      },
+      "snapshotId": "snap-1",
+      "component": "notebook",
+      "viewDefinitionId": "def-story",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/mcp.rs",
+          "sha256": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": "0123456789abcdef0123456789abcdef01234567",
+            "dirty": false,
+            "files": {
+              "src/mcp.rs": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "both blocks of the fixture page"
+      },
+      "data": {
+        "blocks": [
+          {
+            "id": "b1",
+            "kind": "prose",
+            "markdown": "Why does cancellation preserve a result?",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ]
+          },
+          {
+            "id": "b2",
+            "kind": "view",
+            "viewId": "delivery-path",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "vigil-one-write",
+      "title": "One change fires",
+      "question": "Can I rerun this scenario and inspect its tested result?",
+      "entity": {
+        "repository": "r",
+        "id": "watch",
+        "kind": "vigil/watch"
+      },
+      "snapshotId": "snap-1",
+      "component": "example",
+      "viewDefinitionId": "def-example",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "tests/mcp_e2e.rs",
+          "sha256": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": "0123456789abcdef0123456789abcdef01234567",
+            "dirty": false,
+            "files": {
+              "tests/mcp_e2e.rs": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "partial",
+        "gaps": [
+          {
+            "id": "g-not-run",
+            "question": "Does the scenario pass in this checkout?",
+            "reason": "No run has been recorded."
+          }
+        ]
+      },
+      "data": {
+        "scenario": {
+          "id": "once",
+          "label": "One change fires",
+          "runnerId": "vigil-one-write",
+          "parameters": {},
+          "provenance": "read",
+          "evidence": [
+            "s1"
+          ]
+        },
+        "runs": []
+      }
+    }
+  ]
+}
