@@ -1,9 +1,27 @@
 // The agent tools (spec section 6, MCP and CLI contract) as shared handlers. CLI and MCP are thin adapters over this.
-import { err } from "../core/errors.ts";
-import type { OperationOutcome } from "../core/operations.ts";
+//
+// Discovery tools read the catalogue the owner compiled and NEVER execute code or assert absence: a type the catalogue does not carry
+// is a partial reply that names the scope the catalogue covered. `collect` is the one code-executing tool, and it only runs an
+// adapter the owner registered. Every reply fits its byte budget and continues through content-bound cursors.
+import { existsSync, readFileSync } from "node:fs";
+import { readdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { canonicalJson, compareCodeUnits } from "../core/canonical.ts";
+import { sha256Hex } from "../core/digest.ts";
+import { decodeCursor, encodeCursor, queryDigest } from "../core/cursor.ts";
+import { err, type OperationError, type OperationErrorCode, type ValidationIssue } from "../core/errors.ts";
+import type { OperationOutcome, ReplyFormat } from "../core/operations.ts";
 import type { Session } from "../core/session.ts";
+import type { Envelope } from "../core/wire.ts";
+import { dereference } from "../schemas/dereference.ts";
+import type { Catalogue } from "../generated/v1/Catalogue.ts";
+import type { Diagnostic } from "../generated/v1/ObjectGraph.ts";
+import type { TestRun } from "../generated/v1/TestRun.ts";
+import { loadAdapters, type AdapterRecord } from "./adapters.ts";
+import { compareFingerprints, computeFingerprint, type Fingerprint } from "./fingerprint.ts";
 import type { JobService } from "./jobs.ts";
-import { NOT_IMPLEMENTED } from "./stub.ts";
+import { committedImport, openV1Reader, runDirectory, readJsonFile } from "./read.ts";
+import { V1_READ_ONLY_TOOLS, V1_TOOL_NAMES, createV1SchemaRegistry, loadV1SchemaDocuments, validateAgainstV1, type V1ToolName } from "./schemas.ts";
 
 export interface V1Context {
   session: Session | null;
@@ -12,15 +30,598 @@ export interface V1Context {
   jobs: JobService | null;
 }
 
-/** The advertised descriptors (name, description, dereferenced input schema) of the ten v1 tools. STUB: []. */
-export function v1ToolDescriptors(): Array<{ name: string; description: string; inputSchema: Record<string, unknown> }> {
-  return [];
+type Json = any;
+
+/** The advertised descriptors (name, description, dereferenced input schema) of the ten v1 tools. Read-only tools carry the hint;
+ * annotations are hints, never enforcement (spec section 6). */
+export function v1ToolDescriptors(): Array<{ name: string; description: string; inputSchema: Record<string, unknown>; annotations: { readOnlyHint: boolean } }> {
+  const documents = new Map(loadV1SchemaDocuments().map((entry) => [entry.id, entry.document as Json]));
+  const all = new Map([...documents, ...createV1Documents()]);
+  return V1_TOOL_NAMES.map((name) => {
+    const document = documents.get(`urn:paneweft:schema:tool:${name}:1`) as Json;
+    const { title: _title, description, ...schema } = document;
+    return { name, description: String(description), inputSchema: dereference({ $schema: "https://json-schema.org/draft/2020-12/schema", ...schema }, all, document), annotations: { readOnlyHint: (V1_READ_ONLY_TOOLS as readonly string[]).includes(name) } };
+  });
+}
+
+function createV1Documents(): Map<string, Json> {
+  // the v0 documents the tool schemas reference (common ids)
+  const registry = createV1SchemaRegistry();
+  const documents = new Map<string, Json>();
+  const common = registry.getSchema("urn:paneweft:schema:common:1");
+  if (common?.schema !== undefined) documents.set("urn:paneweft:schema:common:1", common.schema as Json);
+  return documents;
+}
+
+// ---- outcomes ---------------------------------------------------------------------------------------------------------------------
+
+function failure(format: ReplyFormat, code: OperationErrorCode, message: string, extra: { errors?: ValidationIssue[]; details?: Record<string, unknown>; retryable?: boolean } = {}): OperationOutcome {
+  const error: OperationError = { schemaVersion: "paneweft.error/1", code, message, errors: extra.errors ?? [], retryable: extra.retryable ?? false, ...(extra.details === undefined ? {} : { details: extra.details }) };
+  return { ok: false, format, body: JSON.stringify(error), error };
+}
+const fromError = (format: ReplyFormat, error: OperationError): OperationOutcome => ({ ok: false, format, body: JSON.stringify(error), error });
+
+// ---- replies ----------------------------------------------------------------------------------------------------------------------
+
+interface Item { json: Json; text: string }
+interface Freshness { status: "fresh" | "stale" | "unverified" | "not-applicable"; reasons?: string[]; catalogueDigest?: string; scope?: string }
+interface ReplySpec {
+  tool: string;
+  completeness: { status: "complete" | "partial" | "unsupported"; reason?: string };
+  freshness: Freshness;
+  unit: string;
+  total: number;
+  /** All matched items in order; the page is a prefix of what follows `start`. */
+  items: Item[];
+  notices?: string[];
+  details?: Json;
+  /** What defines the listing a cursor continues (tool and its filters, never the budget). */
+  query: Json;
+}
+
+function freshnessLine(freshness: Freshness): string {
+  switch (freshness.status) {
+    case "fresh": return freshness.catalogueDigest === undefined ? "fresh" : `fresh (catalogue ${freshness.catalogueDigest})`;
+    case "stale": return `stale (changed: ${(freshness.reasons ?? []).join(", ")})`;
+    case "unverified": return `unverified (${(freshness.reasons ?? []).join("; ")})`;
+    default: return "not-applicable";
+  }
+}
+
+function renderReply(spec: ReplySpec, format: ReplyFormat, start: number, count: number, cursor: string | null): string {
+  const page = spec.items.slice(start, start + count);
+  const counts = { unit: spec.unit, total: spec.total, matched: spec.items.length, returned: page.length, omitted: spec.items.length - page.length - start + Math.max(0, start - 0) - Math.max(0, start), truncated: cursor !== null };
+  counts.omitted = spec.items.length - start - page.length;
+  if (format === "json") {
+    return JSON.stringify({ schemaVersion: "paneweft.reply/2", tool: spec.tool, completeness: spec.completeness, freshness: spec.freshness, counts, items: page.map((item) => item.json), notices: spec.notices ?? [], cursor, ...(spec.details === undefined ? {} : { details: spec.details }) });
+  }
+  const lines = [`paneweft.reply/2 tool=${spec.tool}`, `completeness: ${spec.completeness.status}${spec.completeness.reason === undefined ? "" : ` (${spec.completeness.reason})`}`, `freshness: ${freshnessLine(spec.freshness)}`, `counts: unit=${counts.unit} total=${counts.total} matched=${counts.matched} returned=${counts.returned} omitted=${counts.omitted} truncated=${counts.truncated}`];
+  for (const notice of spec.notices ?? []) lines.push(`notice: ${notice}`);
+  if (spec.details?.text !== undefined) lines.push(...(spec.details.text as string[]));
+  for (const item of page) lines.push(item.text);
+  if (cursor !== null) lines.push(`cursor: ${cursor}`);
+  return lines.join("\n");
+}
+
+const bytes = (text: string): number => Buffer.byteLength(text, "utf8");
+
+/** Serves one page of `spec` within `budget`: the longest prefix of items that fits, at least one; the cursor binds the query and the
+ * content of the listing (CLAIM(cursor-content-bound)). */
+function serveListing(spec: ReplySpec, args: { format: ReplyFormat; budget: number; cursor: string | undefined }): OperationOutcome {
+  const { format, budget } = args;
+  const query = queryDigest(spec.query);
+  const content = queryDigest(spec.items.map((item) => item.json)).slice(0, 8);
+  let start = 0;
+  if (args.cursor !== undefined) {
+    const decoded = decodeCursor(args.cursor);
+    if (!decoded.ok) return failure(format, "CURSOR_INVALID", "the cursor is not a cursor this server issued", { errors: [{ code: "CONSTRAINT", pointer: "/cursor", constraint: "CURSOR_INVALID: an unmodified cursor", hint: "Pass the cursor of the previous reply unchanged, or start again without one." }] });
+    if (decoded.query !== query) return failure(format, "CURSOR_MISMATCH", "the cursor belongs to a different query", { errors: [{ code: "CONSTRAINT", pointer: "/cursor", constraint: "CURSOR_MISMATCH: the query that issued it", hint: "Repeat the SAME request with the cursor, or drop the cursor for a new request." }] });
+    if (decoded.content !== content) return failure(format, "CURSOR_STALE", "the listing changed since this cursor was issued; repeat the request without a cursor", { errors: [{ code: "CONSTRAINT", pointer: "/cursor", constraint: "CURSOR_STALE: the listing the cursor continues", hint: "Start again without a cursor." }] });
+    start = decoded.position.index;
+    if (start > spec.items.length) return failure(format, "CURSOR_INVALID", "the cursor points outside the listing");
+  }
+  const cursorAfter = (count: number): string | null => (start + count < spec.items.length ? encodeCursor(query, { index: start + count, offset: 0 }, content) : null);
+  const fits = (count: number): boolean => bytes(renderReply(spec, format, start, count, cursorAfter(count))) <= budget;
+  const remaining = spec.items.length - start;
+  if (remaining === 0) {
+    const body = renderReply(spec, format, start, 0, null);
+    return bytes(body) <= budget ? { ok: true, format, body, payload: JSON.parse(renderReply(spec, "json", start, 0, null)), cursor: null } : failure(format, "BUDGET_TOO_SMALL", `maxBytes ${budget} is below the ${bytes(body)} bytes needed for the mandatory part of this reply`, { details: { minimumBytes: Math.min(32768, bytes(body)) } });
+  }
+  if (!fits(1)) {
+    const needed = bytes(renderReply(spec, format, start, 1, cursorAfter(1)));
+    return failure(format, "BUDGET_TOO_SMALL", `maxBytes ${budget} is below the ${needed} bytes needed for one item of this reply`, { details: { minimumBytes: Math.min(32768, needed) } });
+  }
+  let low = 1;
+  let high = remaining;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (fits(middle)) low = middle;
+    else high = middle - 1;
+  }
+  const next = cursorAfter(low);
+  return { ok: true, format, body: renderReply(spec, format, start, low, next), payload: JSON.parse(renderReply(spec, "json", start, low, next)), cursor: next };
+}
+
+// ---- reading the owner's configuration ---------------------------------------------------------------------------------------------
+
+interface CatalogueRecord { schemaVersion: "paneweft.catalogue-record/1"; repo: string; adapter: string; catalogue: Catalogue; fingerprint: Fingerprint & { unverified?: string }; collectedAt: string }
+
+async function catalogueRecords(sessionDir: string, repo: string): Promise<CatalogueRecord[]> {
+  const dir = join(sessionDir, "catalogues", repo);
+  const names = (await readdir(dir).catch(() => [])).filter((name) => name.endsWith(".json")).sort();
+  const records: CatalogueRecord[] = [];
+  for (const name of names) {
+    const record = await readJsonFile<CatalogueRecord>(join(dir, name));
+    if (record?.schemaVersion === "paneweft.catalogue-record/1") records.push(record);
+  }
+  return records;
+}
+
+async function adaptersOf(sessionDir: string): Promise<AdapterRecord[]> {
+  const loaded = await loadAdapters(sessionDir);
+  return loaded.ok ? loaded.value : [];
+}
+
+/** Freshness of a fingerprint against the real files of the registered repository, never a guess: stale names the changed paths. */
+async function freshnessOf(context: { session: Session; sessionDir: string }, repo: string, adapterId: string | undefined, captured: Fingerprint | undefined, digest?: string): Promise<Freshness> {
+  const registered = (await context.session.repositories()).find((candidate) => candidate.id === repo);
+  const base = digest === undefined ? {} : { catalogueDigest: digest };
+  if (registered === undefined) return { status: "unverified", reasons: [`the root of repository "${repo}" is not registered, so its files cannot be compared: run \`paneweft repo add --repo ${repo} --root <dir>\``], ...base };
+  if (captured === undefined || captured.members.length === 0) return { status: "unverified", reasons: ["no input fingerprint was recorded for this result"], ...base };
+  const adapter = (await adaptersOf(context.sessionDir)).find((candidate) => candidate.repo === repo && (adapterId === undefined || candidate.id === adapterId));
+  const root = adapter === undefined ? registered.root : join(adapter.workspaceRoot, adapter.entry);
+  const current = await computeFingerprint({ root, declaredExtras: captured.declaredExtras ?? [], exclusions: captured.exclusions ?? [] });
+  if (!current.ok) return { status: "unverified", reasons: [current.error.message], ...base };
+  const verdict = compareFingerprints(captured, current.value);
+  return verdict.status === "fresh" ? { status: "fresh", ...base } : { status: "stale", reasons: verdict.reasons.map((reason) => `${reason.path}: ${reason.change}`), ...base };
+}
+
+// ---- tool implementations -----------------------------------------------------------------------------------------------------------
+
+interface Call { context: { session: Session; sessionDir: string; jobs: JobService | null }; args: Record<string, any>; format: ReplyFormat; budget: number; cursor: string | undefined }
+
+const slug = (text: string): string => text.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40) || "view";
+const viewSortKey = (a: Catalogue["views"][number], b: Catalogue["views"][number]): number => a.priority - b.priority || compareCodeUnits(a.id, b.id);
+
+async function loadForRepo(call: Call, language?: string): Promise<{ records: CatalogueRecord[] } | OperationOutcome> {
+  const all = await catalogueRecords(call.context.sessionDir, call.args.repo as string);
+  const wanted = language === "rust" ? "cargo" : language === "typescript" ? "vitest" : undefined;
+  const records = wanted === undefined ? all : all.filter((record) => record.catalogue.target.runner === wanted);
+  if (records.length === 0) return failure(call.format, "NOT_FOUND", `no compiled catalogue is stored for repository "${call.args.repo}"${wanted === undefined ? "" : ` and language ${language}`}: ask the owner to run \`paneweft catalogue refresh --repo ${call.args.repo} --adapter <id>\` (a catalogue is built by running the reserved export tests; this tool executes nothing)`);
+  return { records };
+}
+
+const isOutcome = (value: unknown): value is OperationOutcome => typeof value === "object" && value !== null && "ok" in value && "body" in value;
+
+async function scopeFreshness(call: Call, record: CatalogueRecord): Promise<Freshness> {
+  return freshnessOf(call.context, record.repo, record.adapter, record.fingerprint, record.catalogue.digest);
+}
+
+async function listTypes(call: Call): Promise<OperationOutcome> {
+  const loaded = await loadForRepo(call, call.args.language);
+  if (isOutcome(loaded)) return loaded;
+  const record = loaded.records[0] as CatalogueRecord;
+  const query = typeof call.args.query === "string" ? call.args.query.toLowerCase() : undefined;
+  const catalogue = record.catalogue;
+  const matched = catalogue.types.filter((type) => query === undefined || type.typeId.toLowerCase().includes(query) || type.source.symbol.toLowerCase().includes(query));
+  const items: Item[] = matched.map((type) => {
+    const views = catalogue.views.filter((view) => view.typeId === type.typeId).map((view) => view.id).sort(compareCodeUnits);
+    const examples = catalogue.examples.filter((example) => example.typeId === type.typeId).map((example) => example.id).sort(compareCodeUnits);
+    return { json: { typeId: type.typeId, source: type.source, views, examples }, text: `${type.typeId} -> ${type.source.path}:${type.source.symbol}; views=${views.length === 0 ? "none" : views.join(",")}; examples=${examples.length === 0 ? "none" : examples.join(",")}` };
+  });
+  const coverage = { declared: catalogue.views.length, linked: catalogue.views.length, withExample: catalogue.views.filter((view) => catalogue.examples.some((example) => example.typeId === view.typeId)).length };
+  return serveListing({ tool: "list_types", completeness: { status: "complete" }, freshness: await scopeFreshness(call, record), unit: "types", total: catalogue.types.length, items, details: { target: catalogue.target, linkedScope: catalogue.linkedScope, catalogueDigest: catalogue.digest, coverage, collectedAt: record.collectedAt }, query: { tool: "list_types", repo: call.args.repo, language: call.args.language ?? null, query: call.args.query ?? null } }, call);
+}
+
+async function lastCaptures(call: Call, repo: string): Promise<TestRun[]> {
+  const reader = openV1Reader(call.context.session);
+  const runs = await reader.runs();
+  if (!runs.ok) return [];
+  const loaded: TestRun[] = [];
+  for (const entry of runs.value) {
+    const record = await committedImport(call.context.session, entry.runId);
+    if (record?.repo !== repo) continue;
+    const run = await reader.run(entry.runId);
+    if (run.ok) loaded.push(run.value.run);
+  }
+  return loaded;
+}
+
+async function listViews(call: Call): Promise<OperationOutcome> {
+  const loaded = await loadForRepo(call);
+  if (isOutcome(loaded)) return loaded;
+  const typeId = call.args.type as string;
+  const record = (loaded.records.find((candidate) => candidate.catalogue.types.some((type) => type.typeId === typeId)) ?? loaded.records[0]) as CatalogueRecord;
+  const catalogue = record.catalogue;
+  const freshness = await scopeFreshness(call, record);
+  const runs = await lastCaptures(call, record.repo);
+  const known = catalogue.types.some((type) => type.typeId === typeId);
+  const views = catalogue.views.filter((view) => view.typeId === typeId).sort(viewSortKey);
+  const examples = catalogue.examples.filter((example) => example.typeId === typeId).map((example) => example.id).sort(compareCodeUnits);
+  const lastRun = [...runs].reverse().find((run) => run.examples.some((example) => examples.includes(example.id)));
+  const items: Item[] = views.map((view) => {
+    const json = { id: view.id, title: view.title, question: view.question, component: view.component, priority: view.priority, source: view.source, renderer: view.renderer ?? null, exampleIds: examples, lastCapture: lastRun === undefined ? null : { runId: lastRun.runId, snapshotId: `snap-${lastRun.runId}` }, staleReasons: freshness.status === "stale" ? freshness.reasons ?? [] : [] };
+    return { json, text: `${view.id} [${view.component}, priority ${view.priority}] ${view.title} -- ${view.question} (${view.source.path}:${view.source.line}); examples=${examples.length === 0 ? "none" : examples.join(",")}; last capture=${lastRun === undefined ? "never" : lastRun.runId}` };
+  });
+  const notices: string[] = [];
+  if (!known) {
+    notices.push(`the type "${typeId}" is not in the catalogue compiled for ${catalogue.linkedScope.join(", ")} (linked scope; target ${catalogue.target.target ?? catalogue.target.package}, features ${catalogue.target.features.join(",") || "none"}). That is NOT a statement that it has no views: it may live in a target, feature set or module this catalogue did not cover.`);
+    if (freshness.status === "stale") notices.push("the catalogue is outdated: the sources changed after it was compiled; refresh it before relying on this answer");
+  }
+  return serveListing({ tool: "list_views_for_type", completeness: known ? { status: "complete" } : { status: "partial", reason: "type not in the compiled catalogue" }, freshness, unit: "views", total: views.length, items, notices, details: { typeId, linkedScope: catalogue.linkedScope, catalogueDigest: catalogue.digest }, query: { tool: "list_views_for_type", repo: call.args.repo, type: typeId, target: call.args.target ?? null } }, call);
+}
+
+async function listExamples(call: Call): Promise<OperationOutcome> {
+  const loaded = await loadForRepo(call);
+  if (isOutcome(loaded)) return loaded;
+  const record = loaded.records[0] as CatalogueRecord;
+  const catalogue = record.catalogue;
+  const runs = await lastCaptures(call, record.repo);
+  const viewType = typeof call.args.view === "string" ? catalogue.views.find((view) => view.id === call.args.view)?.typeId : undefined;
+  const matched = catalogue.examples.filter((example) => (call.args.type === undefined || example.typeId === call.args.type) && (call.args.view === undefined || example.typeId === viewType) && (call.args.tag === undefined || example.claims.includes(call.args.tag) || example.kind === call.args.tag)).sort((a, b) => compareCodeUnits(a.id, b.id));
+  const items: Item[] = matched.map((example) => {
+    const last = [...runs].reverse().map((run) => run.examples.find((candidate) => candidate.id === example.id)).find((found) => found !== undefined);
+    const lastRun = [...runs].reverse().find((run) => run.examples.some((candidate) => candidate.id === example.id));
+    const lastOutcome = last === undefined || lastRun === undefined ? null : { runId: lastRun.runId, outcome: last.outcome, verified: last.verified };
+    return { json: { id: example.id, returns: example.typeId, claims: example.claims, kind: example.kind ?? "example", selector: example.selector, composes: example.composes, lastOutcome }, text: `${example.id} -> ${example.typeId}; claims=${example.claims.join(",") || "none"}; ${example.kind ?? "example"}; ${example.selector.runner} ${example.selector.name}; last=${lastOutcome === null ? "never run" : `${lastOutcome.outcome}${lastOutcome.verified ? " verified" : ""} in ${lastOutcome.runId}`}` };
+  });
+  return serveListing({ tool: "list_examples", completeness: { status: "complete" }, freshness: await scopeFreshness(call, record), unit: "examples", total: catalogue.examples.length, items, details: { linkedScope: catalogue.linkedScope, catalogueDigest: catalogue.digest }, query: { tool: "list_examples", repo: call.args.repo, type: call.args.type ?? null, view: call.args.view ?? null, tag: call.args.tag ?? null } }, call);
+}
+
+// ---- scaffolds (read-only generation) ------------------------------------------------------------------------------------------------
+
+interface Patch { path: string; text: string }
+interface ScaffoldPlan { patches: Patch[]; outputTest: Patch; registration: string; template: string }
+
+function scaffoldView(kind: "cargo" | "vitest", args: { typeId: string; source: { path: string; symbol: string }; question: string; component: "shape" | "list"; claim: string }): ScaffoldPlan {
+  const name = slug(args.question);
+  const title = args.question.replace(/\?$/, "").slice(0, 60);
+  if (kind === "cargo") {
+    return {
+      template: "rust-views-v1",
+      patches: [{ path: args.source.path, text: [
+        `// ${args.source.path}: add to the existing \`#[paneweft::views]\` impl of ${args.source.symbol} if there is one (a type has ONE views impl);`,
+        "// otherwise add this block. Every use of the SDK stays behind the `paneweft` feature.",
+        "#[cfg(feature = \"paneweft\")]",
+        `#[paneweft::views(type_id = "${args.typeId}")]`,
+        `impl ${args.source.symbol} {`,
+        `    #[paneweft::view(id = "${slug(args.source.symbol)}.${name}", title = ${JSON.stringify(title)}, component = "${args.component}", priority = 50, question = ${JSON.stringify(args.question)})]`,
+        `    fn ${name}_view(&self, cx: &mut paneweft::Context) -> paneweft::ViewResult {`,
+        "        // TODO: read the receiver and select the fields that answer the question; open the type's definition first, do not guess field names.",
+        `        Ok(paneweft::View::unsupported("TODO: implement the projection for: ${args.question.replace(/"/g, "'")}"))`,
+        "    }",
+        "}",
+        "",
+      ].join("\n") }],
+      outputTest: { path: args.source.path, text: [
+        "#[cfg(all(test, feature = \"paneweft\"))]",
+        "mod tests {",
+        "    // WHY: the view must answer the question with independently expected values; this fails until it is implemented.",
+        `    // CLAIM: ${args.claim}`,
+        "    #[test]",
+        `    fn ${name}_answers_the_question() {`,
+        `        assert!(false, "TODO: write the expected fields for: ${args.question.replace(/"/g, "'")}, then implement the view");`,
+        "    }",
+        "}",
+        "",
+      ].join("\n") },
+      registration: "Rust: nothing to import; `#[paneweft::views]` registers the descriptor with linkme. Make sure the test binary calls `paneweft::test_adapter!();` once, then refresh the catalogue.",
+    };
+  }
+  return {
+    template: "ts-token-view-v1",
+    patches: [{ path: args.source.path.replace(/\.ts$/, ".paneweft.ts"), text: [
+      `// Development-only instrumentation of ${args.source.symbol}; never import it from a production entry point.`,
+      `import { ${args.source.symbol}Token } from "./${args.source.symbol}.paneweft.ts"; // the type token that declares ${args.typeId}`,
+      "",
+      `export const ${name} = ${args.source.symbol}Token.view({`,
+      `  id: ${JSON.stringify(`${slug(args.source.symbol)}.${name}`)},`,
+      `  title: ${JSON.stringify(title)},`,
+      `  question: ${JSON.stringify(args.question)},`,
+      "  priority: 50,",
+      `  component: "${args.component}",`,
+      "  render(value, view) {",
+      "    // TODO: select the fields that answer the question; read the type's definition, do not guess property names.",
+      `    return view.unsupported(${JSON.stringify(`TODO: implement the projection for: ${args.question}`)});`,
+      "  },",
+      "});",
+      "",
+    ].join("\n") }],
+    outputTest: { path: "tests/views.paneweft.test.ts", text: [
+      "import { assert, it } from \"vitest\";",
+      "",
+      "// WHY: the view must answer the question with independently expected values; this fails until it is implemented.",
+      `// CLAIM: ${args.claim}`,
+      `it(${JSON.stringify(`${name} answers the question`)}, () => {`,
+      `  assert.fail(${JSON.stringify(`TODO: write the expected fields for: ${args.question}, then implement the view`)});`,
+      "});",
+      "",
+    ].join("\n") },
+    registration: `TypeScript: add \`${name}\` to the views of the module in paneweft.views.ts (and list the module path), then refresh the catalogue.`,
+  };
+}
+
+function resolveType(catalogue: Catalogue, requested: string): { typeId: string; source: { path: string; symbol: string } } | { candidates: Array<{ typeId: string; source: { path: string; symbol: string } }> } {
+  const exact = catalogue.types.find((type) => type.typeId === requested);
+  if (exact !== undefined) return exact;
+  const bare = catalogue.types.filter((type) => type.source.symbol === requested || type.typeId.endsWith(`::${requested}`)).sort((a, b) => compareCodeUnits(a.typeId, b.typeId));
+  return bare.length === 1 ? (bare[0] as (typeof catalogue.types)[number]) : { candidates: bare };
+}
+
+/** Pages `patches` by byte slices: every slice is data, so a part is never a clipped patch that looks complete. */
+function servePatches(call: Call, spec: Omit<ReplySpec, "items"> & { details: Json }, patches: Patch[]): OperationOutcome {
+  const { format, budget } = call;
+  const query = queryDigest(spec.query);
+  const content = queryDigest(patches).slice(0, 8);
+  const whole = { ...spec, items: [] as Item[], details: { ...spec.details, patches } };
+  const wholeBody = renderReply(whole, format, 0, 0, null);
+  let position = { index: 0, offset: 0 };
+  if (call.cursor !== undefined) {
+    const decoded = decodeCursor(call.cursor);
+    if (!decoded.ok) return failure(format, "CURSOR_INVALID", "the cursor is not a cursor this server issued");
+    if (decoded.query !== query) return failure(format, "CURSOR_MISMATCH", "the cursor belongs to a different query");
+    if (decoded.content !== content) return failure(format, "CURSOR_STALE", "the patch changed since this cursor was issued");
+    position = { index: decoded.position.index, offset: decoded.position.offset };
+  } else if (bytes(wholeBody) <= budget) {
+    return { ok: true, format, body: wholeBody, payload: JSON.parse(renderReply({ ...whole }, "json", 0, 0, null)), cursor: null };
+  }
+  const file = patches[position.index];
+  if (file === undefined) return failure(format, "CURSOR_INVALID", "the cursor points outside the patch");
+  const buffer = Buffer.from(file.text, "utf8");
+  const total = patches.reduce((sum, patch) => sum + bytes(patch.text), 0);
+  const make = (size: number): { body: string; payload: unknown; cursor: string | null } => {
+    let end = Math.min(buffer.length, position.offset + size);
+    while (end < buffer.length && ((buffer[end] as number) & 0xc0) === 0x80) end -= 1;
+    const nextIndex = end >= buffer.length ? position.index + 1 : position.index;
+    const nextOffset = end >= buffer.length ? 0 : end;
+    const cursor = nextIndex < patches.length ? encodeCursor(query, { index: nextIndex, offset: nextOffset, ...(nextOffset > 0 ? { format } : {}) }, content) : null;
+    const slice = buffer.subarray(position.offset, end).toString("utf8");
+    const sliceSize = Math.max(1, size);
+    const ofParts = Math.max(2, Math.ceil(total / sliceSize));
+    const part = Math.min(ofParts, Math.floor((patches.slice(0, position.index).reduce((sum, patch) => sum + bytes(patch.text), 0) + position.offset) / sliceSize) + 1);
+    const details = { ...spec.details, patches: [{ path: file.path, text: slice, part, ofParts }] };
+    const reply = { ...spec, items: [] as Item[], details };
+    return { body: renderReply(reply, format, 0, 0, cursor), payload: JSON.parse(renderReply(reply, "json", 0, 0, cursor)), cursor };
+  };
+  let size = Math.max(64, budget - 1500);
+  let page = make(size);
+  while (bytes(page.body) > budget && size > 16) {
+    size = Math.floor(size * 0.85);
+    page = make(size);
+  }
+  if (bytes(page.body) > budget) return failure(format, "BUDGET_TOO_SMALL", `maxBytes ${budget} cannot carry the mandatory part of this reply`, { details: { minimumBytes: Math.min(32768, bytes(page.body)) } });
+  return { ok: true, format, body: page.body, payload: page.payload, cursor: page.cursor };
+}
+
+async function scaffold(call: Call, tool: "scaffold_view" | "scaffold_example"): Promise<OperationOutcome> {
+  const loaded = await loadForRepo(call);
+  if (isOutcome(loaded)) return loaded;
+  const requested = call.args.type as string;
+  const record = (loaded.records.find((candidate) => !("candidates" in resolveType(candidate.catalogue, requested))) ?? loaded.records[0]) as CatalogueRecord;
+  const resolved = resolveType(record.catalogue, requested);
+  const notices: string[] = ["this reply writes nothing: apply the patch with your normal code editor"];
+  let typeId: string;
+  let source: { path: string; symbol: string };
+  if ("candidates" in resolved) {
+    if (resolved.candidates.length > 1) return failure(call.format, "UNRESOLVED_TARGET", `"${requested}" matches ${resolved.candidates.length} catalogued types: name one by its type id`, { details: { candidates: resolved.candidates } });
+    if (call.args.source === undefined) return failure(call.format, "UNRESOLVED_TARGET", `"${requested}" is not in the catalogue; pass an explicit source {path, symbol} as a candidate, or refresh the catalogue`, { details: { candidates: [] } });
+    typeId = requested;
+    source = call.args.source as { path: string; symbol: string };
+    notices.push(`the type "${typeId}" is not catalogued: ${source.path}:${source.symbol} is taken as a candidate only; the compiler must validate it before the view counts`);
+  } else {
+    typeId = resolved.typeId;
+    source = resolved.source;
+  }
+  const adapters = await adaptersOf(call.context.sessionDir);
+  const adapter = adapters.find((candidate) => candidate.repo === record.repo && candidate.id === record.adapter) ?? adapters.find((candidate) => candidate.repo === record.repo);
+  const kind = adapter?.kind ?? record.catalogue.target.runner;
+  const question = tool === "scaffold_view" ? (call.args.question as string) : `Example of ${typeId}`;
+  const claim = `${slug(source.symbol).toUpperCase().slice(0, 12)}-1`;
+  const plan = scaffoldView(kind, { typeId, source, question, component: (call.args.component as "shape" | "list" | undefined) ?? "shape", claim });
+  if (tool === "scaffold_example") {
+    const example = (call.args.example as string | undefined) ?? `${slug(source.symbol)}.new`;
+    plan.patches = [{ path: plan.outputTest.path, text: kind === "cargo"
+      ? `#[cfg(all(test, feature = "paneweft"))]\nmod examples {\n    #[paneweft::example(id = ${JSON.stringify(example)}, claims = [${JSON.stringify(claim)}])]\n    fn ${slug(example)}() -> ${source.symbol} {\n        // TODO: build the value with the real constructor; do not invent fields.\n        unimplemented!("TODO: construct ${source.symbol}")\n    }\n}\n`
+      : `export const ${slug(example)} = example({ id: ${JSON.stringify(example)}, type: ${source.symbol}Token, claims: [${JSON.stringify(claim)}], run(cx) {\n  // TODO: build the value with the real code, then record a check\n  cx.check(${JSON.stringify(claim)}, () => { throw new Error("TODO: write the expected assertion"); });\n  throw new Error("TODO: construct ${source.symbol}");\n} });\n` }];
+  }
+  const recipe = { command: `paneweft collect --request-id <id> --repo ${record.repo} --adapter ${record.adapter} --example <example-id>`, adapter: record.adapter };
+  return servePatches(call, { tool, completeness: { status: "complete" }, freshness: await scopeFreshness(call, record), unit: "patches", total: plan.patches.length, notices, query: { tool, repo: call.args.repo, type: requested, question: call.args.question ?? null, component: call.args.component ?? null, example: call.args.example ?? null }, details: { typeId, source, template: plan.template, outputTest: plan.outputTest, registration: plan.registration, recipe } }, plan.patches);
+}
+
+// ---- collection ---------------------------------------------------------------------------------------------------------------------
+
+function jobItem(view: Json): Item {
+  const parts = [`job ${view.requestId}: ${view.state}`, view.runId === null ? "no run yet" : `run ${view.runId}`, `qex ${view.qexId ?? "-"}`];
+  if (view.collectionStatus !== undefined) parts.push(`collection ${view.collectionStatus}`);
+  if (view.snapshotIds?.length > 0) parts.push(`snapshots ${view.snapshotIds.join(",")}`);
+  if (view.diagnosticIds?.length > 0) parts.push(`diagnostics ${view.diagnosticIds.join(",")}`);
+  if (view.indeterminate !== undefined) parts.push(`indeterminate: ${view.indeterminate.evidence.join("; ")}`);
+  if (view.counts !== undefined) parts.push(`counts ${Object.entries(view.counts).map(([key, value]) => `${key}=${value}`).join(" ")}`);
+  const lines = [parts.join("; ")];
+  if (view.log !== undefined) lines.push(`log: ${JSON.stringify(view.log.text)}${view.log.cursor === null ? "" : ` (log cursor ${view.log.cursor})`}`);
+  return { json: view, text: lines.join("\n") };
+}
+
+function wrapService(call: Call, tool: string, result: { ok: true; value: Json } | { ok: false; error: OperationError }, unit: string): OperationOutcome {
+  if (!result.ok) return fromError(call.format, result.error);
+  return serveListing({ tool, completeness: { status: "complete" }, freshness: { status: "not-applicable" }, unit, total: 1, items: [jobItem(result.value)], query: { tool, id: result.value.requestId ?? call.args.job } }, call);
+}
+
+async function collect(call: Call): Promise<OperationOutcome> {
+  if (call.context.jobs === null) return failure(call.format, "SESSION_REQUIRED", "collect needs a session with a job service");
+  const { requestId, repo, adapter, examples, views, limits } = call.args;
+  return wrapService(call, "collect", await call.context.jobs.collect({ requestId, repo, adapter, examples, ...(views === undefined ? {} : { views }), ...(limits === undefined ? {} : { limits }) }), "jobs");
+}
+
+async function collectionStatus(call: Call): Promise<OperationOutcome> {
+  if (call.context.jobs === null) return failure(call.format, "SESSION_REQUIRED", "collection_status needs a session with a job service");
+  return wrapService(call, "collection_status", await call.context.jobs.status(call.args.job, { ...(call.args.waitSeconds === undefined ? {} : { waitSeconds: call.args.waitSeconds }), ...(call.args.logCursor === undefined ? {} : { logCursor: call.args.logCursor, maxLogBytes: 2048 }) }), "jobs");
+}
+
+async function cancelCollection(call: Call): Promise<OperationOutcome> {
+  if (call.context.jobs === null) return failure(call.format, "SESSION_REQUIRED", "cancel_collection needs a session with a job service");
+  const result = await call.context.jobs.cancel(call.args.job);
+  if (!result.ok) return fromError(call.format, result.error);
+  const value = { job: call.args.job, ...result.value };
+  return serveListing({ tool: "cancel_collection", completeness: { status: "complete" }, freshness: { status: "not-applicable" }, unit: "jobs", total: 1, items: [{ json: value, text: `job ${call.args.job}: ${value.outcome}; state ${value.state}; qex actions ${value.qexActions.join(",") || "none"}${value.collectionStatus === undefined ? "" : `; collection ${value.collectionStatus}`}` }], query: { tool: "cancel_collection", job: call.args.job } }, call);
+}
+
+// ---- results and failures -------------------------------------------------------------------------------------------------------------
+
+function viewerUrl(sessionDir: string, key: { viewId: string; snapshotId: string }): string | null {
+  try {
+    const server = JSON.parse(readFileSync(join(sessionDir, "server.json"), "utf8")) as { origin?: string; token?: string; pid?: number };
+    if (typeof server.origin !== "string" || typeof server.token !== "string" || typeof server.pid !== "number") return null;
+    process.kill(server.pid, 0);
+    return `${server.origin}/#token=${server.token}&view=${encodeURIComponent(key.viewId)}&snapshot=${encodeURIComponent(key.snapshotId)}`;
+  } catch {
+    return null;
+  }
+}
+
+/** The example whose invocation published the capture. */
+const exampleOfCapture = (run: TestRun, captureId: string): string | undefined => run.invocations.find((invocation) => invocation.capture.captureId === captureId)?.exampleId;
+
+const objectNumber = (objectId: string): number => Number(objectId.replace(/\D+/g, "")) || 0;
+
+async function viewResult(call: Call): Promise<OperationOutcome> {
+  const { session, sessionDir, jobs } = call.context;
+  let runId = call.args.run as string | undefined;
+  if (runId === undefined) {
+    const status = jobs === null || call.args.job === undefined ? undefined : await jobs.status(call.args.job as string);
+    if (status === undefined) return failure(call.format, "INVALID_ARGUMENT", "view_result needs a run or a job", { errors: [{ code: "REQUIRED", pointer: "/run", constraint: "run or job", hint: "Pass the run id (run-<request id>) or the job id returned by collect." }] });
+    if (!status.ok) return fromError(call.format, status.error);
+    runId = status.value.runId ?? undefined;
+    if (runId === undefined) return failure(call.format, "NOT_FOUND", `job "${call.args.job}" has no run yet`);
+  }
+  const reader = openV1Reader(session);
+  const stored = await reader.run(runId);
+  if (!stored.ok) return fromError(call.format, stored.error);
+  const snapshotId = stored.value.snapshotId;
+  const index = await session.listViewIndex(snapshotId);
+  const wanted = call.args.view as string;
+  const observation = call.args.observation as string | undefined;
+  let matches = index.filter((entry) => entry.viewDefinitionId === wanted || entry.viewId === wanted);
+  const objectOf = (entry: (typeof index)[number]): string => entry.entity.id.slice(entry.entity.id.lastIndexOf(".") + 1);
+  if (observation !== undefined) matches = matches.filter((entry) => objectOf(entry) === observation || entry.viewId === observation || entry.entity.id === observation);
+  if (matches.length === 0) return failure(call.format, "NOT_FOUND", `run "${runId}" has no stored view "${wanted}"${observation === undefined ? "" : ` for ${observation}`}`, { details: { candidates: [...new Set(index.map((entry) => entry.viewDefinitionId))].sort(compareCodeUnits) } });
+  matches.sort((a, b) => objectNumber(objectOf(a)) - objectNumber(objectOf(b)));
+  if (matches.length > 1) return failure(call.format, "UNRESOLVED_TARGET", `${matches.length} stored views match "${wanted}": name one with observation (an object id)`, { details: { candidates: matches.map((entry) => ({ object: objectOf(entry), storedViewId: entry.viewId, view: entry.viewId, exampleId: exampleOfCapture(stored.value.run, entry.entity.id.slice(0, entry.entity.id.lastIndexOf("."))) ?? null, label: entry.title })) } });
+  const entry = matches[0] as (typeof index)[number];
+  const loaded = await session.getView({ viewId: entry.viewId, snapshotId });
+  if (!loaded.ok) return fromError(call.format, loaded.error);
+  const envelope: Envelope = loaded.value.envelope;
+  const data = envelope.data as Json;
+  const items: Item[] = [];
+  if (envelope.component === "list") {
+    for (const row of data.rows as Json[]) {
+      const cells = row.cells as Record<string, unknown>;
+      items.push({ json: { id: row.id, cells, entity: row.entity ?? null, provenance: row.provenance }, text: `${row.id}: ${Object.entries(cells).map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(" | ")}${row.entity === undefined ? "" : ` -> ${row.entity.kind}:${row.entity.id}`}; ${row.provenance}` });
+    }
+  } else if (envelope.component === "shape") {
+    for (const field of data.fields as Json[]) items.push({ json: { id: field.id, path: field.path, type: field.type, example: field.example ?? null, provenance: field.provenance }, text: `${field.path}: ${field.type}${field.example === undefined ? "" : ` = ${JSON.stringify(field.example)}`}; ${field.provenance}` });
+  }
+  const record = await committedImport(session, runId);
+  const adapter = (await adaptersOf(sessionDir!)).find((candidate) => candidate.repo === record?.repo && candidate.kind === stored.value.run.runner.id);
+  const freshness = await freshnessOf({ session, sessionDir: sessionDir! }, record?.repo ?? "", adapter?.id, { digest: stored.value.run.inputFingerprint.digest, members: stored.value.run.inputFingerprint.members ?? [], declaredExtras: [], exclusions: [] });
+  const completeness = envelope.completeness.status === "unsupported" ? { status: "unsupported" as const, reason: envelope.completeness.reason } : envelope.completeness.status === "partial" ? { status: "partial" as const, reason: envelope.completeness.gaps.map((gap) => gap.reason).join("; ").slice(0, 400) } : { status: "complete" as const };
+  const example = stored.value.run.examples.find((candidate) => candidate.outcome === "passed" || candidate.outcome === "failed") ?? stored.value.run.examples[0];
+  const details = {
+    runId,
+    snapshotId,
+    storedViewId: entry.viewId,
+    component: envelope.component,
+    title: envelope.title,
+    question: envelope.question,
+    objects: [objectOf(entry)],
+    entity: entry.entity,
+    origin: stored.value.origin,
+    provenance: [...new Set(items.map((item) => item.json.provenance))],
+    viewerUrl: viewerUrl(sessionDir!, { viewId: entry.viewId, snapshotId }),
+    storedPages: envelope.completeness.status === "partial" ? envelope.completeness.gaps.filter((gap) => gap.id === "stored-pages").map((gap) => gap.reason) : [],
+    recollect: example === undefined ? null : { command: `paneweft collect --request-id <new-id> --repo ${record?.repo ?? "<repo>"} --adapter ${adapter?.id ?? stored.value.run.runner.id} --example ${example.id}` },
+  };
+  const head = [`view ${entry.viewId} (${envelope.component}) of ${runId}: ${envelope.title} -- ${envelope.question}`, `origin ${details.origin}; object ${details.objects[0]}; viewer ${details.viewerUrl ?? "not running"}`];
+  return serveListing({ tool: "view_result", completeness, freshness: { ...freshness, scope: `run ${runId}` }, unit: envelope.component === "list" ? "rows" : "fields", total: items.length, items, details: { ...details, text: head }, query: { tool: "view_result", runId, view: wanted, observation: observation ?? null } }, call);
+}
+
+async function findDiagnostic(call: Call, id: string): Promise<{ diagnostic: Diagnostic; runId: string | null } | undefined> {
+  const { session, sessionDir } = call.context;
+  const jobsDir = join(sessionDir!, "jobs");
+  for (const name of (await readdir(jobsDir).catch(() => [])).sort()) {
+    const diagnostics = await readJsonFile<Diagnostic[]>(join(jobsDir, name, "diagnostics.json"));
+    const found = diagnostics?.find((candidate) => candidate.id === id);
+    if (found !== undefined) return { diagnostic: found, runId: `run-${name}` };
+  }
+  const reader = openV1Reader(session);
+  const runs = await reader.runs();
+  if (runs.ok) {
+    for (const entry of runs.value) {
+      const record = await committedImport(session, entry.runId);
+      for (const captureId of record?.captureIds ?? []) {
+        const graph = await readJsonFile<{ diagnostics: Diagnostic[] }>(join(runDirectory(session, entry.runId), "captures", `${captureId}.json`));
+        const found = graph?.diagnostics.find((candidate) => candidate.id === id);
+        if (found !== undefined) return { diagnostic: found, runId: entry.runId };
+      }
+    }
+  }
+  return undefined;
+}
+
+async function explainFailure(call: Call): Promise<OperationOutcome> {
+  const found = await findDiagnostic(call, call.args.diagnostic as string);
+  if (found === undefined) return failure(call.format, "NOT_FOUND", `no stored diagnostic "${call.args.diagnostic}": diagnostic ids come from collection_status and view_result`);
+  const { diagnostic, runId } = found;
+  const record = runId === null ? undefined : await committedImport(call.context.session, runId);
+  const selector = diagnostic.exampleId === undefined ? null : { examples: [diagnostic.exampleId], ...(diagnostic.viewId === undefined ? {} : { views: [diagnostic.viewId] }) };
+  const adapter = (await adaptersOf(call.context.sessionDir)).find((candidate) => candidate.repo === record?.repo);
+  const repeat = selector === null ? null : { selector, command: `paneweft collect --request-id <new-id> --repo ${record?.repo ?? adapter?.repo ?? "<repo>"} --adapter ${adapter?.id ?? "<adapter>"} --example ${diagnostic.exampleId}` };
+  const json = { ...diagnostic, basis: "stored-diagnostic", runId, selector, repeat };
+  const text = [`${diagnostic.id} [${diagnostic.category}] ${diagnostic.message}`, ...(diagnostic.viewId ? [`view: ${diagnostic.viewId}`] : []), ...(diagnostic.exampleId ? [`example: ${diagnostic.exampleId}`] : []), ...(diagnostic.source ? [`source: ${diagnostic.source.path}:${diagnostic.source.line}${diagnostic.source.column === undefined ? "" : `:${diagnostic.source.column}`}`] : []), ...(diagnostic.pointer ? [`pointer: ${diagnostic.pointer}`] : []), ...(diagnostic.invariant ? [`invariant: ${diagnostic.invariant}`] : []), ...(diagnostic.expected !== undefined ? [`expected: ${JSON.stringify(diagnostic.expected)}`] : []), ...(diagnostic.actual !== undefined ? [`actual: ${JSON.stringify(diagnostic.actual)}`] : []), ...(diagnostic.stderrSlice ? [`stderr: ${JSON.stringify(diagnostic.stderrSlice)}`] : []), `next: ${diagnostic.nextAction}`, ...(repeat ? [`repeat: ${repeat.command}`] : [])];
+  return serveListing({ tool: "explain_failure", completeness: { status: "complete" }, freshness: { status: "not-applicable" }, unit: "diagnostics", total: 1, items: [{ json, text: text.join("\n") }], notices: ["evidence from the stored artifacts, not a model's diagnosis; nothing was executed"], query: { tool: "explain_failure", diagnostic: diagnostic.id } }, call);
+}
+
+// ---- dispatch ---------------------------------------------------------------------------------------------------------------------------
+
+function validateArguments(name: string, args: unknown): ValidationIssue[] {
+  const record = args !== null && typeof args === "object" && !Array.isArray(args) ? (args as Record<string, unknown>) : undefined;
+  if (record === undefined) return [{ code: "TYPE", pointer: "", constraint: "type: object", hint: "Pass the arguments as one JSON object." }];
+  const { maxBytes: _budget, ...rest } = record;
+  const issues = validateAgainstV1(`urn:paneweft:schema:tool:${name}:1`, rest);
+  return issues.map((issue) => ({ ...issue, code: issue.constraint.startsWith("additionalProperties") ? "UNKNOWN_PROPERTY" : issue.constraint.startsWith("required") ? "REQUIRED" : issue.constraint.startsWith("pattern") ? "PATTERN" : issue.constraint.startsWith("type") ? "TYPE" : issue.constraint.startsWith("enum") ? "ENUM" : "CONSTRAINT" }));
 }
 
 /** Never throws; failures are outcomes. Operation order as v0: unknown tool, SESSION_REQUIRED, argument validation, target lookup,
- * budget. STUB: every call answers INTERNAL NOT_IMPLEMENTED. */
+ * budget. */
 export async function executeV1Operation(context: V1Context, name: string, args: unknown): Promise<OperationOutcome> {
-  const failure = err("INTERNAL", `${NOT_IMPLEMENTED}: ${name}`);
-  if (failure.ok) throw new Error("unreachable");
-  return { ok: false, format: "text", body: JSON.stringify(failure.error), error: failure.error };
+  const record = args !== null && typeof args === "object" && !Array.isArray(args) ? (args as Record<string, unknown>) : {};
+  const format: ReplyFormat = record.format === "json" ? "json" : "text";
+  if (!(V1_TOOL_NAMES as readonly string[]).includes(name)) return failure(format, "UNKNOWN_OPERATION", `unknown operation "${name}"; the operations are ${V1_TOOL_NAMES.join(", ")}`);
+  if (context.session === null || context.sessionDir === null) return failure(format, "SESSION_REQUIRED", `${name} needs a session; pass --session DIR (or set PANEWEFT_SESSION) / start paneweft mcp with one`);
+  const issues = validateArguments(name, args);
+  const requested = record.maxBytes;
+  if (requested !== undefined && (typeof requested !== "number" || !Number.isInteger(requested))) issues.push({ code: "TYPE", pointer: "/maxBytes", constraint: "type: integer", hint: "maxBytes is an integer from 2048 to 32768." });
+  if (issues.length > 0) return failure(format, "INVALID_ARGUMENT", `the arguments of ${name} are invalid: ${issues[0]?.code} at "${issues[0]?.pointer}"`, { errors: issues });
+  if (typeof requested === "number" && requested < 2048) return failure(format, "BUDGET_TOO_SMALL", `maxBytes ${requested} is below the 2048 bytes needed for the mandatory part of this reply`, { details: { minimumBytes: 2048 } });
+  const budget = typeof requested === "number" ? Math.min(32768, requested) : 8192;
+  const call: Call = { context: { session: context.session, sessionDir: context.sessionDir, jobs: context.jobs }, args: record, format, budget, cursor: typeof record.cursor === "string" ? record.cursor : undefined };
+  try {
+    switch (name as V1ToolName) {
+      case "list_types": return await listTypes(call);
+      case "list_views_for_type": return await listViews(call);
+      case "list_examples": return await listExamples(call);
+      case "scaffold_view": return await scaffold(call, "scaffold_view");
+      case "scaffold_example": return await scaffold(call, "scaffold_example");
+      case "collect": return await collect(call);
+      case "collection_status": return await collectionStatus(call);
+      case "cancel_collection": return await cancelCollection(call);
+      case "view_result": return await viewResult(call);
+      case "explain_failure": return await explainFailure(call);
+    }
+  } catch (cause) {
+    const failed = err("INTERNAL", `${name} failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+    return failure(format, "INTERNAL", failed.ok ? "" : failed.error.message);
+  }
 }
+
+export { existsSync, readFile, canonicalJson, sha256Hex };

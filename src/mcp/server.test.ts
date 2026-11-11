@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { openSession } from "../core/session.ts";
 import { createSchemaRegistry } from "../schemas/index.ts";
+import { V1_TOOL_NAMES } from "../v1/schemas.ts";
 import { connectMcp } from "../../test/helpers/mcp-client.ts";
 import { must } from "../../test/helpers/must.ts";
 import { useTempDirs } from "../../test/helpers/tmp.ts";
@@ -139,10 +140,10 @@ describe("mcp: tools/list matches the contract (MC11, MC17)", () => {
   // why: the advertised surface is exactly the design 5 table: thirteen short stable names, no more (a fourteenth, e.g. a
   //      runner, would be an unreviewed capability) and no fewer. Sorted comparison pins the SET, not the order.
   // proves: CLAIM(MC11), CLAIM(MC17)
-  it("[MC11] tools/list names are exactly the thirteen of design section 5", async () => {
+  it("[MC11] tools/list names are exactly the thirteen of design section 5 plus the ten v1 agent tools", async () => {
     const names = (await (await mcp()).listTools()).map((tool) => tool.name).sort();
-    expect(names).toEqual([...TOOL_NAMES_LITERAL].sort());
-    expect(names).toHaveLength(13);
+    expect(names).toEqual([...TOOL_NAMES_LITERAL, ...V1_TOOL_NAMES].sort());
+    expect(names).toHaveLength(23);
   });
 
   // why: each tool is described for an agent, declares an object input with additionalProperties false (so a payload cannot
@@ -198,11 +199,19 @@ describe("mcp: tools/list matches the contract (MC11, MC17)", () => {
     expect(badText.test(affirmative("Record one run of a scenario. Never executes anything."))).toBe(false);
 
     const tools = await (await mcp()).listTools();
-    expect(tools.map((tool) => tool.name).sort()).toEqual([...TOOL_NAMES_LITERAL].sort());
-    for (const tool of tools) {
+    const v0 = tools.filter((tool) => (TOOL_NAMES_LITERAL as readonly string[]).includes(tool.name));
+    expect(v0.map((tool) => tool.name).sort()).toEqual([...TOOL_NAMES_LITERAL].sort());
+    for (const tool of v0) {
       expect(badName.test(tool.name), `name ${tool.name}`).toBe(false);
       expect(badText.test(affirmative(tool.description ?? "")), `description of ${tool.name}`).toBe(false);
     }
+    // v1 changes this rule for collection ONLY (spec section 6): `collect` says so in capital letters, no other tool affirms execution, and
+    // no v1 tool name implies a runner or a shell.
+    const v1 = tools.filter((tool) => (V1_TOOL_NAMES as readonly string[]).includes(tool.name));
+    expect(v1).toHaveLength(V1_TOOL_NAMES.length);
+    const badVerb = /\b(runs|executes|launches|spawns|invokes|rerun|reruns|installs)\b/i;
+    expect(v1.filter((tool) => badVerb.test(affirmative(tool.description ?? ""))).map((tool) => tool.name)).toEqual(["collect"]);
+    for (const tool of v1) expect(badName.test(tool.name), `name ${tool.name}`).toBe(false);
   });
 });
 
@@ -385,7 +394,7 @@ describe("mcp: stdout carries protocol messages only (MC3)", () => {
       child.send({ jsonrpc: "2.0", method: "notifications/initialized" });
       child.send({ jsonrpc: "2.0", id: 2, method: "tools/list" });
       const listed = await child.response(2);
-      expect(listed.result.tools).toHaveLength(13);
+      expect(listed.result.tools).toHaveLength(23);
       child.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "validate", arguments: wireJson("validate-unknown-component.json") } });
       const called = await child.response(3);
       expect(called.result.isError).toBe(true);
