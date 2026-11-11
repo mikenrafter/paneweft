@@ -141,6 +141,30 @@ describe("[S2] withWriteLock: failure paths clean up", () => {
     expect(openDescriptors()).toEqual(before);
   });
 
+  // why: when `flock` cannot be started, Node closes the stderr pipe it had already made a moment AFTER it reports the error. Returning before that
+  //   leaves a socket open (seen once in a loaded full-suite run). Every rejection must come back with the descriptor table exactly as before, so
+  //   the table is compared right after each of 40 rejections (the window is a couple of milliseconds, so one comparison could miss it).
+  // proves: CLAIM(flock-no-leak)
+  it("[S2] repeated spawn failures leave the descriptor table unchanged at the moment each one is reported", async () => {
+    const dir = tmp("repeat-missing");
+    await warm(dir);
+    const before = openDescriptors();
+    const kinds: string[] = [];
+    let drift: string[] | null = null;
+
+    await withExactPath(tmp("still-nothing"), async () => {
+      for (let attempt = 0; attempt < 40; attempt += 1) {
+        const failure = await withWriteLock(dir, { waitMs: 1000 }, async () => undefined).then(() => null, (error: unknown) => error);
+        kinds.push((failure as WriteLockError).kind);
+        const now = openDescriptors();
+        if (drift === null && JSON.stringify(now) !== JSON.stringify(before)) drift = now.filter((target, index) => target !== before[index]);
+      }
+    });
+
+    expect(new Set(kinds)).toEqual(new Set(["flock-missing"]));
+    expect(drift, "descriptors that differ from the baseline right after a rejection").toBeNull();
+  });
+
   // why: the lock file cannot be opened (a directory stands where the file should be): its own kind, section never runs, nothing leaks.
   // proves: CLAIM(flock-no-leak)
   it("[S2] a lock file that cannot be opened: WriteLockError lock-file-unavailable", async () => {
