@@ -17,7 +17,7 @@ import { createSchemaRegistry } from "../schemas/index.ts";
 import { sha256Hex } from "../../test/helpers/hash.ts";
 import { must } from "../../test/helpers/must.ts";
 import { patch } from "../../test/helpers/patch.ts";
-import { readFixture, useSessions } from "../../test/helpers/nav-session.ts";
+import { readFixture, sessionWithoutItem, sessionWithoutSource, useSessions } from "../../test/helpers/nav-session.ts";
 
 const ALL = { file: "components/all.bundle.json" };
 const ROWS_1 = { file: "nav/rows.snap-1.json" };
@@ -384,7 +384,7 @@ describe("resolveClaimEvidence: follow a notebook claim to an example result", (
     const session = await sessions.load(CLAIMS_1);
     const steps = await resolveClaimEvidence(session, story, "C1");
     const first = steps[0]?.resolution;
-    const entity = first?.status === "resolved" ? first.entity : undefined;
+    const entity = first?.status === "resolved" && "entity" in first ? first.entity : undefined;
     expect(entity).toStrictEqual(result);
     const stored = must(await session.getEntity(result, "snap-1"), "getEntity");
     expect(stored).toMatchObject({ id: "result", kind: "json/value", snapshotId: "snap-1", label: "result", dataRoles: ["shape"] });
@@ -399,20 +399,70 @@ describe("resolveClaimEvidence: follow a notebook claim to an example result", (
     expect(await resolveClaimEvidence(session, story, "C1")).toStrictEqual(expectedSteps);
   });
 
-  // why: a claim target whose ITEM does not exist is reported as a named unresolved step IN PLACE (the other steps still resolve, order
-  //      preserved), never dropped and never redirected. One-fault variant built with patch(): the contradicts target's item -> run-ghost.
-  //      (Relies on bundle import checking only the view of a {viewId,itemId} target, red-contract section 2 DANGLING_REFERENCE.)
-  // proves: CLAIM(MC8)
-  it("[MC8] a claim target with an unknown item is an unresolved step in place; the others still resolve", async () => {
-    const session = await sessions.load({
-      ...CLAIMS_1,
-      transform: (bundle) => patch(bundle, { op: "replace", path: "/views/2/data/blocks/1/contradicts/0/itemId", value: "run-ghost" }),
-    });
+  // why: S2. A claim target whose ITEM is gone is reported as a named unresolved step IN PLACE (the other steps still resolve, order
+  //      preserved), never dropped and never redirected. Import is STRICT (next test), so this state is produced by the controlled
+  //      resolver fixture: a real session whose stored view `one-write` reads back without run-2, as after a valid import whose
+  //      target was removed later. The contradicts target (one-write/run-2) is the step that must become unresolved.
+  // proves: CLAIM(MC8) CLAIM(S2-strict-import)
+  it("[S2] a claim target removed after a valid import is an unresolved step in place; the others still resolve", async () => {
+    const real = await sessions.load(CLAIMS_1);
+    const session = sessionWithoutItem(real, { viewId: "one-write", snapshotId: "snap-1" }, "run-2");
     const steps = await resolveClaimEvidence(session, story, "C1");
     expect(steps).toStrictEqual([
       expectedSteps[0],
       expectedSteps[1],
-      { target: { snapshotId: "snap-1", viewId: "one-write", itemId: "run-ghost" }, relation: "contradicts", resolution: unresolved("item", "run-ghost") },
+      { target: { snapshotId: "snap-1", viewId: "one-write", itemId: "run-2" }, relation: "contradicts", resolution: unresolved("item", "run-2") },
     ]);
+    // control: the real, unwrapped session resolves the same step (the fixture removes only what it names)
+    expect(await resolveClaimEvidence(real, story, "C1")).toStrictEqual(expectedSteps);
+  });
+
+  // why: S2 removes the old contradiction (a test that needed import to ACCEPT a dangling item). The strict rule is pinned from the
+  //      session side too: the one-fault bundle that the previous test used to import is refused by importBundle, with the
+  //      DANGLING_REFERENCE at the claim entry, and nothing is stored.
+  // proves: CLAIM(S2-strict-import) CLAIM(MC20)
+  it("[S2] importing a claim whose {viewId,itemId} item does not exist is refused (VALIDATION_FAILED, DANGLING_REFERENCE), nothing stored", async () => {
+    const session = await sessions.load();
+    const bundle = patch(readFixture(CLAIMS_1.file), { op: "replace", path: "/views/2/data/blocks/1/contradicts/0/itemId", value: "run-ghost" });
+    const result = await session.importBundle(bundle);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("VALIDATION_FAILED");
+      expect(result.error.errors.map((issue) => [issue.code, issue.pointer])).toEqual([["DANGLING_REFERENCE", "/views/2/data/blocks/1/contradicts/0"]]);
+    }
+    expect(await session.listViews()).toEqual([]);
+  });
+
+  // why: S11. D1 in the demos cites a SOURCE id (`supports: ["sv"]`), which `LinkTarget` could not name; EvidenceStep gains a source target
+  //      variant {snapshotId, viewId, sourceId} whose resolution shows the declared source itself. Mixed evidence keeps the claim's
+  //      DECLARED order: here supports = [item run-1, source s1, item f], contradicts = [item run-2], so the source step is second -
+  //      a grouping "items first, sources last" would put it third. The source is taken from the story view's declared `sources`.
+  // proves: CLAIM(S11-source-evidence) CLAIM(MC8)
+  it("[S11] a claim mixing item and source evidence resolves in declared order, the source step showing the declared source", async () => {
+    const session = await sessions.load({ ...CLAIMS_1, transform: (bundle) => patch(bundle, { op: "add", path: "/views/2/data/blocks/1/supports/1", value: "s1" }) });
+    const declared = readFixture(CLAIMS_1.file).views[2].sources[0];
+    expect(declared.id).toBe("s1");
+    expect(await resolveClaimEvidence(session, story, "C1")).toStrictEqual([
+      expectedSteps[0],
+      { target: { snapshotId: "snap-1", viewId: "story", sourceId: "s1" }, relation: "supports", resolution: { status: "resolved", sourceId: "s1", source: declared } },
+      expectedSteps[1],
+      expectedSteps[2],
+    ]);
+  });
+
+  // why: S11 "visible resolution or an explicit unresolved explanation": a source that is no longer declared (removed after a valid
+  //      import; import itself refuses such ids, validate.bundle.test) is an unresolved step IN PLACE naming the source, never dropped.
+  // proves: CLAIM(S11-source-evidence) CLAIM(MC8)
+  it("[S11] a source evidence target that is no longer declared is an unresolved step in place naming the source", async () => {
+    const real = await sessions.load({ ...CLAIMS_1, transform: (bundle) => patch(bundle, { op: "add", path: "/views/2/data/blocks/1/supports/1", value: "s1" }) });
+    const session = sessionWithoutSource(real, story, "s1");
+    const steps = await resolveClaimEvidence(session, story, "C1");
+    expect(steps).toHaveLength(4);
+    expect(steps[1]).toStrictEqual({
+      target: { snapshotId: "snap-1", viewId: "story", sourceId: "s1" },
+      relation: "supports",
+      resolution: { status: "unresolved", code: "UNRESOLVED_TARGET", missing: "source", message: expect.stringContaining("s1") },
+    });
+    expect([steps[0], steps[2], steps[3]]).toStrictEqual([expectedSteps[0], expectedSteps[1], expectedSteps[2]]);
   });
 });

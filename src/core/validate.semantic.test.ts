@@ -275,3 +275,30 @@ describe("[MC2] bundle alias (forward) cycles", () => {
     expectAccepted(check(patch(bundle(), fwd(0, "def-source"), fwd(3, "def-layout"), fwd(1, "def-delivery"))), "bundle");
   });
 });
+
+describe("[S8] every source anchor carries a recorded content hash", () => {
+  // why: S8 / design 4: "Source anchors must resolve to a recorded file hash". An anchor (an item's, or a source excerpt's)
+  //   names (repository, path); freshness.repositories[repository].files must hold that path, or nothing could ever tell
+  //   whether the quoted bytes changed. The issue is DANGLING_REFERENCE at the anchor's `path` (docs/contract-additions/round2.md).
+  //   The control uses the recorded path; the twins change only the path, the repository, or remove the record.
+  // proves: CLAIM(S8-anchor-hash) CLAIM(MC6) CLAIM(MC2)
+  const anchored = (path: string, repository = "r") =>
+    patch(listBase(), { op: "add", path: "/data/rows/0/anchor", value: { repository, path, lines: [1, 3] } });
+  it("[S8] a row anchor on a path with a recorded hash is accepted", () => {
+    expectAccepted(check(anchored("src/mcp.rs")), "envelope");
+  });
+  it("[S8] a row anchor on an unrecorded path is DANGLING_REFERENCE at the anchor's path", () => {
+    expectRejected(check(anchored("src/other.rs")), [{ code: "DANGLING_REFERENCE", pointer: "/data/rows/0/anchor/path" }], "envelope");
+  });
+  it("[S8] the same path under a repository that recorded nothing is DANGLING_REFERENCE (hashes are per repository)", () => {
+    expectRejected(check(anchored("src/mcp.rs", "other-repo")), [{ code: "DANGLING_REFERENCE", pointer: "/data/rows/0/anchor/path" }]);
+  });
+  it("[S8] a source excerpt anchor on an unrecorded path is DANGLING_REFERENCE at /data/excerpt/anchor/path", () => {
+    expectAccepted(check(sourceBase()), "envelope");
+    expectRejected(check(patch(sourceBase(), { op: "replace", path: "/data/excerpt/anchor/path", value: "src/unrecorded.ts" })), [{ code: "DANGLING_REFERENCE", pointer: "/data/excerpt/anchor/path" }]);
+  });
+  it("[S8] removing the recorded hash from freshness rejects the anchor that relied on it", () => {
+    const doc = patch(sourceBase(), { op: "replace", path: "/freshness/repositories/0/files", value: {} });
+    expectRejected(check(doc), [{ code: "DANGLING_REFERENCE", pointer: "/data/excerpt/anchor/path" }]);
+  });
+});

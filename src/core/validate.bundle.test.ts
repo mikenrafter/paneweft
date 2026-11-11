@@ -131,7 +131,7 @@ describe("[MC12] view.viewDefinitionId must be registered by the bundle or known
     expectRejected(check(ghost()), [dangling("/views/0/viewDefinitionId")], "bundle");
   });
   it("[MC12] the same id is accepted when the context lists that definition", () => {
-    expectAccepted(check(ghost(), { definitionIds: ["def-ghost"] }), "bundle");
+    expectAccepted(check(ghost(), { definitions: [{ id: "def-ghost", component: "list", entityKind: "vigil/watch" }] }), "bundle");
   });
   it("[MC12] removing a definition from the bundle dangles exactly the views that use it", () => {
     expectRejected(check(patch(allBundle(), { op: "remove", path: "/definitions/0" })), [dangling("/views/0/viewDefinitionId")]);
@@ -245,5 +245,86 @@ describe("[MC20] run-output bundles are validated with the same rules", () => {
     };
     expectRejected(check(solo()), [dangling("/views/0/entity")], "bundle");
     expectAccepted(check(solo(), { entities: [{ repository: "r", id: "watch", kind: "vigil/watch", snapshotId: "snap-1" }] }), "bundle");
+  });
+});
+
+describe("[S8] a view instance must agree with its definition", () => {
+  // why: S8. ReferenceContext carries definition metadata (component id, entity kind). A view registered under
+  //   `def-modules` (component list, entity kind vigil/watch) whose definition says otherwise cannot be opened by the
+  //   tabs the definition promises: DEFINITION_MISMATCH, addressed at the instance member that disagrees. Each
+  //   negative changes the DEFINITION only, so the instance is untouched and the issue is the disagreement alone.
+  // proves: CLAIM(S8-definition-metadata) CLAIM(MC12) CLAIM(MC20)
+  it("[S8] positive control: the fixture bundle's views agree with their definitions", () => {
+    expectAccepted(check(allBundle()), "bundle");
+  });
+  it("[S8] a definition whose component differs from its view's is DEFINITION_MISMATCH at /views/0/component", () => {
+    expectRejected(check(patch(allBundle(), { op: "replace", path: "/definitions/0/component", value: "tree" })), [{ code: "DEFINITION_MISMATCH", pointer: "/views/0/component" }], "bundle");
+  });
+  it("[S8] a definition whose entityKind differs from the view entity's kind is DEFINITION_MISMATCH at /views/0/entity/kind", () => {
+    expectRejected(check(patch(allBundle(), { op: "replace", path: "/definitions/0/entityKind", value: "code/module" })), [{ code: "DEFINITION_MISMATCH", pointer: "/views/0/entity/kind" }]);
+  });
+  it("[S8] both disagreements on one view are two issues, sorted by pointer", () => {
+    const doc = patch(allBundle(), { op: "replace", path: "/definitions/0/component", value: "tree" }, { op: "replace", path: "/definitions/0/entityKind", value: "code/module" });
+    expectRejected(check(doc), [
+      { code: "DEFINITION_MISMATCH", pointer: "/views/0/component" },
+      { code: "DEFINITION_MISMATCH", pointer: "/views/0/entity/kind" },
+    ]);
+  });
+
+  // why: the definition may live in the session instead of the bundle: the same rule through ReferenceContext.definitions.
+  //   A context definition that agrees accepts, one that disagrees on component or kind rejects, with the same pointers.
+  // proves: CLAIM(S8-definition-metadata) CLAIM(MC12)
+  it("[S8] metadata from the context is enforced exactly like metadata from the bundle", () => {
+    const viewOnly = () => {
+      const bundle = allBundle();
+      return { schemaVersion: "paneweft.bundle/1", entities: [bundle.entities[0]], definitions: [], views: [bundle.views[0]] };
+    };
+    const known = (extra: Record<string, string> = {}) => ({ definitions: [{ id: "def-modules", component: "list", entityKind: "vigil/watch", ...extra }] });
+    expectAccepted(check(viewOnly(), known()), "bundle");
+    expectRejected(check(viewOnly(), known({ component: "graph" })), [{ code: "DEFINITION_MISMATCH", pointer: "/views/0/component" }]);
+    expectRejected(check(viewOnly(), known({ entityKind: "notes/page" })), [{ code: "DEFINITION_MISMATCH", pointer: "/views/0/entity/kind" }]);
+    expectRejected(check(viewOnly(), { definitions: [] }), [dangling("/views/0/viewDefinitionId")]);
+  });
+});
+
+describe("[S8] conflicting duplicate identities are rejected", () => {
+  // why: S8. Design 4: "an entity ID is unique within its repository and snapshot; contradictory replacement data requires a
+  //   new snapshot". Two members with the same identity but different content cannot both be registered. The issue sits on
+  //   the LATER occurrence's index. An exact repeat is harmless and stays accepted (it is the idempotent case the session
+  //   already allows), which also keeps the negative honest: only the contradiction changes.
+  // proves: CLAIM(S8-identity) CLAIM(MC20)
+  it("[S8] an entity repeated with a different label is IDENTITY_CONFLICT at the later entity; an exact repeat is accepted", () => {
+    const repeat = (label?: string) => {
+      const doc = allBundle();
+      doc.entities.push({ ...clone(doc.entities[1]), ...(label === undefined ? {} : { label }) });
+      return doc;
+    };
+    expectAccepted(check(repeat()), "bundle");
+    expectRejected(check(repeat("a different label")), [{ code: "IDENTITY_CONFLICT", pointer: "/entities/3" }], "bundle");
+  });
+  it("[S8] the same entity id in another snapshot is a different identity: accepted", () => {
+    const doc = allBundle();
+    doc.entities.push({ ...clone(doc.entities[1]), snapshotId: "snap-2", label: "later" });
+    expectAccepted(check(doc), "bundle");
+  });
+  it("[S8] a definition id repeated with a different title is IDENTITY_CONFLICT at the later definition; an exact repeat is accepted", () => {
+    const repeat = (title?: string) => {
+      const doc = allBundle();
+      doc.definitions.push({ ...clone(doc.definitions[1]), ...(title === undefined ? {} : { title }) });
+      return doc;
+    };
+    expectAccepted(check(repeat()), "bundle");
+    expectRejected(check(repeat("Other title")), [{ code: "IDENTITY_CONFLICT", pointer: "/definitions/7" }]);
+  });
+  it("[S8] a definition that contradicts the context's metadata for the same id is IDENTITY_CONFLICT", () => {
+    const doc = allBundle();
+    expectRejected(check(doc, { definitions: [{ id: "def-layout", component: "list", entityKind: "vigil/watch" }] }), [{ code: "IDENTITY_CONFLICT", pointer: "/definitions/1" }]);
+  });
+  it("[S8] a view (id, snapshotId) repeated with different content is IDENTITY_CONFLICT at the later view", () => {
+    const doc = allBundle();
+    const copy = clone(doc.views[0]);
+    copy.title = "Another title";
+    doc.views.push(copy);
+    expectRejected(check(doc), [{ code: "IDENTITY_CONFLICT", pointer: "/views/7" }]);
   });
 });

@@ -227,11 +227,15 @@ describe("[MC13] the freshness header line", () => {
     writeFileSync(mcpPath(root), content);
   }
   const view = (root: string) => bundleOf([withFreshnessRoot(listView({ id: "fresh-v", definitionId: "def-fresh" }), root)]);
+  // S1: the envelope's recorded root is never read; the OPERATOR registers the local root of repository `r`.
+  const operatorRegisters = async (env: { session: { registerRepository(r: { id: string; root: string }): Promise<unknown> } }, root: string) =>
+    void (await env.session.registerRepository({ id: "r", root }));
 
   it("[MC13] fresh: the file still holds the recorded bytes -> 'freshness: fresh'", async () => {
     const root = tempDir("fresh");
     writeMcp(root, "hello\n");
     const env = await open(view(root));
+    await operatorRegisters(env, root);
     expect(okText(await env.call("inspect_view", ARGS("fresh-v"))).header.freshness).toBe("fresh");
     expect(okJson(await env.call("inspect_view", { ...ARGS("fresh-v"), format: "json" })).freshness.status).toBe("fresh");
   });
@@ -239,6 +243,7 @@ describe("[MC13] the freshness header line", () => {
     const root = tempDir("stale");
     writeMcp(root, "hello, changed\n");
     const env = await open(view(root));
+    await operatorRegisters(env, root);
     const text = okText(await env.call("inspect_view", ARGS("fresh-v")));
     expect(text.header.freshness).toBe("stale (changed: src/mcp.rs)");
     expect(text.header.completeness).toBe("complete (all modules in the fixture)");
@@ -249,7 +254,24 @@ describe("[MC13] the freshness header line", () => {
   it("[MC13] unknown: the root cannot be read -> 'unknown (inaccessible: <root>)'", async () => {
     const missing = join(tempDir("unknown"), "no-such-root");
     const env = await open(view(missing));
+    await operatorRegisters(env, missing);
     expect(okText(await env.call("inspect_view", ARGS("fresh-v"))).header.freshness).toBe(`unknown (inaccessible: ${missing})`);
     expect(okJson(await env.call("inspect_view", { ...ARGS("fresh-v"), format: "json" })).freshness).toMatchObject({ status: "unknown", inaccessibleRoots: [missing] });
+  });
+  // why: S1. The envelope below records a root that EXISTS and holds the recorded bytes, but the operator registered no
+  //   repository: the header must say `unverified` with the repository and a reason, never `fresh`, and must not name the
+  //   submitted root (it is untrusted text that could be a probe).
+  // proves: CLAIM(freshness-registered-roots) CLAIM(MC13) CLAIM(MC15)
+  it("[S1] unverified: a recorded root that exists and matches, with no registration -> 'unverified (r: ...)', never fresh", async () => {
+    const root = tempDir("unverified");
+    writeMcp(root, "hello\n");
+    const env = await open(view(root));
+    const text = okText(await env.call("inspect_view", ARGS("fresh-v")));
+    expect(text.header.freshness).toMatch(/^unverified \(r: .*\S.*\)$/);
+    expect(text.header.freshness).not.toContain(root);
+    expect(text.header.completeness).toBe("complete (all modules in the fixture)");
+    const json = okJson(await env.call("inspect_view", { ...ARGS("fresh-v"), format: "json" }));
+    expect(json.freshness).toMatchObject({ status: "unverified", unverified: [{ repository: "r", code: "REPOSITORY_NOT_REGISTERED" }] });
+    expect(JSON.stringify(json.freshness)).not.toContain(root);
   });
 });

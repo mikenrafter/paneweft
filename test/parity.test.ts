@@ -52,7 +52,7 @@ function expectParity({ cli, mcp }: Pair): void {
   expect(cli.exitCode).toBe(mcp.isError ? 1 : 0);
   expect(mcp.blocks).toBe(1);
 }
-const FRESHNESS = /^freshness: (fresh|stale \(changed: .+\)|unknown \(inaccessible: .+\))$/;
+const FRESHNESS = /^freshness: (fresh|stale \(changed: .+\)|unknown \(inaccessible: .+\)|unverified \(.+\))$/;
 /** Header lines except `freshness:` (whose value depends on repository registration); asserts the freshness line's form and position. */
 function withoutFreshness(lines: string[], freshnessIndex: number): string[] {
   expect(lines[freshnessIndex], "freshness line position (red-contract 3: after completeness)").toMatch(FRESHNESS);

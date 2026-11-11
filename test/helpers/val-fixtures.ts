@@ -26,6 +26,16 @@ export function runSource(id = "s2", runId = "run-1"): Doc {
   };
 }
 
+/** S4: a `run` source - one execution of an owner-configured runner. Snake_case members are the round-2 contract. */
+export function runKindSource(id = "s3", runId = "run-1", extra: Doc = {}): Doc {
+  return { id, kind: "run", run_id: runId, runner_id: "vigil-one-write", started_at: "2026-11-11T00:00:00Z", finished_at: "2026-11-11T00:00:02Z", ...extra };
+}
+
+/** S4: a `tool` source - the compiler or language service behind `compiled` facts. */
+export function toolSource(id = "s4", extra: Doc = {}): Doc {
+  return { id, kind: "tool", name: "rustc", version: "1.91.0", ...extra };
+}
+
 export function listBase(): Doc {
   const view = componentFixture("list");
   view.data.rows.push(item("second", { cells: { name: "watch.rs" } }));

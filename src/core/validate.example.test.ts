@@ -10,7 +10,7 @@ import { validateRunOutput, validateSubmission, type ReferenceContext } from "./
 import { allBundle } from "../../test/helpers/fixtures.ts";
 import { patch } from "../../test/helpers/patch.ts";
 import { calm, expectAccepted, expectOk, expectRejected } from "../../test/helpers/val-check.ts";
-import { exampleBase, item, passedRun } from "../../test/helpers/val-fixtures.ts";
+import { exampleBase, item, passedRun, runKindSource } from "../../test/helpers/val-fixtures.ts";
 
 const check = (doc: unknown) => calm(() => validateSubmission(doc), "validateSubmission");
 const checkRun = (doc: unknown, context?: ReferenceContext) => calm(() => validateRunOutput(doc, context), "validateRunOutput");
@@ -205,5 +205,45 @@ describe("[MC17] validateRunOutput", () => {
   it("[MC17] a fault inside the output bundle is addressed under /bundle", () => {
     const doc = patch(runOutput(), { op: "replace", path: "/bundle/views/0/data/rows/0/evidence", value: ["s9"] });
     expectRejected(checkRun(doc), [{ code: "DANGLING_REFERENCE", pointer: "/bundle/views/0/data/rows/0/evidence/0" }]);
+  });
+});
+
+describe("[S4] a run is observed only through a run source of its own run id", () => {
+  // why: S4 "example results: add a run source kind carrying the run id, so example evidence is honestly observed".
+  //   An observed run must cite a declared `run` source whose run_id equals the run's runId: a run source of ANOTHER
+  //   run, or a file source, would let an observation be claimed from evidence that never saw this execution.
+  //   Positive control first (view form), then the output-document form, then the two dishonest twins.
+  // proves: CLAIM(S4-run-source) CLAIM(MC17) CLAIM(MC5)
+  it("[S4] example view: observed run citing a run source with the same run id is accepted; another run's id is PROVENANCE_RUN_REQUIRED", () => {
+    const view = (runId: string) => patch(
+      exampleBase(),
+      { op: "add", path: "/sources/-", value: runKindSource("s3", runId) },
+      { op: "replace", path: "/data/runs/0/evidence", value: ["s3"] },
+    );
+    expectAccepted(check(view("run-1")), "envelope");
+    expectRejected(check(view("run-2")), [{ code: "PROVENANCE_RUN_REQUIRED", pointer: "/data/runs/0/provenance" }], "envelope");
+  });
+  it("[S4] run output: observed run with its own declared run source is accepted; with another run's id or a file source it is PROVENANCE_RUN_REQUIRED at /run/provenance", () => {
+    const observed = (runSourceId: string, evidence: string[]) =>
+      patch(runOutput({ provenance: "observed", evidence }), { op: "add", path: "/sources", value: [runKindSource("s3", runSourceId)] });
+    expectOk(checkRun(observed("run-1", ["s3"])));
+    expectRejected(checkRun(observed("run-2", ["s3"])), [{ code: "PROVENANCE_RUN_REQUIRED", pointer: "/run/provenance" }]);
+    expectRejected(checkRun(observed("run-1", ["s1"])), [{ code: "PROVENANCE_RUN_REQUIRED", pointer: "/run/provenance" }]);
+  });
+
+  // why: S4 "evidence references must resolve to declared sources (dangling -> validation error)". The run and each of its
+  //   assertions are items with evidence: an undeclared source id is DANGLING at the exact evidence entry, and a run source
+  //   declared by the output resolves (the control).
+  // proves: CLAIM(S4-dangling-evidence) CLAIM(MC17)
+  it("[S4] run output: dangling evidence on the run and on an assertion is addressed at the entry; a declared output source resolves", () => {
+    expectOk(checkRun(patch(runOutput({ evidence: ["s1", "s3"] }), { op: "add", path: "/sources", value: [runKindSource("s3", "run-1")] })));
+    expectRejected(checkRun(runOutput({ evidence: ["s1", "s9"] })), [{ code: "DANGLING_REFERENCE", pointer: "/run/evidence/1" }]);
+    const badAssertion = runOutput({ assertions: [item("as-1", { statement: "x", passed: true, evidence: ["s9"] })] });
+    expectRejected(checkRun(badAssertion), [{ code: "DANGLING_REFERENCE", pointer: "/run/assertions/0/evidence/0" }]);
+  });
+  it("[S4] run output: a malformed run source in the output's sources is a shape issue under /sources", () => {
+    const broken = runKindSource("s3", "run-1");
+    delete (broken as any).run_id;
+    expectRejected(checkRun(patch(runOutput(), { op: "add", path: "/sources", value: [broken] })), [{ code: "REQUIRED", pointer: "/sources/0/run_id" }]);
   });
 });

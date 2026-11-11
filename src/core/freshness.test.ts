@@ -1,10 +1,14 @@
 // Freshness is decided by bytes, never by the git revision (design 4, MC13): fresh / stale with changed
-// paths / unknown with inaccessible roots. These tests use real git repositories (git on this host) and
-// real directories; recorded hashes are LITERALS (derivation next to each constant).
+// paths / unknown with inaccessible roots. Round 2 (S1): bytes are read ONLY under roots the operator
+// registered; the root an envelope records is never read (it yields `unverified`). These tests use real git
+// repositories (git on this host) and real directories; recorded hashes are LITERALS (derivation next to
+// each constant). The envelope's recorded root is deliberately a path that does not exist, so every test
+// that expects bytes to be read proves the REGISTERED root was used.
 import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { checkFreshness, type FreshnessResult } from "./freshness.ts";
+import type { RepositoryRegistration } from "./session.ts";
 import type { Envelope } from "./wire.ts";
 import { git, initGitRepo, writeFiles } from "../../test/helpers/git.ts";
 import { useTempDirs } from "../../test/helpers/tmp.ts";
@@ -17,23 +21,32 @@ const WORLD_UPPER = "5ece97172554920a9872271d89d6087ce5633c2e2c93d4b5fac0ac7d4a0
 const WORLD_BANG = "15296cbd7565d6b3583fcfe1d92246cbe27bd9b7c5862784c78f1176c3b622b0"; // sha256("world!\n")
 const BINARY = "485d42e2c2452309d12ec342cb2a2aad5c6ed117d349841f79ae6fe3aee1d48d"; // sha256 of bytes 00 ff 10 0a 00
 const SECRET = "bca36a07b8f2cff02008612a0e623375a682851b218099ce7a52dfa3e2a2aea3"; // sha256("TOP-SECRET-7f3a91\n")
+const CHANGED = "7f8b1dfc466b6249f06cbe55c9174df2578e7754da793fded244ef5cba2a38f1"; // sha256("changed\n")
 const EMPTY = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"; // sha256("")
 
 const tmp = useTempDirs();
 
 interface Repo { id: string; root: string; gitRev: string | null }
+/** The operator's registry for the current test: every repo helper below registers what it creates. */
+let registered: RepositoryRegistration[] = [];
+beforeEach(() => void (registered = []));
+const check = (freshness: Freshness) => checkFreshness(freshness, registered);
 function gitRepo(id: string, files: Record<string, string> = { "src/a.txt": "hello\n", "src/b.txt": "world\n" }): Repo {
   const root = join(tmp("fresh"), id);
+  registered.push({ id, root });
   return { id, root, gitRev: initGitRepo(root, files) };
 }
 function plainDir(id: string, files: Record<string, string> = { "src/a.txt": "hello\n", "src/b.txt": "world\n" }): Repo {
   const root = join(tmp("fresh"), id);
   mkdirSync(root, { recursive: true });
   writeFiles(root, files);
+  registered.push({ id, root });
   return { id, root, gitRev: null };
 }
+/** The envelope's record of a repository. Its `root` is a foreign path that must never be read (S1). */
+const RECORDED_ROOT = "/recorded/on/another/machine";
 const record = (repo: Repo, files: Record<string, string>, dirty = false): Freshness["repositories"][number] => ({
-  id: repo.id, root: repo.root, gitRev: repo.gitRev, dirty, files,
+  id: repo.id, root: `${RECORDED_ROOT}/${repo.id}`, gitRev: repo.gitRev, dirty, files,
 });
 const AB = { "src/a.txt": HELLO, "src/b.txt": WORLD };
 
@@ -42,7 +55,7 @@ describe("checkFreshness: bytes decide", () => {
   // proves: CLAIM(MC13)
   it("[MC13] fresh when every recorded file still has the recorded bytes", async () => {
     const repo = gitRepo("A");
-    expect(await checkFreshness({ repositories: [record(repo, AB)] })).toEqual<FreshnessResult>({ status: "fresh" });
+    expect(await check({ repositories: [record(repo, AB)] })).toEqual<FreshnessResult>({ status: "fresh" });
   });
 
   // why: "Git revision alone cannot identify dirty bytes" (design 4). HEAD is unchanged, a supporting file
@@ -52,7 +65,7 @@ describe("checkFreshness: bytes decide", () => {
     const repo = gitRepo("A");
     writeFileSync(join(repo.root, "src/a.txt"), "hello!\n");
     expect(git(repo.root, "rev-parse", "HEAD")).toBe(repo.gitRev);
-    expect(await checkFreshness({ repositories: [record(repo, AB)] })).toEqual<FreshnessResult>({
+    expect(await check({ repositories: [record(repo, AB)] })).toEqual<FreshnessResult>({
       status: "stale",
       changedPaths: [{ repository: "A", path: "src/a.txt", recordedSha256: HELLO, currentSha256: HELLO_BANG }],
       inaccessibleRoots: [],
@@ -64,7 +77,7 @@ describe("checkFreshness: bytes decide", () => {
   it("[MC13] deleted file: stale with currentSha256 null", async () => {
     const repo = gitRepo("A");
     rmSync(join(repo.root, "src/b.txt"));
-    expect(await checkFreshness({ repositories: [record(repo, AB)] })).toEqual<FreshnessResult>({
+    expect(await check({ repositories: [record(repo, AB)] })).toEqual<FreshnessResult>({
       status: "stale",
       changedPaths: [{ repository: "A", path: "src/b.txt", recordedSha256: WORLD, currentSha256: null }],
       inaccessibleRoots: [],
@@ -80,7 +93,7 @@ describe("checkFreshness: bytes decide", () => {
     git(repo.root, "add", "-A");
     git(repo.root, "commit", "-q", "-m", "unrelated");
     expect(git(repo.root, "rev-parse", "HEAD")).not.toBe(repo.gitRev);
-    expect(await checkFreshness({ repositories: [record(repo, AB)] })).toEqual<FreshnessResult>({ status: "fresh" });
+    expect(await check({ repositories: [record(repo, AB)] })).toEqual<FreshnessResult>({ status: "fresh" });
   });
 
   // why: the inverse - a COMMITTED edit changes HEAD and the bytes: stale. (Rules out "fresh whenever HEAD
@@ -90,7 +103,7 @@ describe("checkFreshness: bytes decide", () => {
     const repo = gitRepo("A");
     writeFileSync(join(repo.root, "src/a.txt"), "hello!\n");
     git(repo.root, "commit", "-q", "-am", "edit");
-    expect(await checkFreshness({ repositories: [record(repo, AB)] })).toEqual<FreshnessResult>({
+    expect(await check({ repositories: [record(repo, AB)] })).toEqual<FreshnessResult>({
       status: "stale",
       changedPaths: [{ repository: "A", path: "src/a.txt", recordedSha256: HELLO, currentSha256: HELLO_BANG }],
       inaccessibleRoots: [],
@@ -103,7 +116,7 @@ describe("checkFreshness: bytes decide", () => {
   it("[MC13] dirty:true recorded and bytes equal: fresh", async () => {
     const repo = gitRepo("A");
     writeFileSync(join(repo.root, "src/a.txt"), "hello\n"); // identical rewrite
-    expect(await checkFreshness({ repositories: [record(repo, AB, true)] })).toEqual<FreshnessResult>({ status: "fresh" });
+    expect(await check({ repositories: [record(repo, AB, true)] })).toEqual<FreshnessResult>({ status: "fresh" });
   });
 
   // why: a dirty working tree elsewhere (untracked file, modified unrelated file) is irrelevant to the
@@ -113,7 +126,7 @@ describe("checkFreshness: bytes decide", () => {
     const repo = gitRepo("A", { "src/a.txt": "hello\n", "src/b.txt": "world\n", "notes.md": "n\n" });
     writeFileSync(join(repo.root, "notes.md"), "changed\n");
     writeFileSync(join(repo.root, "untracked.txt"), "u\n");
-    expect(await checkFreshness({ repositories: [record(repo, AB)] })).toEqual<FreshnessResult>({ status: "fresh" });
+    expect(await check({ repositories: [record(repo, AB)] })).toEqual<FreshnessResult>({ status: "fresh" });
   });
 
   // why: the check is over bytes, so a recorded file that is untracked or ignored by git is still checked.
@@ -122,9 +135,9 @@ describe("checkFreshness: bytes decide", () => {
     const repo = gitRepo("A");
     writeFileSync(join(repo.root, "scratch.txt"), "hello\n"); // untracked, never added
     const files = { "scratch.txt": HELLO };
-    expect(await checkFreshness({ repositories: [record(repo, files)] })).toEqual<FreshnessResult>({ status: "fresh" });
+    expect(await check({ repositories: [record(repo, files)] })).toEqual<FreshnessResult>({ status: "fresh" });
     writeFileSync(join(repo.root, "scratch.txt"), "hello!\n");
-    expect(await checkFreshness({ repositories: [record(repo, files)] })).toEqual<FreshnessResult>({
+    expect(await check({ repositories: [record(repo, files)] })).toEqual<FreshnessResult>({
       status: "stale",
       changedPaths: [{ repository: "A", path: "scratch.txt", recordedSha256: HELLO, currentSha256: HELLO_BANG }],
       inaccessibleRoots: [],
@@ -137,7 +150,7 @@ describe("checkFreshness: bytes decide", () => {
     const repo = gitRepo("A");
     writeFileSync(join(repo.root, "src/a.txt"), "hello!\n");
     writeFileSync(join(repo.root, "src/a.txt"), "hello\n");
-    expect(await checkFreshness({ repositories: [record(repo, AB)] })).toEqual<FreshnessResult>({ status: "fresh" });
+    expect(await check({ repositories: [record(repo, AB)] })).toEqual<FreshnessResult>({ status: "fresh" });
   });
 
   // why: hashes are over raw bytes, including NUL and 0xFF, not over a decoded string.
@@ -145,7 +158,7 @@ describe("checkFreshness: bytes decide", () => {
   it("[MC13] binary content is hashed as raw bytes", async () => {
     const repo = gitRepo("A");
     writeFileSync(join(repo.root, "blob.bin"), Buffer.from([0x00, 0xff, 0x10, 0x0a, 0x00]));
-    expect(await checkFreshness({ repositories: [record(repo, { "blob.bin": BINARY })] })).toEqual<FreshnessResult>({ status: "fresh" });
+    expect(await check({ repositories: [record(repo, { "blob.bin": BINARY })] })).toEqual<FreshnessResult>({ status: "fresh" });
   });
 
   // why: a recorded empty file hashes to sha256(""); "no content" must not be confused with "missing".
@@ -153,9 +166,9 @@ describe("checkFreshness: bytes decide", () => {
   it("[MC13] an empty recorded file is fresh when still empty, and stale (not null) when it gained bytes", async () => {
     const repo = gitRepo("A", { "empty.txt": "" });
     const files = { "empty.txt": EMPTY };
-    expect(await checkFreshness({ repositories: [record(repo, files)] })).toEqual<FreshnessResult>({ status: "fresh" });
+    expect(await check({ repositories: [record(repo, files)] })).toEqual<FreshnessResult>({ status: "fresh" });
     writeFileSync(join(repo.root, "empty.txt"), "hello\n");
-    expect(await checkFreshness({ repositories: [record(repo, files)] })).toEqual<FreshnessResult>({
+    expect(await check({ repositories: [record(repo, files)] })).toEqual<FreshnessResult>({
       status: "stale",
       changedPaths: [{ repository: "A", path: "empty.txt", recordedSha256: EMPTY, currentSha256: HELLO }],
       inaccessibleRoots: [],
@@ -170,7 +183,7 @@ describe("checkFreshness: bytes decide", () => {
     writeFileSync(join(repo.root, "src/a.txt"), "hello!\n");
     rmSync(join(repo.root, "src/b.txt"));
     const reversed = { "src/b.txt": WORLD, "src/a.txt": HELLO };
-    expect(await checkFreshness({ repositories: [record(repo, reversed)] })).toEqual<FreshnessResult>({
+    expect(await check({ repositories: [record(repo, reversed)] })).toEqual<FreshnessResult>({
       status: "stale",
       changedPaths: [
         { repository: "A", path: "src/a.txt", recordedSha256: HELLO, currentSha256: HELLO_BANG },
@@ -186,9 +199,9 @@ describe("checkFreshness: no git, inaccessible roots, several repositories", () 
   // proves: CLAIM(MC13)
   it("[MC13] a directory without git (gitRev null) is fresh and then stale by hashes", async () => {
     const dir = plainDir("P");
-    expect(await checkFreshness({ repositories: [record(dir, AB)] })).toEqual<FreshnessResult>({ status: "fresh" });
+    expect(await check({ repositories: [record(dir, AB)] })).toEqual<FreshnessResult>({ status: "fresh" });
     writeFileSync(join(dir.root, "src/b.txt"), "WORLD\n");
-    expect(await checkFreshness({ repositories: [record(dir, AB)] })).toEqual<FreshnessResult>({
+    expect(await check({ repositories: [record(dir, AB)] })).toEqual<FreshnessResult>({
       status: "stale",
       changedPaths: [{ repository: "P", path: "src/b.txt", recordedSha256: WORLD, currentSha256: WORLD_UPPER }],
       inaccessibleRoots: [],
@@ -201,7 +214,7 @@ describe("checkFreshness: no git, inaccessible roots, several repositories", () 
   it("[MC13] root directory removed: unknown, listing that root, neither fresh nor stale", async () => {
     const repo = gitRepo("A");
     rmSync(repo.root, { recursive: true, force: true });
-    expect(await checkFreshness({ repositories: [record(repo, AB)] })).toEqual<FreshnessResult>({
+    expect(await check({ repositories: [record(repo, AB)] })).toEqual<FreshnessResult>({
       status: "unknown",
       inaccessibleRoots: [repo.root],
     });
@@ -213,7 +226,8 @@ describe("checkFreshness: no git, inaccessible roots, several repositories", () 
     const dir = tmp("fresh");
     const root = join(dir, "not-a-dir");
     writeFileSync(root, "x");
-    const result = await checkFreshness({ repositories: [{ id: "A", root, gitRev: null, dirty: false, files: AB }] });
+    registered.push({ id: "A", root });
+    const result = await check({ repositories: [{ id: "A", root, gitRev: null, dirty: false, files: AB }] });
     expect(result).toEqual<FreshnessResult>({ status: "unknown", inaccessibleRoots: [root] });
   });
 
@@ -222,9 +236,10 @@ describe("checkFreshness: no git, inaccessible roots, several repositories", () 
   // proves: CLAIM(MC13)
   it("[MC13] a repository with no recorded files: fresh when accessible, unknown when not", async () => {
     const repo = plainDir("P");
-    expect(await checkFreshness({ repositories: [record(repo, {})] })).toEqual<FreshnessResult>({ status: "fresh" });
+    expect(await check({ repositories: [record(repo, {})] })).toEqual<FreshnessResult>({ status: "fresh" });
     const gone = join(tmp("fresh"), "gone");
-    expect(await checkFreshness({ repositories: [{ id: "G", root: gone, gitRev: null, dirty: false, files: {} }] })).toEqual<FreshnessResult>({
+    registered.push({ id: "G", root: gone });
+    expect(await check({ repositories: [{ id: "G", root: gone, gitRev: null, dirty: false, files: {} }] })).toEqual<FreshnessResult>({
       status: "unknown", inaccessibleRoots: [gone],
     });
   });
@@ -237,7 +252,7 @@ describe("checkFreshness: no git, inaccessible roots, several repositories", () 
     const b = gitRepo("B");
     writeFileSync(join(a.root, "src/a.txt"), "hello!\n");
     rmSync(b.root, { recursive: true, force: true });
-    expect(await checkFreshness({ repositories: [record(a, AB), record(b, AB)] })).toEqual<FreshnessResult>({
+    expect(await check({ repositories: [record(a, AB), record(b, AB)] })).toEqual<FreshnessResult>({
       status: "stale",
       changedPaths: [{ repository: "A", path: "src/a.txt", recordedSha256: HELLO, currentSha256: HELLO_BANG }],
       inaccessibleRoots: [b.root],
@@ -251,7 +266,7 @@ describe("checkFreshness: no git, inaccessible roots, several repositories", () 
     const b = plainDir("B");
     writeFileSync(join(a.root, "src/b.txt"), "world!\n");
     rmSync(join(b.root, "src/a.txt"));
-    const result = await checkFreshness({ repositories: [record(b, AB), record(a, AB)] }); // B first
+    const result = await check({ repositories: [record(b, AB), record(a, AB)] }); // B first
     expect(result).toEqual<FreshnessResult>({
       status: "stale",
       changedPaths: [
@@ -268,52 +283,126 @@ describe("checkFreshness: no git, inaccessible roots, several repositories", () 
   it("[MC13] two unchanged repositories are fresh", async () => {
     const a = gitRepo("A");
     const b = plainDir("B");
-    expect(await checkFreshness({ repositories: [record(a, AB), record(b, AB)] })).toEqual<FreshnessResult>({ status: "fresh" });
+    expect(await check({ repositories: [record(a, AB), record(b, AB)] })).toEqual<FreshnessResult>({ status: "fresh" });
   });
 });
 
-describe("checkFreshness: rootOverrides and purity", () => {
-  // why: an envelope records the root of the machine that produced it; on another machine the viewer
-  //   passes the local root. The override replaces the recorded root.
-  // proves: CLAIM(MC13)
-  it("[MC13] rootOverrides replaces the recorded root: a missing recorded root becomes fresh via the override", async () => {
+describe("checkFreshness: only operator-registered roots are read (S1)", () => {
+  // why: S1. An envelope is agent-submitted; the root it records must never authorise a filesystem read. The
+  //   repository below exists on disk with the recorded bytes, the envelope names its real path as `root`,
+  //   but the operator registered nothing: the answer is `unverified` with a machine-readable code and a
+  //   reason, not fresh. Control: the same envelope with the operator's registration is fresh.
+  // proves: CLAIM(freshness-registered-roots) CLAIM(MC13) CLAIM(MC15)
+  it("[S1] an envelope root that exists and matches is still unverified without a registration; registering it makes it fresh", async () => {
     const repo = gitRepo("A");
-    const recorded: Freshness = { repositories: [{ id: "A", root: "/definitely/not/here", gitRev: repo.gitRev, dirty: false, files: AB }] };
-    expect(await checkFreshness(recorded)).toEqual<FreshnessResult>({ status: "unknown", inaccessibleRoots: ["/definitely/not/here"] });
-    expect(await checkFreshness(recorded, { A: repo.root })).toEqual<FreshnessResult>({ status: "fresh" });
+    registered = []; // the operator never registered it
+    const submitted: Freshness = { repositories: [{ id: "A", root: repo.root, gitRev: repo.gitRev, dirty: false, files: AB }] };
+    const result = await check(submitted);
+    expect(result).toEqual<FreshnessResult>({
+      status: "unverified",
+      unverified: [{ repository: "A", code: "REPOSITORY_NOT_REGISTERED", reason: expect.stringMatching(/\S/) }],
+    });
+    if (result.status === "unverified") expect(result.unverified[0]?.reason).toContain("A");
+    expect(await checkFreshness(submitted, [{ id: "A", root: repo.root }])).toEqual<FreshnessResult>({ status: "fresh" });
   });
 
-  // why: the override wins even when the recorded root exists with different bytes; otherwise the stale
-  //   recorded directory would be silently used.
-  // proves: CLAIM(MC13)
-  it("[MC13] the override wins over an existing recorded root", async () => {
-    const stale = plainDir("old", { "src/a.txt": "something else\n", "src/b.txt": "world\n" });
-    const good = plainDir("new");
-    const recorded: Freshness = { repositories: [{ id: "A", root: stale.root, gitRev: null, dirty: false, files: AB }] };
-    expect((await checkFreshness(recorded)).status).toBe("stale");
-    expect(await checkFreshness(recorded, { A: good.root })).toEqual<FreshnessResult>({ status: "fresh" });
+  // why: S1 "a submitted root cannot read or probe files". If the result differed between a submitted root that
+  //   holds the file with the recorded hash, one holding different bytes, one missing the file and one that
+  //   does not exist, a hostile envelope could use freshness as an oracle for local files. All four must be
+  //   the SAME result (apart from the repository id they name), and none may be `stale`, `fresh` or `unknown`.
+  // proves: CLAIM(freshness-registered-roots) CLAIM(MC15)
+  it("[S1] a submitted root cannot be probed: matching, differing, missing-file and absent roots all give the identical unverified result", async () => {
+    const base = tmp("fresh");
+    const matching = join(base, "matching");
+    const differing = join(base, "differing");
+    const missingFile = join(base, "missing-file");
+    mkdirSync(matching); mkdirSync(differing); mkdirSync(missingFile);
+    writeFileSync(join(matching, "secret.txt"), "TOP-SECRET-7f3a91\n");
+    writeFileSync(join(differing, "secret.txt"), "something else\n");
+    const roots = [matching, differing, missingFile, join(base, "absent"), "/etc"];
+    const results = [];
+    for (const root of roots) {
+      results.push(await checkFreshness({ repositories: [{ id: "A", root, gitRev: null, dirty: false, files: { "secret.txt": SECRET } }] }, []));
+    }
+    for (const result of results) {
+      expect(result).toEqual<FreshnessResult>({
+        status: "unverified",
+        unverified: [{ repository: "A", code: "REPOSITORY_NOT_REGISTERED", reason: expect.stringMatching(/\S/) }],
+      });
+    }
+    expect(new Set(results.map((result) => JSON.stringify(result))).size, "one distinct result for every kind of submitted root").toBe(1);
+    expect(JSON.stringify(results), "the submitted root string is not echoed back").not.toContain("TOP-SECRET");
+    for (const root of roots) expect(JSON.stringify(results)).not.toContain(root);
   });
 
-  // why: an inaccessible OVERRIDE is reported as the root that was tried (the override path).
+  // why: the registration, not the envelope, names the root: the registered root has the bytes while the
+  //   recorded root is elsewhere (a different machine's path); a registered root with different bytes is
+  //   stale even if the recorded root would have matched.
   // proves: CLAIM(MC13)
-  it("[MC13] an inaccessible override is the root listed as inaccessible", async () => {
-    const repo = gitRepo("A");
-    const missing = join(tmp("fresh"), "missing");
-    const result = await checkFreshness({ repositories: [record(repo, AB)] }, { A: missing });
-    expect(result).toEqual<FreshnessResult>({ status: "unknown", inaccessibleRoots: [missing] });
+  it("[S1] the registered root wins over the recorded root, in both directions", async () => {
+    const good = plainDir("good");
+    const decoy = join(tmp("fresh"), "decoy");
+    mkdirSync(decoy);
+    writeFiles(decoy, { "src/a.txt": "decoy\n", "src/b.txt": "world\n" });
+    const recorded: Freshness = { repositories: [{ id: "good", root: decoy, gitRev: null, dirty: false, files: AB }] };
+    expect(await check(recorded)).toEqual<FreshnessResult>({ status: "fresh" });
+    const other = plainDir("other", { "src/a.txt": "changed\n", "src/b.txt": "world\n" });
+    const recordedOther: Freshness = { repositories: [{ id: "other", root: good.root, gitRev: null, dirty: false, files: AB }] };
+    expect(await check(recordedOther)).toEqual<FreshnessResult>({
+      status: "stale",
+      changedPaths: [{ repository: "other", path: "src/a.txt", recordedSha256: HELLO, currentSha256: CHANGED }],
+      inaccessibleRoots: [],
+    });
+    expect(other.root).not.toBe(good.root);
+  });
+
+  // why: an inaccessible REGISTERED root is reported as the root that was tried (the registered path), and
+  //   a repository the operator did not register is listed under `unverified` beside a stale one: nothing is lost.
+  // proves: CLAIM(MC13)
+  it("[S1] mixed registry: registered-and-stale beside unregistered keeps both facts; unknown beats unverified", async () => {
+    const a = gitRepo("A");
+    const b = plainDir("B");
+    writeFileSync(join(a.root, "src/a.txt"), "hello!\n");
+    const stale = await check({ repositories: [record(a, AB), { id: "C", root: "/anywhere", gitRev: null, dirty: false, files: AB }] });
+    expect(stale).toEqual<FreshnessResult>({
+      status: "stale",
+      changedPaths: [{ repository: "A", path: "src/a.txt", recordedSha256: HELLO, currentSha256: HELLO_BANG }],
+      inaccessibleRoots: [],
+      unverified: [{ repository: "C", code: "REPOSITORY_NOT_REGISTERED", reason: expect.stringMatching(/\S/) }],
+    });
+    rmSync(b.root, { recursive: true, force: true });
+    const unknown = await check({ repositories: [record(b, AB), { id: "C", root: "/anywhere", gitRev: null, dirty: false, files: AB }] });
+    expect(unknown).toEqual<FreshnessResult>({
+      status: "unknown",
+      inaccessibleRoots: [b.root],
+      unverified: [{ repository: "C", code: "REPOSITORY_NOT_REGISTERED", reason: expect.stringMatching(/\S/) }],
+    });
+  });
+
+  // why: fresh is a positive claim ("every recorded file was checked"); a registered repository fresh beside an
+  //   unregistered one must therefore not be reported fresh.
+  // proves: CLAIM(MC13)
+  it("[S1] one repository fresh and another unregistered is unverified, not fresh", async () => {
+    const a = gitRepo("A");
+    expect(await check({ repositories: [record(a, AB), { id: "Z", root: "/z", gitRev: null, dirty: false, files: {} }] })).toEqual<FreshnessResult>({
+      status: "unverified",
+      unverified: [{ repository: "Z", code: "REPOSITORY_NOT_REGISTERED", reason: expect.stringMatching(/\S/) }],
+    });
   });
 
   // why: checking must not modify its input: the stored envelope is immutable history (design 4).
   // proves: CLAIM(MC13)
-  it("[MC13] the freshness argument is never mutated (deep-equal before and after, stale and fresh)", async () => {
+  it("[MC13] the freshness argument and the registry are never mutated (deep-equal before and after, stale and fresh)", async () => {
     const repo = gitRepo("A");
     const input: Freshness = { repositories: [record(repo, { ...AB })] };
     const before = structuredClone(input);
-    await checkFreshness(input);
+    const registryBefore = structuredClone(registered);
+    await check(input);
     expect(input).toEqual(before);
     writeFileSync(join(repo.root, "src/a.txt"), "hello!\n");
-    expect((await checkFreshness(input)).status).toBe("stale");
+    expect((await check(input)).status).toBe("stale");
     expect(input).toEqual(before);
+    expect(registered).toEqual(registryBefore);
   });
 });
 
@@ -327,7 +416,8 @@ describe("checkFreshness: never reads outside the root", () => {
     const root = join(base, "repo");
     mkdirSync(root);
     writeFileSync(join(base, "secret.txt"), "TOP-SECRET-7f3a91\n");
-    const result = await checkFreshness({ repositories: [{ id: "A", root, gitRev: null, dirty: false, files: { "../secret.txt": SECRET } }] });
+    registered.push({ id: "A", root });
+    const result = await check({ repositories: [{ id: "A", root, gitRev: null, dirty: false, files: { "../secret.txt": SECRET } }] });
     expect(result).toEqual<FreshnessResult>({
       status: "stale",
       changedPaths: [{ repository: "A", path: "../secret.txt", recordedSha256: SECRET, currentSha256: null }],
@@ -343,7 +433,8 @@ describe("checkFreshness: never reads outside the root", () => {
     mkdirSync(root);
     writeFileSync(join(base, "secret.txt"), "TOP-SECRET-7f3a91\n");
     symlinkSync("../secret.txt", join(root, "leak.txt"));
-    const result = await checkFreshness({ repositories: [{ id: "A", root, gitRev: null, dirty: false, files: { "leak.txt": SECRET } }] });
+    registered.push({ id: "A", root });
+    const result = await check({ repositories: [{ id: "A", root, gitRev: null, dirty: false, files: { "leak.txt": SECRET } }] });
     expect(result).toEqual<FreshnessResult>({
       status: "stale",
       changedPaths: [{ repository: "A", path: "leak.txt", recordedSha256: SECRET, currentSha256: null }],
@@ -356,6 +447,6 @@ describe("checkFreshness: never reads outside the root", () => {
   it("[MC13] a symlink inside the root to an inside file is hashed (positive control)", async () => {
     const dir = plainDir("P");
     symlinkSync("src/a.txt", join(dir.root, "alias.txt"));
-    expect(await checkFreshness({ repositories: [record(dir, { "alias.txt": HELLO })] })).toEqual<FreshnessResult>({ status: "fresh" });
+    expect(await check({ repositories: [record(dir, { "alias.txt": HELLO })] })).toEqual<FreshnessResult>({ status: "fresh" });
   });
 });
