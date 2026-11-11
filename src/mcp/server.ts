@@ -48,9 +48,24 @@ export function toolDescriptors(): Array<{ name: string; description: string; in
   });
 }
 
+/**
+ * Shown to the model by MCP clients (the initialize result's `instructions`): the workflow and the paging rule are the two things a tool list cannot
+ * say. Every snake_case name here must be an advertised tool (instructions.test.ts).
+ */
+export const INSTRUCTIONS = [
+  "paneweft turns facts you give it into validated, immutable view snapshots and answers in bounded text.",
+  "Workflow: list_components (pick the component that answers your question), describe_component (its schema, limits and a valid example to copy),",
+  "validate (stores nothing; fix each error at its JSON pointer using its hint), render (validates and stores; a stored view never changes, so changed",
+  "content needs a new snapshotId), then inspect_view, open_entity, navigate and search to read it back. notebook_create, notebook_get and notebook_update",
+  "keep an investigation page: pass the revision you read as expectedRevision.",
+  "Every reply fits maxBytes (default 8192, between 2048 and 32768) and opens with a header saying what is complete, fresh and left out.",
+  "When a reply ends with a cursor, repeat the SAME request with that cursor to get the next page; a different request needs a new cursor-free call.",
+  "Freshness stays unverified until the session owner registers the repository root; no tool runs code or reads outside registered roots.",
+].join(" ");
+
 /** Serves until stdin closes (the client went away), then returns. */
-export async function runMcpStdio(_sessionDir: string | null, session: Session | null): Promise<void> {
-  const server = new Server({ name: "paneweft", version: "0.0.0" }, { capabilities: { tools: {} } });
+export async function runMcpStdio(session: Session | null): Promise<void> {
+  const server = new Server({ name: "paneweft", version: "0.0.0" }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });
   const tools = toolDescriptors();
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
   server.setRequestHandler(CallToolRequestSchema, async (request) => {

@@ -347,7 +347,7 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
       if (word === "serve") return await serveCommand(parsed, session, io);
       if (word === "mcp") {
         const { runMcpStdio } = await import("../mcp/server.ts");
-        await runMcpStdio(dir === undefined || dir === "" ? null : resolve(io.cwd, dir), session);
+        await runMcpStdio(session);
         return 0;
       }
       return print(io, await executeOperation(session, command.tool as ToolName, args));

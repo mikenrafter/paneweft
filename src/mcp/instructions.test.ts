@@ -17,7 +17,7 @@ describe("mcp: instructions (T11)", () => {
     try {
       const text = mcp.instructions();
       expect(text, "no instructions in the initialize result").toBeTypeOf("string");
-      const at = (word: string) => (text as string).indexOf(word);
+      const at = (word: string) => (text as string).search(new RegExp(`\\b${word}\\b`)); // whole word: "validated" is not the validate tool
       const workflow = ["list_components", "describe_component", "validate", "render", "inspect_view"];
       workflow.forEach((word, position) => {
         expect(at(word), `${word} is not mentioned`).toBeGreaterThanOrEqual(0);
