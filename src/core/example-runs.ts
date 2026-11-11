@@ -8,7 +8,8 @@
 //   [example.recorded-runs.test.ts, review S8].
 // CLAIM(derived-valid): the merged envelope is itself a valid `paneweft.view/1` (validateSubmission), because runs are merged one at a time and a run
 //   that would break validity is left out and named in `notice`, never merged half-way. Item ids share one namespace per view, so a recorded id that
-//   collides is made unique as `<runId>/<id>`; a recorded source that collides with a different source is renamed `<runId>:<id>`.
+//   collides is made unique as `<runId>/<id>`; a recorded source that collides with a different source is renamed `<runId>:<id>`. Every reference the run
+//   carries (evidence and basis) follows those renamings [example-runs.references.test.ts, review round 2 S11].
 // Errors: a read failure of the stored view is returned as is; a failure to read a recorded output degrades to the plain envelope plus a notice.
 // Mating parts: summaries.ts (RecordedRuns), viewer/session-source.ts (ViewModel.recordedRuns), operations.ts loadView.
 import type { Envelope, Source } from "./wire.ts";
@@ -45,43 +46,67 @@ export function deriveExampleEnvelope(envelope: Envelope, outputs: Array<{ conte
   };
 }
 
-/** `envelope` with one recorded run appended (ids and sources made unique, evidence rewritten to match). Not validated here. */
+/**
+ * `envelope` with one recorded run appended. Not validated here.
+ * Two phases, so that no reference can be rewritten against a half-built mapping (review round 2, S11):
+ *   1. ALLOCATE: the new id of every item the run owns (its own id and its assertions') and the final id of every source it cites (declared into the view
+ *      when new, renamed when the view already has a different source of that id);
+ *   2. REWRITE: every reference the run carries, through those mappings: `evidence` (source ids) and `basis` (ids of the run's own items, else of sources).
+ * A run output is validated on its own, so a basis id can only mean one of the run's own items (which wins over a source of the same id) or a source;
+ * ids that name neither are left as they are for the validator to report. The run's other members hold no ids of this view (`result` names an entity).
+ */
 function withRun(envelope: Envelope, output: Json, contentHash: string): { envelope: Envelope; runItemId: string } {
   const runId = output.run.runId as string;
-  const used = new Set(viewItems(envelope).map((item) => item.id));
-  const unique = (id: string): string => {
-    let candidate = used.has(id) ? `${runId}/${id}` : id;
-    for (let counter = 2; used.has(candidate); counter += 1) candidate = `${runId}/${id}#${counter}`;
-    used.add(candidate);
-    return candidate;
-  };
-  // sources the run's evidence cites: its own, those of the output's bundle views, and the view's (already present)
+  const run = structuredClone(output.run) as Json;
+  const owned: Json[] = [run, ...(run.assertions ?? [])];
+
+  // 1a. item ids: one namespace per view
+  const taken = new Set(viewItems(envelope).map((item) => item.id));
+  const itemIds = new Map<string, string>();
+  for (const item of owned) {
+    if (itemIds.has(item.id)) continue;
+    let candidate = taken.has(item.id) ? `${runId}/${item.id}` : item.id;
+    for (let counter = 2; taken.has(candidate); counter += 1) candidate = `${runId}/${item.id}#${counter}`;
+    taken.add(candidate);
+    itemIds.set(item.id, candidate);
+  }
+
+  // 1b. sources: every id cited by evidence, or by a basis that is not one of the run's own items, in citation order
   const offered = new Map<string, Source>();
   for (const source of [...((output.sources as Source[] | undefined) ?? []), ...(((output.bundle?.views as Json[] | undefined) ?? []).flatMap((view) => (view.sources as Source[]) ?? []))]) offered.set(source.id, source);
+  const cited = new Set<string>();
+  for (const item of owned) {
+    for (const id of (item.evidence as string[] | undefined) ?? []) cited.add(id);
+    for (const id of (item.basis as string[] | undefined) ?? []) if (!itemIds.has(id)) cited.add(id);
+  }
   const sources = [...envelope.sources];
-  const renamed = new Map<string, string>();
-  const evidenceOf = (ids: string[]): string[] => ids.map((id) => {
-    const known = renamed.get(id);
-    if (known !== undefined) return known;
+  const sourceIds = new Map<string, string>();
+  for (const id of cited) {
     const existing = sources.find((source) => source.id === id);
     const wanted = offered.get(id);
     if (existing === undefined) {
       if (wanted !== undefined) sources.push(wanted);
-      return id;
+      sourceIds.set(id, id);
+    } else if (wanted === undefined || canonicalJson(existing) === canonicalJson(wanted)) {
+      sourceIds.set(id, id);
+    } else {
+      let fresh = `${runId}:${id}`;
+      for (let counter = 2; sources.some((source) => source.id === fresh); counter += 1) fresh = `${runId}:${id}#${counter}`;
+      sources.push({ ...wanted, id: fresh });
+      sourceIds.set(id, fresh);
     }
-    if (wanted === undefined || canonicalJson(existing) === canonicalJson(wanted)) return id;
-    const fresh = `${runId}:${id}`;
-    renamed.set(id, fresh);
-    sources.push({ ...wanted, id: fresh });
-    return fresh;
-  });
-  const run = structuredClone(output.run) as Json;
-  const runItemId = unique(run.id);
-  run.id = runItemId;
-  run.evidence = evidenceOf(run.evidence ?? []);
-  run.assertions = (run.assertions ?? []).map((assertion: Json) => ({ ...assertion, id: unique(assertion.id), evidence: evidenceOf(assertion.evidence ?? []) }));
+  }
+
+  // 2. rewrite
+  const rewrite = (item: Json): void => {
+    item.id = itemIds.get(item.id) as string;
+    item.evidence = ((item.evidence as string[] | undefined) ?? []).map((id) => sourceIds.get(id) ?? id);
+    if (item.basis !== undefined) item.basis = (item.basis as string[]).map((id) => itemIds.get(id) ?? sourceIds.get(id) ?? id);
+  };
+  const originalIds = owned.map((item) => item.id as string);
+  for (const item of owned) rewrite(item);
   const data = envelope.data as Json;
-  return { envelope: { ...envelope, sources, data: { ...data, runs: [...data.runs, run] } } as Envelope, runItemId };
+  return { envelope: { ...envelope, sources, data: { ...data, runs: [...data.runs, run] } } as Envelope, runItemId: itemIds.get(originalIds[0] as string) as string };
 }
 
 /** The stored view of `key`, and for an example view its effective envelope (see the header). Other components pass through untouched. */
