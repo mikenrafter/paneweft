@@ -13,7 +13,7 @@ import { LAYOUT_VERSION } from "../core/layout.ts";
 import type { RankOutput, RankedView } from "../core/registry.ts";
 import { completenessLine, freshnessLine, summariseView, type RecordedRuns, type ViewFilter, type ViewSummary } from "../core/summaries.ts";
 import { compareCodeUnits } from "../core/canonical.ts";
-import { HAS_EMPTY_STATE, newPaneUi, renderComponent, renderOpenedSource, type ComponentContext, type PaneUi } from "./components.ts";
+import { HAS_EMPTY_STATE, newPaneUi, renderComponent, renderOpenedSource, renderSourceDetail, type ComponentContext, type PaneUi } from "./components.ts";
 import { append, h, type Child } from "./dom.ts";
 import type { ViewerSource, ViewModel } from "./source.ts";
 
@@ -263,6 +263,7 @@ export async function mountViewer(container: HTMLElement, options: MountOptions)
     const parts: Child[] = [];
     const panelChildren: Child[] = [];
     let opened: HTMLElement | null = null;
+    let detail: HTMLElement | null = null;
     const model = pane.viewDefinitionId.startsWith("builtin:") ? undefined : viewOf(pane.entity, pane.snapshotId, pane.viewDefinitionId);
     if (pane.viewDefinitionId.startsWith("builtin:")) {
       panelChildren.push(builtinPanel(pane.viewDefinitionId, entity));
@@ -287,6 +288,7 @@ export async function mountViewer(container: HTMLElement, options: MountOptions)
       else panelChildren.push(renderComponent(context));
       const resolved = ui.opened !== null && ui.opened.result.ok ? ui.opened.result.value : null;
       if (view.envelope.component !== "source" && resolved !== null && resolved.status === "resolved") opened = renderOpenedSource(context, resolved, ui.opened?.lines);
+      if (ui.sourceDetail !== null) detail = renderSourceDetail(context, ui.sourceDetail);
     }
     const panel = h(doc, "div", { "data-pw": "tabpanel", id: panelId, role: "tabpanel", "aria-labelledby": tabs.length > 0 ? tabId(selectedAt) : undefined }, ...panelChildren);
 
@@ -295,7 +297,7 @@ export async function mountViewer(container: HTMLElement, options: MountOptions)
       "data-pinned": String(pane.pinned), hidden: narrow && index !== (activePane ?? state.trail.length - 1) ? "" : undefined,
     },
     h(doc, "button", { type: "button", "data-pw": "pin", "aria-pressed": String(pane.pinned) }, "Pin"),
-    tablist, needs, ...parts, panel, opened);
+    tablist, needs, ...parts, panel, detail, opened);
   }
 
   function embedModels(envelope: Envelope): Map<string, ViewModel | null> {
@@ -411,6 +413,31 @@ export async function mountViewer(container: HTMLElement, options: MountOptions)
     render();
   }
 
+  /** Review S9: opens the example a notebook block names (a view id, else a scenario id) in the next pane, in the snapshot the notebook's links name. */
+  async function followExample(index: number, blockId: string, exampleId: string): Promise<void> {
+    const pane = state.trail[index];
+    if (pane === undefined) return;
+    const ui = uiOf(index);
+    const holder = currentModel(index);
+    const snapshotId = holder === undefined ? pane.snapshotId : referencedSnapshot(holder.envelope, exampleId);
+    const found = await source.findExample(exampleId, snapshotId);
+    if (!found.ok) {
+      ui.notes.set(blockId, `no example: "${exampleId}" cannot be opened (${found.error.code})`);
+      render();
+      return;
+    }
+    ui.notes.delete(blockId);
+    const { entity, viewDefinitionId } = found.value.envelope;
+    await ensureEntity(entity, snapshotId);
+    await ensureView(entity, snapshotId, viewDefinitionId);
+    lastError = null;
+    const outcome = reduceInspector(state, { type: "open", entity, snapshotId, viewDefinitionId }, world);
+    if (outcome.notice !== undefined) lastError = { code: outcome.notice.code, message: outcome.notice.message };
+    else commit(outcome.state);
+    await loadAll();
+    render();
+  }
+
   async function moveBlock(index: number, blockId: string, direction: "up" | "down"): Promise<void> {
     const pane = state.trail[index];
     const model = currentModel(index);
@@ -444,7 +471,7 @@ export async function mountViewer(container: HTMLElement, options: MountOptions)
   }
 
   /** The control a click or Enter/Space on `target` means, or null. */
-  const ACTIVATABLE = new Set(["crumb", "pin", "tab", "toggle", "actions-button", "menu-item", "annotation", "evidence-link", "result-link", "block-move", "no-target", "row", "node", "field", "graph-node"]);
+  const ACTIVATABLE = new Set(["crumb", "pin", "tab", "toggle", "actions-button", "menu-item", "annotation", "evidence-link", "example-link", "result-link", "block-move", "no-target", "row", "node", "field", "graph-node"]);
   function controlOf(target: EventTarget | null): HTMLElement | null {
     let element = target instanceof win.Element ? (target as HTMLElement) : null;
     while (element !== null && element !== container) {
@@ -502,7 +529,20 @@ export async function mountViewer(container: HTMLElement, options: MountOptions)
         if (viewId !== null) {
           const blockId = control.closest('[data-pw="block"]')?.getAttribute("data-id") ?? "";
           void enqueue(() => followLink(index, blockId, viewId, control.getAttribute("data-id") as string));
+          return;
         }
+        const sourceId = control.getAttribute("data-source");
+        if (sourceId !== null) {
+          // review S9: show (or hide) what the view declares about this source
+          ui.sourceDetail = ui.sourceDetail === sourceId ? null : sourceId;
+          pendingFocus = { pane: String(index), selector: `[data-pw="evidence-link"][data-source=${JSON.stringify(sourceId)}]${control.hasAttribute("data-kind") ? `[data-kind=${JSON.stringify(control.getAttribute("data-kind"))}]` : ""}` };
+          render();
+        }
+        return;
+      }
+      case "example-link": {
+        const blockId = control.getAttribute("data-item") ?? "";
+        void enqueue(() => followExample(index, blockId, control.getAttribute("data-example-id") as string));
         return;
       }
       case "result-link":

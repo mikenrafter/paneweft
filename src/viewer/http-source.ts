@@ -1,12 +1,13 @@
 // ViewerSource over the viewer server's HTTP API, for the browser bundle. Nothing here imports a Node module.
 import type { Entity, EntityRef } from "../core/wire.ts";
 import { err, ok, type OperationError, type Result } from "../core/errors.ts";
+import { viewItems } from "../core/items.ts";
 import type { SourceOpening } from "../core/links.ts";
 import type { NotebookPage, ViewKey } from "../core/session.ts";
 import type { RankOutput } from "../core/registry.ts";
 import type { SearchHit, ViewerSource, ViewModel } from "./source.ts";
 
-interface IndexBody { views: Array<{ viewId: string; snapshotId: string; viewDefinitionId: string; entity: EntityRef }> }
+interface IndexBody { views: Array<{ viewId: string; snapshotId: string; component: string; viewDefinitionId: string; entity: EntityRef }> }
 interface SourceBody {
   currency: "current" | "stale" | "unknown";
   numberedLines: Array<{ n: number; text: string }>;
@@ -68,6 +69,15 @@ export function createHttpSource(baseUrl: string, token: string, fetchImpl: type
       return call<ViewModel>(`/api/view?${viewQuery(match)}`);
     },
     getView: (key) => call<ViewModel>(`/api/view?${viewQuery(key)}`),
+    async findExample(exampleId, snapshotId) {
+      const index = await call<IndexBody>("/api/index");
+      if (!index.ok) return index;
+      for (const view of index.value.views.filter((candidate) => candidate.snapshotId === snapshotId && candidate.component === "example")) {
+        const model = await call<ViewModel>(`/api/view?${viewQuery(view)}`);
+        if (model.ok && (view.viewId === exampleId || viewItems(model.value.envelope).some((item) => item.id === exampleId))) return model;
+      }
+      return err("NOT_FOUND", `no example "${exampleId}" in snapshot "${snapshotId}"`);
+    },
     async openItemSource(key, itemId): Promise<Result<SourceOpening>> {
       const read = await call<SourceBody>(`/api/source?${viewQuery(key)}&itemId=${encodeURIComponent(itemId)}`);
       if (!read.ok) {

@@ -302,7 +302,10 @@ describe("[MC8] cross-view links", () => {
     ]);
     await click(v, links[1]!);
     expect(v.handle.state().trail.map((p) => p.viewDefinitionId), "a source-id link does not navigate").toEqual(["d-notebook"]);
-    await click(v, links[2]!);
+    // since review S9 a source-id link shows its source detail, which re-renders the pane: the next link is looked up again (the old node is detached)
+    const afterDetail = qa(byId(v.container, "block", "b-c2"), "evidence-link");
+    expect(afterDetail[2]?.getAttribute("data-view-id")).toBe("v-list");
+    await click(v, afterDetail[2]!);
     expect(v.handle.state().trail.map((p) => [p.entity.id, p.snapshotId, p.viewDefinitionId, p.selection])).toEqual([["subject", "snap-1", "d-list", ["r2"]]]);
     expect(byId(paneAt(v, 0), "row", "r2").getAttribute("aria-selected")).toBe("true");
   });

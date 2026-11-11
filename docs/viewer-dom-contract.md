@@ -114,3 +114,15 @@ target.
 `{expectedRevision, blocks}`). `notebook-revision` (`data-revision`, text `revision N`) shows the revision the page was read at and
 becomes N+1 after a successful write; a `CONFLICT` answer shows an `error` element (`data-code="CONFLICT"`) and leaves the page and
 its revision unchanged. Editing prose is later work; only reordering is pinned.
+
+## Review round 1 additions (S8, S9)
+
+* `evidence-link` with `data-source` is a toggle: activating it (click, Enter or Space) shows `source-detail` (`data-source`, `role="region"`,
+  `aria-label` `Source <id>`) after the pane's panel, holding one `source-field` per member of the declared source (`data-name`, `data-value`, text
+  `name: value`, names sorted). The activated control carries `aria-expanded="true"` while its detail is shown (the attribute is absent otherwise).
+  Activating it again closes the detail; activating another source replaces it. Evidence links inside the graph SVG answer to the mouse only.
+* A notebook `example` block shows an `example-link` button (`data-item` block id, `data-example-id`) instead of plain text. Activating it opens
+  the example view its `exampleId` names (a view id, else a scenario id) in the snapshot the notebook's `links` name; like a view link it replaces the
+  trail with the example's entity. A name that cannot be resolved puts a note on the block and creates no pane.
+* An example `run` carries `data-origin` (`envelope` or `recorded`). Recorded runs (`example_record`, `example run`) are listed with their assertions
+  beside the envelope's own; `not-run` appears only when there are none.

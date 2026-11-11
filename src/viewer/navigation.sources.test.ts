@@ -81,12 +81,12 @@ describe("[S9] a notebook example block opens the example it names", () => {
     expect(page.text(link)).toContain("once");
   });
 
-  it.each([["click", ""], ["Enter", "Enter"], ["Space", " "]])("%s on the link opens the example's entity in a second pane, showing the scenario and its rerun instruction", async (_name, key) => {
+  it.each([["click", ""], ["Enter", "Enter"], ["Space", " "]])("%s on the link opens the example's entity (as a view link does: the new pane replaces the trail), showing the scenario and its rerun instruction", async (_name, key) => {
     const page = await notebookPage();
     const link = page.pw("example-link")[0] as HTMLElement;
     if (key === "") link.click(); else page.key(link, key);
-    await page.settled(() => expect(page.pw("pane").map((pane) => pane.getAttribute("data-entity-id"))).toEqual(["s9-notes", "watch"]));
-    const opened = page.pw("pane")[1] as HTMLElement;
+    await page.settled(() => expect(page.pw("pane").map((pane) => pane.getAttribute("data-entity-id"))).toEqual(["watch"]));
+    const opened = page.pw("pane")[0] as HTMLElement;
     expect(opened.getAttribute("data-snapshot-id")).toBe("snap-1");
     await page.settled(() => expect(opened.querySelector('[data-pw="example"]')).not.toBeNull());
     expect(page.text(opened.querySelector('[data-pw="scenario"]'))).toContain("vigil-one-write");

@@ -29,6 +29,8 @@ export interface ViewerSource {
   /** The view instance of `definitionId` for the entity at the snapshot. */
   getViewFor(entity: EntityRef, snapshotId: string, definitionId: string): Promise<Result<ViewModel>>;
   getView(key: ViewKey): Promise<Result<ViewModel>>;
+  /** The example view a notebook example block names in `snapshotId`: the example view with that id, else the one whose item (its scenario) has that id. NOT_FOUND when none. */
+  findExample(exampleId: string, snapshotId: string): Promise<Result<ViewModel>>;
   openItemSource(key: ViewKey, itemId: string): Promise<Result<SourceOpening>>;
   search(query: string, scope?: { entity: EntityRef; snapshotId: string }): Promise<Result<SearchHit[]>>;
   /** `snapshotId` names the page's snapshot; it may be omitted only while one snapshot holds the pageId. The viewer always sends it. */

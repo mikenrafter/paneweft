@@ -25,12 +25,14 @@ export interface PaneUi {
   /** Id of the item whose actions menu is open. */
   menu: string | null;
   opened: SourceView | null;
+  /** Id of the declared source whose detail is shown (an evidence control with data-source was activated); null = none. */
+  sourceDetail: string | null;
   highlight: [number, number] | null;
   notes: Map<string, string>;
   error: { code: string; message: string } | null;
 }
 export const newPaneUi = (): PaneUi => ({
-  filterText: "", claimStatus: "all", hiddenRelations: new Set(), expanded: new Map(), roving: null, menu: null, opened: null, highlight: null, notes: new Map(), error: null,
+  filterText: "", claimStatus: "all", hiddenRelations: new Set(), expanded: new Map(), roving: null, menu: null, opened: null, sourceDetail: null, highlight: null, notes: new Map(), error: null,
 });
 
 export interface ComponentContext {
@@ -67,9 +69,10 @@ function badge(ctx: ComponentContext, item: Item, inSvg: boolean, at?: { x: numb
   const out: Child[] = [make({ "data-pw": "provenance-badge", "data-provenance": item.provenance, ...where(8, 34) }, item.provenance)];
   if (item.provenance === "inferred" && typeof item.reason === "string") out.push(make({ "data-pw": "inferred-reason", ...where(8, 46) }, item.reason));
   item.evidence.forEach((source, index) => {
+    const open = ctx.ui.sourceDetail === source ? { "aria-expanded": "true" } : {}; // present only while the detail is shown: the goldens pin aria-expanded on every other control
     out.push(inSvg
-      ? svg(ctx.doc, "text", { "data-pw": "evidence-link", "data-source": source, "font-size": 10, ...where(60 + index * 30, 34) }, source)
-      : h(ctx.doc, "button", { type: "button", "data-pw": "evidence-link", "data-source": source }, source));
+      ? svg(ctx.doc, "text", { "data-pw": "evidence-link", "data-source": source, "font-size": 10, ...open, ...where(60 + index * 30, 34) }, source)
+      : h(ctx.doc, "button", { type: "button", "data-pw": "evidence-link", "data-source": source, ...open }, source));
   });
   return out;
 }
@@ -342,6 +345,18 @@ function renderSource(ctx: ComponentContext): HTMLElement {
       ...badge(ctx, annotation, false))));
 }
 
+/** Review S9: what the view declares about one source (every member of the source object, sorted by name), shown when an evidence control is activated. */
+export function renderSourceDetail(ctx: ComponentContext, sourceId: string): HTMLElement {
+  const declared = ctx.envelope.sources.find((candidate) => candidate.id === sourceId) as Record<string, unknown> | undefined;
+  if (declared === undefined) {
+    return h(ctx.doc, "div", { "data-pw": "source-detail", "data-source": sourceId, role: "region", "aria-label": `Source ${sourceId}` }, `source ${sourceId} is not declared by this view`);
+  }
+  const show = (value: unknown): string => (typeof value === "string" ? value : JSON.stringify(value));
+  return h(ctx.doc, "div", { "data-pw": "source-detail", "data-source": sourceId, role: "region", "aria-label": `Source ${sourceId}` },
+    ...Object.keys(declared).sort(compareCodeUnits).map((name) =>
+      h(ctx.doc, "div", { "data-pw": "source-field", "data-name": name, "data-value": show(declared[name]) }, `${name}: ${show(declared[name])}`)));
+}
+
 /** E3: the stored excerpt of a followed source link, shown as the last child of a non-source pane. */
 export function renderOpenedSource(ctx: ComponentContext, opening: SourceOpening & { status: "resolved" }, lines?: Array<{ n: number; text: string }>): HTMLElement {
   return h(ctx.doc, "div", { "data-pw": "source", role: "region", "aria-label": `Source ${opening.path}` },
@@ -363,7 +378,7 @@ function renderNotebook(ctx: ComponentContext): HTMLElement {
   statusSelect.value = ctx.ui.claimStatus;
 
   const link = (kind: "supports" | "contradicts", target: unknown): HTMLElement => typeof target === "string"
-    ? h(ctx.doc, "button", { type: "button", "data-pw": "evidence-link", "data-kind": kind, "data-source": target }, target)
+    ? h(ctx.doc, "button", { type: "button", "data-pw": "evidence-link", "data-kind": kind, "data-source": target, ...(ctx.ui.sourceDetail === target ? { "aria-expanded": "true" } : {}) }, target)
     : h(ctx.doc, "button", { type: "button", "data-pw": "evidence-link", "data-kind": kind, "data-view-id": (target as { viewId: string }).viewId, "data-id": (target as { itemId: string }).itemId },
       `${(target as { viewId: string }).viewId}#${(target as { itemId: string }).itemId}`);
 
@@ -388,6 +403,9 @@ function renderNotebook(ctx: ComponentContext): HTMLElement {
       parts.push(h(ctx.doc, "div", { "data-pw": "embedded-view", "data-view-id": viewId }, ...inner));
     } else if (kind === "claim") {
       parts.push(h(ctx.doc, "span", {}, String(block.statement)), h(ctx.doc, "span", { "data-pw": "claim-status", "data-status": String(block.status) }, String(block.status)));
+    } else if (ctx.interactive) {
+      // review S9: an example block opens the example it names (a view id or a scenario id)
+      parts.push(h(ctx.doc, "button", { type: "button", "data-pw": "example-link", "data-item": block.id, "data-example-id": String(block.exampleId) }, `example: ${String(block.exampleId)}`));
     } else {
       parts.push(h(ctx.doc, "span", {}, `example: ${String(block.exampleId)}`));
     }

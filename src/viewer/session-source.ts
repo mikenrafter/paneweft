@@ -5,6 +5,7 @@ import { checkFreshness } from "../core/freshness.ts";
 import { readEffectiveView } from "../core/example-runs.ts";
 import { resolveItemSource } from "../core/links.ts";
 import { rankViews, type RankOutput } from "../core/registry.ts";
+import { viewItems } from "../core/items.ts";
 import { searchSession } from "../core/search.ts";
 import type { Session, ViewKey } from "../core/session.ts";
 import type { SearchHit, ViewerSource, ViewModel } from "./source.ts";
@@ -51,6 +52,13 @@ export function createSessionSource(session: Session): ViewerSource {
       return getView(match.key);
     },
     getView,
+    async findExample(exampleId, snapshotId) {
+      for (const key of (await session.listViews()).filter((candidate) => candidate.snapshotId === snapshotId)) {
+        const model = await getView(key);
+        if (model.ok && model.value.envelope.component === "example" && (key.viewId === exampleId || viewItems(model.value.envelope).some((item) => item.id === exampleId))) return model;
+      }
+      return err("NOT_FOUND", `no example "${exampleId}" in snapshot "${snapshotId}"`);
+    },
     async openItemSource(key, itemId) {
       return ok(await resolveItemSource(session, key, itemId));
     },

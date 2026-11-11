@@ -168,6 +168,7 @@ function passthrough(source: ViewerSource): ViewerSource {
     applicableViews: (e, s, p) => source.applicableViews(e, s, p),
     getViewFor: (e, s, d) => source.getViewFor(e, s, d),
     getView: (k) => source.getView(k),
+    findExample: (e, s) => source.findExample(e, s),
     openItemSource: (k, i) => source.openItemSource(k, i),
     search: (qs, sc) => source.search(qs, sc),
     updateNotebook: (p, r, b) => source.updateNotebook(p, r, b),
