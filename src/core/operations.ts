@@ -520,7 +520,7 @@ async function render(session: Session, args: { input: Record<string, unknown> }
   const url = await viewerUrl(session, first);
   const storedList = summaryOfStore.views.slice(0, 20).map((key) => `${key.viewId}@${key.snapshotId}`);
   const more = summaryOfStore.views.length - storedList.length;
-  // the validator's notes on the accepted document; at most MAX_RENDER_NOTES are listed so the mandatory part of the reply stays small
+  // the validator's notes on the accepted document; the ones that fit NOTES_BYTE_BUDGET (512 bytes of JSON) are listed, the rest are counted, so the mandatory part of the reply stays small
   const { listed: notes, omitted: notesOmitted } = boundedNotes(summaryOfStore.notes);
   const noteLines = [...notes.map((note) => `note: ${note.pointer}: ${note.message}`), ...(notesOmitted > 0 ? [`(+${notesOmitted} more notes)`] : [])];
   const jsonHead = { stored: summaryOfStore.views, viewerUrl: url, validation: { valid: true, notes, ...(notesOmitted > 0 ? { omitted: notesOmitted } : {}) } };
