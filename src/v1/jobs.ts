@@ -11,10 +11,13 @@ import { err, ok, type Result, type ValidationIssue } from "../core/errors.ts";
 import type { Session } from "../core/session.ts";
 import type { Catalogue } from "../generated/v1/Catalogue.ts";
 import type { Diagnostic } from "../generated/v1/ObjectGraph.ts";
+import type { Inventory } from "../generated/v1/Inventory.ts";
+import { validateAgainstV1 } from "./schemas.ts";
 import type { TestRun } from "../generated/v1/TestRun.ts";
 import { buildProcess, foldExactFilters, parseCargoLists, reconcile, selectExamples, type AdapterRecord, type ProcessSpec, type Selection } from "./adapters.ts";
 import { validateObjectGraph } from "./capture.ts";
-import { mergeCatalogue, type CataloguePart } from "./catalogue.ts";
+import { checkInventory, mergeCatalogue, type CataloguePart, type InventoryProblem } from "./catalogue.ts";
+import { qualifyDiagnosticId } from "./diagnostic-id.ts";
 import { compareFingerprints, computeFingerprint, sampleConsistency, type Fingerprint } from "./fingerprint.ts";
 import { importCollection } from "./import.ts";
 import { resolveRequestedLimits } from "./limits.ts";
@@ -169,6 +172,31 @@ async function storedCatalogue(sessionDir: string, repo: string, adapter: string
     return (JSON.parse(await readFile(join(sessionDir, "catalogues", repo, `${adapter}.json`), "utf8")) as { catalogue: Catalogue }).catalogue;
   } catch {
     return null;
+  }
+}
+
+/** The repository's checked-in `paneweft.inventory.json` (S15): absent is fine, present must be a valid inventory. */
+async function loadInventory(root: string): Promise<{ ok: true; value: Inventory | undefined } | { ok: false; message: string }> {
+  const text = await readFile(join(root, "paneweft.inventory.json"), "utf8").catch(() => undefined);
+  if (text === undefined) return { ok: true, value: undefined };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (cause) {
+    return { ok: false, message: `paneweft.inventory.json is not JSON: ${(cause as Error).message}` };
+  }
+  const faults = validateAgainstV1("urn:paneweft:schema:v1:inventory:1", parsed);
+  return faults.length > 0 ? { ok: false, message: `paneweft.inventory.json is not a paneweft.inventory/1 document: ${faults[0]?.pointer} ${faults[0]?.constraint}` } : { ok: true, value: parsed as Inventory };
+}
+
+function inventoryMessage(problem: InventoryProblem): string {
+  switch (problem.kind) {
+    case "missing-module": return `the module "${problem.module}" is declared in paneweft.inventory.json but contributes none of its ${problem.ids.length} id(s) (${problem.ids.join(", ")}) to the compiled catalogue: its import was removed or it is no longer linked`;
+    case "removed-view": return `the view "${problem.id}" of module "${problem.module}" is declared in paneweft.inventory.json but is not in the compiled catalogue`;
+    case "removed-example": return `the example "${problem.id}" of module "${problem.module}" is declared in paneweft.inventory.json but is not in the compiled catalogue`;
+    case "unlisted": return `"${problem.id}" of module "${problem.module}" is in the compiled catalogue but not in paneweft.inventory.json`;
+    case "return-type-changed": return `the example "${problem.id}" returns ${problem.actual} but paneweft.inventory.json declares ${problem.expected}`;
+    case "duplicate-id": return `the id "${problem.id}" is declared twice in the compiled catalogue`;
   }
 }
 
@@ -421,8 +449,31 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
       return { status: "failed", snapshotIds: [], diagnostics };
     }
     const root = normalize(join(adapter.workspaceRoot, adapter.entry));
-    const fingerprint = await computeFingerprint({ root, declaredExtras: [], exclusions: [] });
-    const record = { schemaVersion: "paneweft.catalogue-record/1", repo: adapter.repo, adapter: adapter.id, catalogue: merged.value, fingerprint: fingerprint.ok ? fingerprint.value : { digest: "0".repeat(64), members: [], declaredExtras: [], exclusions: [], unverified: fingerprint.error.message }, collectedAt: now() };
+    // S15: the repository's checked-in inventory is compared with what was just compiled. A removed import (a declared module that exports
+    // nothing any more), a removed or unlisted id, a changed return type or a duplicate fails the refresh and leaves the stored catalogue as it was.
+    const inventory = await loadInventory(root);
+    if (!inventory.ok) {
+      diagnostics.push({ id: "diag-inventory-1", category: "registration", message: inventory.message, nextAction: "Fix paneweft.inventory.json (a paneweft.inventory/1 document), then refresh the catalogue again." } as Diagnostic);
+      return { status: "failed", snapshotIds: [], diagnostics };
+    }
+    if (inventory.value !== undefined) {
+      const checked = checkInventory(merged.value, inventory.value);
+      if (!checked.ok) {
+        for (const [index, problem] of checked.problems.entries()) diagnostics.push({ id: `diag-inventory-${index + 1}`, category: "registration", message: inventoryMessage(problem).slice(0, 2000), invariant: "the compiled catalogue matches the checked-in inventory", nextAction: "If the removal or addition is intended, update paneweft.inventory.json in the same reviewed change; otherwise restore the import or the declaration, then refresh the catalogue." } as Diagnostic);
+        return { status: "failed", snapshotIds: [], diagnostics };
+      }
+    }
+    // S14: the record holds the sources the job STARTED from, with the consistency of the sample before and the sample after; a source edited while
+    // the export ran leaves a mixed sample, which is never fresh.
+    const before = await readJson<Fingerprint>(join(jobDir(id), "fingerprint.before.json"));
+    const after = await computeFingerprint({ root, declaredExtras: before?.declaredExtras ?? [], exclusions: before?.exclusions ?? [] });
+    let fingerprint: Record<string, unknown>;
+    if (before !== undefined && after.ok) {
+      const sample = sampleConsistency(before, after.value);
+      fingerprint = { ...before, sampledConsistency: sample.status, ...(sample.status === "mixed-input" ? { sampleNote: sample.note, changedDuringExport: sample.changed } : {}) };
+    } else if (after.ok) fingerprint = { ...after.value, sampledConsistency: "unverified", unverified: "no sample was taken before the export ran" };
+    else fingerprint = { digest: "0".repeat(64), members: [], declaredExtras: [], exclusions: [], sampledConsistency: "unverified", unverified: after.error.message };
+    const record = { schemaVersion: "paneweft.catalogue-record/1", repo: adapter.repo, adapter: adapter.id, catalogue: merged.value, fingerprint, ...(inventory.value === undefined ? {} : { inventory: inventory.value }), collectedAt: now() };
     await writeDurably(join(deps.sessionDir, "catalogues", adapter.repo, `${adapter.id}.json`), JSON.stringify(record));
     return { status: "succeeded", snapshotIds: [], diagnostics };
   }
@@ -522,7 +573,10 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
       else if (intent.params.mode === "catalogue") outcome = await finalizeCatalogue(id, intent, adapter, qexJob, log);
       else outcome = await finalizeRun(id, intent, adapter, qexJob, log, cancelRequested || qexJob.state === "killed" && cancelRequested);
       const finalState: JobStateName = outcome.status === "succeeded" ? "succeeded" : outcome.status === "cancelled" ? "cancelled" : "failed";
-      await writeState(id, { state: finalState, terminal: { collectionStatus: outcome.status, snapshotIds: outcome.snapshotIds, diagnosticIds: outcome.diagnostics.map((diagnostic) => diagnostic.id), ...(outcome.counts === undefined ? {} : { counts: outcome.counts }) } }, `collection ${outcome.status}`);
+      // every diagnostic of a job is stored with the job (a catalogue refresh included), and the ids handed out are qualified by the run (S13)
+      if (intent.params.mode === "catalogue") await writeDurably(join(jobDir(id), "diagnostics.json"), JSON.stringify(outcome.diagnostics));
+      const runId = intent.resolved?.runId ?? `run-${id}`;
+      await writeState(id, { state: finalState, terminal: { collectionStatus: outcome.status, snapshotIds: outcome.snapshotIds, diagnosticIds: outcome.diagnostics.map((diagnostic) => qualifyDiagnosticId(runId, diagnostic.id)), ...(outcome.counts === undefined ? {} : { counts: outcome.counts }) } }, `collection ${outcome.status}`);
     });
     void leased;
   }

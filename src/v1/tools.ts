@@ -18,6 +18,9 @@ import type { Catalogue } from "../generated/v1/Catalogue.ts";
 import type { Diagnostic } from "../generated/v1/ObjectGraph.ts";
 import type { TestRun } from "../generated/v1/TestRun.ts";
 import { loadAdapters, type AdapterRecord } from "./adapters.ts";
+import { coverage as coverageOf, type Coverage } from "./catalogue.ts";
+import { qualifyDiagnosticId, splitDiagnosticId } from "./diagnostic-id.ts";
+import type { Inventory } from "../generated/v1/Inventory.ts";
 import { compareFingerprints, computeFingerprint, type Fingerprint } from "./fingerprint.ts";
 import type { JobService } from "./jobs.ts";
 import { withStoredPages } from "./pages.ts";
@@ -148,7 +151,8 @@ function serveListing(spec: ReplySpec, args: { format: ReplyFormat; budget: numb
 
 // ---- reading the owner's configuration ---------------------------------------------------------------------------------------------
 
-interface CatalogueRecord { schemaVersion: "paneweft.catalogue-record/1"; repo: string; adapter: string; catalogue: Catalogue; fingerprint: Fingerprint & { unverified?: string }; collectedAt: string }
+interface CatalogueRecord { schemaVersion: "paneweft.catalogue-record/1"; repo: string; adapter: string; catalogue: Catalogue; fingerprint: Fingerprint & { unverified?: string; sampledConsistency?: Consistency; sampleNote?: string }; inventory?: Inventory; collectedAt: string }
+type Consistency = "consistent-sampled" | "mixed-input" | "unverified";
 
 async function catalogueRecords(sessionDir: string, repo: string): Promise<CatalogueRecord[]> {
   const dir = join(sessionDir, "catalogues", repo);
@@ -167,7 +171,7 @@ async function adaptersOf(sessionDir: string): Promise<AdapterRecord[]> {
 }
 
 /** Freshness of a fingerprint against the real files of the registered repository, never a guess: stale names the changed paths. */
-async function freshnessOf(context: { session: Session; sessionDir: string }, repo: string, adapterId: string | undefined, captured: Fingerprint | undefined, digest?: string): Promise<Freshness> {
+async function freshnessOf(context: { session: Session; sessionDir: string }, repo: string, adapterId: string | undefined, captured: Fingerprint | undefined, digest?: string, consistency?: Consistency): Promise<Freshness> {
   const registered = (await context.session.repositories()).find((candidate) => candidate.id === repo);
   const base = digest === undefined ? {} : { catalogueDigest: digest };
   if (registered === undefined) return { status: "unverified", reasons: [`the root of repository "${repo}" is not registered, so its files cannot be compared: run \`paneweft repo add --repo ${repo} --root <dir>\``], ...base };
@@ -177,7 +181,12 @@ async function freshnessOf(context: { session: Session; sessionDir: string }, re
   const current = await computeFingerprint({ root, declaredExtras: captured.declaredExtras ?? [], exclusions: captured.exclusions ?? [] });
   if (!current.ok) return { status: "unverified", reasons: [current.error.message], ...base };
   const verdict = compareFingerprints(captured, current.value);
-  return verdict.status === "fresh" ? { status: "fresh", ...base } : { status: "stale", reasons: verdict.reasons.map((reason) => `${reason.path}: ${reason.change}`), ...base };
+  if (verdict.status !== "fresh") return { status: "stale", reasons: verdict.reasons.map((reason) => `${reason.path}: ${reason.change}`), ...base };
+  // S14: the sources match the recorded sample, but a recorded doubt about the sample caps the answer. An edit made during the run and restored
+  // afterwards compares equal; "fresh" would be a claim the evidence cannot carry.
+  if (consistency === "mixed-input") return { status: "unverified", reasons: ["the recorded input sample was mixed: the checkout changed while this result was being produced, so matching sources do not show it was stable then"], ...base };
+  if (consistency === "unverified") return { status: "unverified", reasons: ["the input of this result was never sampled twice, so its consistency is unverified"], ...base };
+  return { status: "fresh", ...base };
 }
 
 // ---- tool implementations -----------------------------------------------------------------------------------------------------------
@@ -198,23 +207,60 @@ async function loadForRepo(call: Call, language?: string): Promise<{ records: Ca
 const isOutcome = (value: unknown): value is OperationOutcome => typeof value === "object" && value !== null && "ok" in value && "body" in value;
 
 async function scopeFreshness(call: Call, record: CatalogueRecord): Promise<Freshness> {
-  return freshnessOf(call.context, record.repo, record.adapter, record.fingerprint, record.catalogue.digest);
+  const recorded = record.fingerprint.sampledConsistency ?? (record.fingerprint.unverified === undefined ? undefined : "unverified");
+  return freshnessOf(call.context, record.repo, record.adapter, record.fingerprint, record.catalogue.digest, recorded);
+}
+
+const FRESHNESS_RANK: Record<Freshness["status"], number> = { fresh: 0, "not-applicable": 0, unverified: 1, stale: 2 };
+
+/** The freshness of several scopes: the worst of them, with every reason, so no scope's doubt disappears into another's answer. */
+async function mergedFreshness(call: Call, records: CatalogueRecord[]): Promise<Freshness> {
+  const each = await Promise.all(records.map((record) => scopeFreshness(call, record)));
+  if (each.length === 1) return each[0] as Freshness;
+  const worst = each.reduce((a, b) => (FRESHNESS_RANK[b.status] > FRESHNESS_RANK[a.status] ? b : a));
+  const reasons = each.flatMap((freshness, index) => (freshness.reasons ?? []).map((reason) => `${(records[index] as CatalogueRecord).adapter}: ${reason}`));
+  return { status: worst.status, ...(reasons.length === 0 ? {} : { reasons }), catalogueDigest: queryDigest(records.map((record) => record.catalogue.digest)).slice(0, 12) };
+}
+
+/** What a reply says about the scopes it covers (S16). */
+async function scopesOf(call: Call, records: CatalogueRecord[], runs: TestRun[]): Promise<Json[]> {
+  return Promise.all(records.map(async (record) => ({ adapter: record.adapter, target: record.catalogue.target, linkedScope: record.catalogue.linkedScope, catalogueDigest: record.catalogue.digest, collectedAt: record.collectedAt, freshness: (await scopeFreshness(call, record)).status, coverage: coverageFigures(record, runs) })));
+}
+
+/** declared, linked, exercised and passing, from the checked-in inventory of the last refresh and the imported runs (S15). `declared` is null when no
+ * inventory was checked: the figure is not guessed from the catalogue. */
+function coverageFigures(record: CatalogueRecord, runs: TestRun[]): Omit<Coverage, "declared"> & { declared: number | null; inventory: "checked" | "none" } {
+  if (record.inventory === undefined) return { ...coverageOf(record.catalogue, { schemaVersion: "paneweft.inventory/1", views: [], examples: [] }, runs), declared: null, inventory: "none" };
+  return { ...coverageOf(record.catalogue, record.inventory, runs), inventory: "checked" };
 }
 
 async function listTypes(call: Call): Promise<OperationOutcome> {
   const loaded = await loadForRepo(call, call.args.language);
   if (isOutcome(loaded)) return loaded;
-  const record = loaded.records[0] as CatalogueRecord;
+  const records = loaded.records;
   const query = typeof call.args.query === "string" ? call.args.query.toLowerCase() : undefined;
-  const catalogue = record.catalogue;
-  const matched = catalogue.types.filter((type) => query === undefined || type.typeId.toLowerCase().includes(query) || type.source.symbol.toLowerCase().includes(query));
+  const runs = await lastCaptures(call, call.args.repo as string);
+  // every compatible catalogue of the repository is listed (S16); a type two scopes declare is listed once, naming both
+  const types = new Map<string, { typeId: string; source: { path: string; symbol: string }; scopes: string[] }>();
+  for (const record of records) for (const type of record.catalogue.types) {
+    const known = types.get(type.typeId);
+    if (known === undefined) types.set(type.typeId, { typeId: type.typeId, source: type.source, scopes: [record.adapter] });
+    else known.scopes.push(record.adapter);
+  }
+  const matched = [...types.values()].filter((type) => query === undefined || type.typeId.toLowerCase().includes(query) || type.source.symbol.toLowerCase().includes(query)).sort((a, b) => compareCodeUnits(a.typeId, b.typeId));
+  const many = records.length > 1;
   const items: Item[] = matched.map((type) => {
-    const views = catalogue.views.filter((view) => view.typeId === type.typeId).map((view) => view.id).sort(compareCodeUnits);
-    const examples = catalogue.examples.filter((example) => example.typeId === type.typeId).map((example) => example.id).sort(compareCodeUnits);
-    return { json: { typeId: type.typeId, source: type.source, views, examples }, text: `${type.typeId} -> ${type.source.path}:${type.source.symbol}; views=${views.length === 0 ? "none" : views.join(",")}; examples=${examples.length === 0 ? "none" : examples.join(",")}` };
+    const views = [...new Set(records.flatMap((record) => record.catalogue.views.filter((view) => view.typeId === type.typeId).map((view) => view.id)))].sort(compareCodeUnits);
+    const examples = [...new Set(records.flatMap((record) => record.catalogue.examples.filter((example) => example.typeId === type.typeId).map((example) => example.id)))].sort(compareCodeUnits);
+    return { json: { typeId: type.typeId, source: type.source, views, examples, ...(many ? { scopes: type.scopes } : {}) }, text: `${type.typeId} -> ${type.source.path}:${type.source.symbol}; views=${views.length === 0 ? "none" : views.join(",")}; examples=${examples.length === 0 ? "none" : examples.join(",")}${many ? `; scopes=${type.scopes.join(",")}` : ""}` };
   });
-  const coverage = { declared: catalogue.views.length, linked: catalogue.views.length, withExample: catalogue.views.filter((view) => catalogue.examples.some((example) => example.typeId === view.typeId)).length };
-  return serveListing({ tool: "list_types", completeness: { status: "complete" }, freshness: await scopeFreshness(call, record), unit: "types", total: catalogue.types.length, items, details: { target: catalogue.target, linkedScope: catalogue.linkedScope, catalogueDigest: catalogue.digest, coverage, collectedAt: record.collectedAt }, query: { tool: "list_types", repo: call.args.repo, language: call.args.language ?? null, query: call.args.query ?? null } }, call);
+  const scopes = await scopesOf(call, records, runs);
+  const first = records[0] as CatalogueRecord;
+  const figures = records.map((record) => coverageFigures(record, runs));
+  const sum = (pick: (figure: (typeof figures)[number]) => number | null): number | null => (figures.some((figure) => pick(figure) === null) ? null : figures.reduce((total, figure) => total + (pick(figure) as number), 0));
+  const combined = { declared: sum((figure) => figure.declared), linked: sum((figure) => figure.linked), exercised: sum((figure) => figure.exercised), passing: sum((figure) => figure.passing), gaps: figures.flatMap((figure) => figure.gaps), inventory: figures.every((figure) => figure.inventory === "checked") ? "checked" : "none" };
+  const single = many ? {} : { target: first.catalogue.target, linkedScope: first.catalogue.linkedScope, catalogueDigest: first.catalogue.digest, collectedAt: first.collectedAt };
+  return serveListing({ tool: "list_types", completeness: { status: "complete" }, freshness: await mergedFreshness(call, records), unit: "types", total: types.size, items, details: { ...single, scopes, coverage: combined }, query: { tool: "list_types", repo: call.args.repo, language: call.args.language ?? null, query: call.args.query ?? null } }, call);
 }
 
 async function lastCaptures(call: Call, repo: string): Promise<TestRun[]> {
@@ -231,45 +277,60 @@ async function lastCaptures(call: Call, repo: string): Promise<TestRun[]> {
   return loaded;
 }
 
+/** The scope names a `target` argument may use: the adapter id, the catalogue's package and its target. */
+const scopeNames = (record: CatalogueRecord): string[] => [record.adapter, record.catalogue.target.package, ...(record.catalogue.target.target === undefined ? [] : [record.catalogue.target.target])];
+
 async function listViews(call: Call): Promise<OperationOutcome> {
   const loaded = await loadForRepo(call);
   if (isOutcome(loaded)) return loaded;
   const typeId = call.args.type as string;
-  const record = (loaded.records.find((candidate) => candidate.catalogue.types.some((type) => type.typeId === typeId)) ?? loaded.records[0]) as CatalogueRecord;
-  const catalogue = record.catalogue;
-  const freshness = await scopeFreshness(call, record);
-  const runs = await lastCaptures(call, record.repo);
-  const known = catalogue.types.some((type) => type.typeId === typeId);
-  const views = catalogue.views.filter((view) => view.typeId === typeId).sort(viewSortKey);
-  const examples = catalogue.examples.filter((example) => example.typeId === typeId).map((example) => example.id).sort(compareCodeUnits);
+  const target = call.args.target as string | undefined;
+  // S16: `target` selects the scope(s) it names, and the reply says which scope it used; without it every catalogue of the repository answers
+  const records = target === undefined ? loaded.records : loaded.records.filter((record) => scopeNames(record).includes(target));
+  if (records.length === 0) return failure(call.format, "NOT_FOUND", `no catalogue of repository "${call.args.repo}" is compiled for the target "${target}"; the scopes are: ${loaded.records.map((record) => `${record.adapter} (${scopeNames(record).slice(1).join(", ")})`).join("; ")}`, { details: { targets: loaded.records.flatMap(scopeNames) } });
+  const freshness = await mergedFreshness(call, records);
+  const runs = await lastCaptures(call, call.args.repo as string);
+  const known = records.some((record) => record.catalogue.types.some((type) => type.typeId === typeId));
+  const views = new Map<string, Catalogue["views"][number]>();
+  for (const record of records) for (const view of record.catalogue.views.filter((candidate) => candidate.typeId === typeId)) if (!views.has(view.id)) views.set(view.id, view);
+  const ordered = [...views.values()].sort(viewSortKey);
+  const examples = [...new Set(records.flatMap((record) => record.catalogue.examples.filter((example) => example.typeId === typeId).map((example) => example.id)))].sort(compareCodeUnits);
   const lastRun = [...runs].reverse().find((run) => run.examples.some((example) => examples.includes(example.id)));
-  const items: Item[] = views.map((view) => {
+  const items: Item[] = ordered.map((view) => {
     const json = { id: view.id, title: view.title, question: view.question, component: view.component, priority: view.priority, source: view.source, renderer: view.renderer ?? null, exampleIds: examples, lastCapture: lastRun === undefined ? null : { runId: lastRun.runId, snapshotId: `snap-${lastRun.runId}` }, staleReasons: freshness.status === "stale" ? freshness.reasons ?? [] : [] };
     return { json, text: `${view.id} [${view.component}, priority ${view.priority}] ${view.title} -- ${view.question} (${view.source.path}:${view.source.line}); examples=${examples.length === 0 ? "none" : examples.join(",")}; last capture=${lastRun === undefined ? "never" : lastRun.runId}` };
   });
   const notices: string[] = [];
+  const covered = records.map((record) => `${record.catalogue.linkedScope.join(", ")} (linked scope; target ${record.catalogue.target.target ?? record.catalogue.target.package}, features ${record.catalogue.target.features.join(",") || "none"})`).join("; ");
   if (!known) {
-    notices.push(`the type "${typeId}" is not in the catalogue compiled for ${catalogue.linkedScope.join(", ")} (linked scope; target ${catalogue.target.target ?? catalogue.target.package}, features ${catalogue.target.features.join(",") || "none"}). That is NOT a statement that it has no views: it may live in a target, feature set or module this catalogue did not cover.`);
+    notices.push(`the type "${typeId}" is not in the ${records.length === 1 ? "catalogue" : "catalogues"} compiled for ${covered}. That is NOT a statement that it has no views: it may live in a target, feature set or module ${records.length === 1 ? "this catalogue" : "these catalogues"} did not cover.`);
     if (freshness.status === "stale") notices.push("the catalogue is outdated: the sources changed after it was compiled; refresh it before relying on this answer");
   }
-  return serveListing({ tool: "list_views_for_type", completeness: known ? { status: "complete" } : { status: "partial", reason: "type not in the compiled catalogue" }, freshness, unit: "views", total: views.length, items, notices, details: { typeId, linkedScope: catalogue.linkedScope, catalogueDigest: catalogue.digest }, query: { tool: "list_views_for_type", repo: call.args.repo, type: typeId, target: call.args.target ?? null } }, call);
+  const first = records[0] as CatalogueRecord;
+  const single = records.length > 1 ? {} : { linkedScope: first.catalogue.linkedScope, catalogueDigest: first.catalogue.digest };
+  return serveListing({ tool: "list_views_for_type", completeness: known ? { status: "complete" } : { status: "partial", reason: "type not in the compiled catalogue" }, freshness, unit: "views", total: ordered.length, items, notices, details: { typeId, ...single, scopes: await scopesOf(call, records, runs) }, query: { tool: "list_views_for_type", repo: call.args.repo, type: typeId, target: target ?? null } }, call);
 }
 
 async function listExamples(call: Call): Promise<OperationOutcome> {
   const loaded = await loadForRepo(call);
   if (isOutcome(loaded)) return loaded;
-  const record = loaded.records[0] as CatalogueRecord;
-  const catalogue = record.catalogue;
-  const runs = await lastCaptures(call, record.repo);
-  const viewType = typeof call.args.view === "string" ? catalogue.views.find((view) => view.id === call.args.view)?.typeId : undefined;
-  const matched = catalogue.examples.filter((example) => (call.args.type === undefined || example.typeId === call.args.type) && (call.args.view === undefined || example.typeId === viewType) && (call.args.tag === undefined || example.claims.includes(call.args.tag) || example.kind === call.args.tag)).sort((a, b) => compareCodeUnits(a.id, b.id));
+  const records = loaded.records;
+  const runs = await lastCaptures(call, call.args.repo as string);
+  const catalogues = records.map((record) => record.catalogue);
+  const viewType = typeof call.args.view === "string" ? catalogues.flatMap((catalogue) => catalogue.views).find((view) => view.id === call.args.view)?.typeId : undefined;
+  const examples = new Map<string, Catalogue["examples"][number]>();
+  for (const catalogue of catalogues) for (const example of catalogue.examples) if (!examples.has(example.id)) examples.set(example.id, example);
+  const matched = [...examples.values()].filter((example) => (call.args.type === undefined || example.typeId === call.args.type) && (call.args.view === undefined || example.typeId === viewType) && (call.args.tag === undefined || example.claims.includes(call.args.tag) || example.kind === call.args.tag)).sort((a, b) => compareCodeUnits(a.id, b.id));
   const items: Item[] = matched.map((example) => {
     const last = [...runs].reverse().map((run) => run.examples.find((candidate) => candidate.id === example.id)).find((found) => found !== undefined);
     const lastRun = [...runs].reverse().find((run) => run.examples.some((candidate) => candidate.id === example.id));
     const lastOutcome = last === undefined || lastRun === undefined ? null : { runId: lastRun.runId, outcome: last.outcome, verified: last.verified };
-    return { json: { id: example.id, returns: example.typeId, claims: example.claims, kind: example.kind ?? "example", selector: example.selector, composes: example.composes, lastOutcome }, text: `${example.id} -> ${example.typeId}; claims=${example.claims.join(",") || "none"}; ${example.kind ?? "example"}; ${example.selector.runner} ${example.selector.name}; last=${lastOutcome === null ? "never run" : `${lastOutcome.outcome}${lastOutcome.verified ? " verified" : ""} in ${lastOutcome.runId}`}` };
+    const scope = records.length > 1 ? records.filter((record) => record.catalogue.examples.some((candidate) => candidate.id === example.id)).map((record) => record.adapter) : undefined;
+    return { json: { id: example.id, returns: example.typeId, claims: example.claims, kind: example.kind ?? "example", selector: example.selector, composes: example.composes, lastOutcome, ...(scope === undefined ? {} : { scopes: scope }) }, text: `${example.id} -> ${example.typeId}; claims=${example.claims.join(",") || "none"}; ${example.kind ?? "example"}; ${example.selector.runner} ${example.selector.name}; last=${lastOutcome === null ? "never run" : `${lastOutcome.outcome}${lastOutcome.verified ? " verified" : ""} in ${lastOutcome.runId}`}${scope === undefined ? "" : `; scopes=${scope.join(",")}`}` };
   });
-  return serveListing({ tool: "list_examples", completeness: { status: "complete" }, freshness: await scopeFreshness(call, record), unit: "examples", total: catalogue.examples.length, items, details: { linkedScope: catalogue.linkedScope, catalogueDigest: catalogue.digest }, query: { tool: "list_examples", repo: call.args.repo, type: call.args.type ?? null, view: call.args.view ?? null, tag: call.args.tag ?? null } }, call);
+  const first = records[0] as CatalogueRecord;
+  const single = records.length > 1 ? {} : { linkedScope: first.catalogue.linkedScope, catalogueDigest: first.catalogue.digest };
+  return serveListing({ tool: "list_examples", completeness: { status: "complete" }, freshness: await mergedFreshness(call, records), unit: "examples", total: examples.size, items, details: { ...single, scopes: await scopesOf(call, records, runs) }, query: { tool: "list_examples", repo: call.args.repo, type: call.args.type ?? null, view: call.args.view ?? null, tag: call.args.tag ?? null } }, call);
 }
 
 // ---- scaffolds (read-only generation) ------------------------------------------------------------------------------------------------
@@ -598,7 +659,7 @@ async function viewResult(call: Call): Promise<OperationOutcome> {
   }
   const record = await committedImport(session, runId);
   const adapter = (await adaptersOf(sessionDir!)).find((candidate) => candidate.repo === record?.repo && candidate.kind === stored.value.run.runner.id);
-  const freshness = await freshnessOf({ session, sessionDir: sessionDir! }, record?.repo ?? "", adapter?.id, { digest: stored.value.run.inputFingerprint.digest, members: stored.value.run.inputFingerprint.members ?? [], declaredExtras: [], exclusions: [] });
+  const freshness = await freshnessOf({ session, sessionDir: sessionDir! }, record?.repo ?? "", adapter?.id, { digest: stored.value.run.inputFingerprint.digest, members: stored.value.run.inputFingerprint.members ?? [], declaredExtras: [], exclusions: [] }, undefined, stored.value.run.inputFingerprint.sampledConsistency);
   const completeness = envelope.completeness.status === "unsupported" ? { status: "unsupported" as const, reason: envelope.completeness.reason } : envelope.completeness.status === "partial" ? { status: "partial" as const, reason: envelope.completeness.gaps.map((gap) => gap.reason).join("; ").slice(0, 400) } : { status: "complete" as const };
   const example = stored.value.run.examples.find((candidate) => candidate.outcome === "passed" || candidate.outcome === "failed") ?? stored.value.run.examples[0];
   const details = {
@@ -620,40 +681,56 @@ async function viewResult(call: Call): Promise<OperationOutcome> {
   return serveListing({ tool: "view_result", completeness, freshness: { ...freshness, scope: `run ${runId}` }, unit: envelope.component === "list" ? "rows" : "fields", total: items.length, items, details: { ...details, text: head }, query: { tool: "view_result", runId, view: wanted, observation: observation ?? null } }, call);
 }
 
-async function findDiagnostic(call: Call, id: string): Promise<{ diagnostic: Diagnostic; runId: string | null } | undefined> {
+/** Every stored diagnostic called `id` (a bare id), or the one `<runId>:<id>` names. A job's diagnostics are those of its run; the stored
+ * captures hold the diagnostics the SDK recorded. */
+async function findDiagnostics(call: Call, requested: string): Promise<Array<{ diagnostic: Diagnostic; runId: string }>> {
   const { session, sessionDir } = call.context;
+  const { runId: wanted, id } = splitDiagnosticId(requested);
+  const found: Array<{ diagnostic: Diagnostic; runId: string }> = [];
   const jobsDir = join(sessionDir!, "jobs");
+  const seen = new Set<string>();
   for (const name of (await readdir(jobsDir).catch(() => [])).sort()) {
+    const runId = `run-${name}`;
+    if (wanted !== null && wanted !== runId) continue;
     const diagnostics = await readJsonFile<Diagnostic[]>(join(jobsDir, name, "diagnostics.json"));
-    const found = diagnostics?.find((candidate) => candidate.id === id);
-    if (found !== undefined) return { diagnostic: found, runId: `run-${name}` };
+    const hit = diagnostics?.find((candidate) => candidate.id === id);
+    if (hit !== undefined) {
+      found.push({ diagnostic: hit, runId });
+      seen.add(runId);
+    }
   }
-  const reader = openV1Reader(session);
-  const runs = await reader.runs();
+  const runs = await openV1Reader(session).runs();
   if (runs.ok) {
     for (const entry of runs.value) {
+      if ((wanted !== null && wanted !== entry.runId) || seen.has(entry.runId)) continue;
       const record = await committedImport(session, entry.runId);
       for (const captureId of record?.captureIds ?? []) {
         const graph = await readJsonFile<{ diagnostics: Diagnostic[] }>(captureFile(session, entry.runId, captureId));
-        const found = graph?.diagnostics.find((candidate) => candidate.id === id);
-        if (found !== undefined) return { diagnostic: found, runId: entry.runId };
+        const hit = graph?.diagnostics.find((candidate) => candidate.id === id);
+        if (hit !== undefined) {
+          found.push({ diagnostic: hit, runId: entry.runId });
+          break;
+        }
       }
     }
   }
-  return undefined;
+  return found;
 }
 
 async function explainFailure(call: Call): Promise<OperationOutcome> {
-  const found = await findDiagnostic(call, call.args.diagnostic as string);
-  if (found === undefined) return failure(call.format, "NOT_FOUND", `no stored diagnostic "${call.args.diagnostic}": diagnostic ids come from collection_status and view_result`);
-  const { diagnostic, runId } = found;
-  const record = runId === null ? undefined : await committedImport(call.context.session, runId);
+  const requested = call.args.diagnostic as string;
+  const matches = await findDiagnostics(call, requested);
+  if (matches.length === 0) return failure(call.format, "NOT_FOUND", `no stored diagnostic "${requested}": diagnostic ids come from collection_status (qualified by their run, run-<id>:<diagnostic>)`);
+  if (matches.length > 1) return failure(call.format, "UNRESOLVED_TARGET", `${matches.length} runs hold a diagnostic "${requested}": name one with its run, <runId>:${requested}`, { details: { candidates: matches.map((match) => qualifyDiagnosticId(match.runId, match.diagnostic.id)) } });
+  const { diagnostic, runId } = matches[0] as { diagnostic: Diagnostic; runId: string };
+  const record = await committedImport(call.context.session, runId);
   const selector = diagnostic.exampleId === undefined ? null : { examples: [diagnostic.exampleId], ...(diagnostic.viewId === undefined ? {} : { views: [diagnostic.viewId] }) };
   const adapter = (await adaptersOf(call.context.sessionDir)).find((candidate) => candidate.repo === record?.repo);
   const repeat = selector === null ? null : { selector, command: `paneweft collect --request-id <new-id> --repo ${record?.repo ?? adapter?.repo ?? "<repo>"} --adapter ${adapter?.id ?? "<adapter>"} --example ${diagnostic.exampleId}` };
-  const json = { ...diagnostic, basis: "stored-diagnostic", runId, selector, repeat };
-  const text = [`${diagnostic.id} [${diagnostic.category}] ${diagnostic.message}`, ...(diagnostic.viewId ? [`view: ${diagnostic.viewId}`] : []), ...(diagnostic.exampleId ? [`example: ${diagnostic.exampleId}`] : []), ...(diagnostic.source ? [`source: ${diagnostic.source.path}:${diagnostic.source.line}${diagnostic.source.column === undefined ? "" : `:${diagnostic.source.column}`}`] : []), ...(diagnostic.pointer ? [`pointer: ${diagnostic.pointer}`] : []), ...(diagnostic.invariant ? [`invariant: ${diagnostic.invariant}`] : []), ...(diagnostic.expected !== undefined ? [`expected: ${JSON.stringify(diagnostic.expected)}`] : []), ...(diagnostic.actual !== undefined ? [`actual: ${JSON.stringify(diagnostic.actual)}`] : []), ...(diagnostic.stderrSlice ? [`stderr: ${JSON.stringify(diagnostic.stderrSlice)}`] : []), `next: ${diagnostic.nextAction}`, ...(repeat ? [`repeat: ${repeat.command}`] : [])];
-  return serveListing({ tool: "explain_failure", completeness: { status: "complete" }, freshness: { status: "not-applicable" }, unit: "diagnostics", total: 1, items: [{ json, text: text.join("\n") }], notices: ["evidence from the stored artifacts, not a model's diagnosis; nothing was executed"], query: { tool: "explain_failure", diagnostic: diagnostic.id } }, call);
+  const qualifiedId = qualifyDiagnosticId(runId, diagnostic.id);
+  const json = { ...diagnostic, qualifiedId, basis: "stored-diagnostic", runId, selector, repeat };
+  const text = [`${qualifiedId} [${diagnostic.category}] ${diagnostic.message}`, ...(diagnostic.viewId ? [`view: ${diagnostic.viewId}`] : []), ...(diagnostic.exampleId ? [`example: ${diagnostic.exampleId}`] : []), ...(diagnostic.source ? [`source: ${diagnostic.source.path}:${diagnostic.source.line}${diagnostic.source.column === undefined ? "" : `:${diagnostic.source.column}`}`] : []), ...(diagnostic.pointer ? [`pointer: ${diagnostic.pointer}`] : []), ...(diagnostic.invariant ? [`invariant: ${diagnostic.invariant}`] : []), ...(diagnostic.expected !== undefined ? [`expected: ${JSON.stringify(diagnostic.expected)}`] : []), ...(diagnostic.actual !== undefined ? [`actual: ${JSON.stringify(diagnostic.actual)}`] : []), ...(diagnostic.stderrSlice ? [`stderr: ${JSON.stringify(diagnostic.stderrSlice)}`] : []), `next: ${diagnostic.nextAction}`, ...(repeat ? [`repeat: ${repeat.command}`] : [])];
+  return serveListing({ tool: "explain_failure", completeness: { status: "complete" }, freshness: { status: "not-applicable" }, unit: "diagnostics", total: 1, items: [{ json, text: text.join("\n") }], notices: ["evidence from the stored artifacts, not a model's diagnosis; nothing was executed"], query: { tool: "explain_failure", diagnostic: qualifiedId } }, call);
 }
 
 // ---- dispatch ---------------------------------------------------------------------------------------------------------------------------

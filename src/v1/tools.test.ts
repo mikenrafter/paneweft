@@ -2,6 +2,7 @@
 // read-only scaffolding, collection through the job service, result and failure reads, byte budgets and cursors. CLI/MCP parity is in
 // test/v1/surface.test.ts.
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { cpSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -424,5 +425,194 @@ describe("[S12] scaffolds can be used from the text reply", () => {
     expect(module.text).toContain('import type { Backup } from "./models.ts";');
     expect(module.text).toMatch(/export const BackupToken = defineType<Backup>\(\{/);
     expect(module.text).not.toContain('from "./Backup.paneweft.ts"');
+  });
+});
+
+describe("[S13] a diagnostic id names its run", () => {
+  const settled = async (call: (tool: string, args?: Record<string, unknown>) => Promise<{ payload: any }>, job: string) => vi.waitFor(async () => { const s = await call("collection_status", { job }); expect(["failed", "succeeded"]).toContain(s.payload.items[0].state); return s.payload.items[0]; }, { timeout: 20_000, interval: 50 });
+
+  // why: S13. Compile, catalogue, registration and synthesized invocation diagnostics are numbered per collection (`diag-inv-1`, `diag-compile-1`),
+  // and explain_failure returned the first match across every job, so the second of two consecutive, different failures explained the first.
+  // Rejects a lookup that scans jobs for the bare id. Ids reported by collection_status are qualified by their run and unambiguous.
+  // proves: CLAIM(S13-diagnostic-ids)
+  it("explains the failure of the run it names, for consecutive distinct failures", async () => {
+    const { call, okCall, qex } = await toolWorld();
+    qex.scenario({ mode: "fail" });
+    const ids: Record<string, string[]> = {};
+    for (const job of ["fail-a", "fail-b"]) {
+      await okCall("collect", { requestId: job, repo: "vg", adapter: "cargo", examples: ["watch.pending"] });
+      ids[job] = (await settled(call, job)).diagnosticIds;
+      expect(ids[job]!.length).toBeGreaterThan(0);
+    }
+    expect(ids["fail-a"]!.filter((id) => ids["fail-b"]!.includes(id)), "no id is shared between the two runs").toEqual([]);
+    for (const job of ["fail-a", "fail-b"]) {
+      for (const id of ids[job]!) {
+        const explained = await okCall("explain_failure", { diagnostic: id });
+        expect(explained.payload.items[0]).toMatchObject({ runId: `run-${job}`, qualifiedId: id });
+      }
+    }
+  });
+
+  // why: S13. The bare id that two runs share is no longer answered with whichever run came first: it is UNRESOLVED_TARGET naming the qualified ids.
+  // proves: CLAIM(S13-diagnostic-ids)
+  it("refuses a bare id that more than one run holds and lists the qualified ones", async () => {
+    const { call, okCall, qex } = await toolWorld();
+    qex.scenario({ mode: "fail" });
+    for (const job of ["fail-c", "fail-d"]) {
+      await okCall("collect", { requestId: job, repo: "vg", adapter: "cargo", examples: ["watch.pending"] });
+      await settled(call, job);
+    }
+    const { outcome, payload } = await call("explain_failure", { diagnostic: "diag-inv-1" });
+    expect(outcome.ok).toBe(false);
+    expect(payload.code).toBe("UNRESOLVED_TARGET");
+    expect(payload.details.candidates).toEqual(["run-fail-c:diag-inv-1", "run-fail-d:diag-inv-1"]);
+  });
+});
+
+describe("[S14] freshness never blesses what changed while it was being compiled", () => {
+  // why: S14. A catalogue's fingerprint was taken AFTER the export ran, so a source edited between the start of the job and its end was blessed:
+  // the record matched the edited files and list_types said "fresh". The record now holds the fingerprint of the sources the job started from, with the
+  // consistency of the two samples; a mixed sample is never fresh.
+  // proves: CLAIM(S14-freshness)
+  it("a catalogue refreshed while its sources were edited is not fresh", async () => {
+    const { call, root, qex, context, dir, fingerprint } = await toolWorld();
+    qex.control({ hold: true });
+    const started = must(await context.jobs!.refreshCatalogue({ requestId: "cat-edit", repo: "vg", adapter: "cargo" }), "refresh");
+    const before = independentFingerprint(root).digest;
+    expect(before).toBe(fingerprint.digest);
+    write(root, "src/lib.rs", "// edited while the catalogue was being compiled\n");
+    qex.release(started.qexId!);
+    await vi.waitFor(async () => { expect(must(await context.jobs!.status("cat-edit"), "status").state).toBe("succeeded"); }, { timeout: 20_000, interval: 50 });
+    const record = JSON.parse(readFileSync(join(dir, "catalogues", "vg", "cargo.json"), "utf8"));
+    expect(record.fingerprint.digest, "the record holds the sources the job started from").toBe(before);
+    expect(record.fingerprint.sampledConsistency).toBe("mixed-input");
+    const { payload } = await call("list_types", { repo: "vg" });
+    expect(payload.freshness.status).not.toBe("fresh");
+  });
+
+  // why: S14. view_result recomputed the current fingerprint and compared it with the run's recorded digest, ignoring that the run recorded
+  // `mixed-input`: an edit made during the run and then restored compared equal, so the result read "fresh". A recorded mixed (or unverified) sample caps freshness at unverified.
+  // proves: CLAIM(S14-freshness)
+  it.each(["mixed-input", "unverified"] as const)("a run recorded as %s is never reported fresh, even when the sources match", async (consistency) => {
+    const { call, session, fingerprint } = await toolWorld();
+    const input = collectionImport("vigil-redelivered");
+    (input.run as any).inputFingerprint = { digest: fingerprint.digest, memberCount: fingerprint.members.length, sampledConsistency: consistency, members: fingerprint.members };
+    must(await importCollection(session, input), "import");
+    const { payload } = await call("view_result", { run: "run-1", view: "watch.status" });
+    expect(payload.freshness.status).toBe("unverified");
+    expect(payload.freshness.reasons.join(" ")).toContain(consistency === "mixed-input" ? "mixed" : "unverified");
+  });
+
+  // why: S14 control. The same run recorded as consistently sampled and matching the sources is fresh: the cap applies only to a recorded doubt.
+  // proves: CLAIM(S14-freshness)
+  it("a consistently sampled run that matches the sources is fresh", async () => {
+    const { call, session, fingerprint } = await toolWorld();
+    const input = collectionImport("vigil-redelivered");
+    (input.run as any).inputFingerprint = { digest: fingerprint.digest, memberCount: fingerprint.members.length, sampledConsistency: "consistent-sampled", members: fingerprint.members };
+    must(await importCollection(session, input), "import");
+    expect((await call("view_result", { run: "run-1", view: "watch.status" })).payload.freshness.status).toBe("fresh");
+  });
+});
+
+describe("[S15] the inventory is checked at refresh and the coverage is real", () => {
+  const inventory = loadFixture<any>("v1/catalogues/watchfile.inventory.json");
+
+  // why: S15. `checkInventory` was never called: a module whose import was removed (here: the inventory still declares a view of module `ghost`
+  // that the compiled catalogue no longer carries) refreshed successfully and replaced the stored catalogue. A refresh that fails the inventory
+  // fails as a registration diagnostic and leaves the stored catalogue as it was.
+  // proves: CLAIM(S15-inventory) CLAIM(IV3)
+  it("fails a refresh that drops a declared module and keeps the stored catalogue", async () => {
+    const { root, qex, context, dir, call } = await toolWorld();
+    const stored = readFileSync(join(dir, "catalogues", "vg", "cargo.json"), "utf8");
+    write(root, "paneweft.inventory.json", JSON.stringify({ ...inventory, views: [...inventory.views, { id: "ghost.view", module: "ghost" }] }));
+    must(await context.jobs!.refreshCatalogue({ requestId: "cat-ghost", repo: "vg", adapter: "cargo" }), "refresh");
+    const view = await vi.waitFor(async () => { const s = must(await context.jobs!.status("cat-ghost"), "status"); expect(s.state).toBe("failed"); return s; }, { timeout: 20_000, interval: 50 });
+    expect(view.diagnosticIds.length).toBeGreaterThan(0);
+    const explained = await call("explain_failure", { diagnostic: view.diagnosticIds[0]! });
+    expect(explained.payload.items[0]).toMatchObject({ category: "registration" });
+    expect(JSON.stringify(explained.payload.items[0])).toContain("ghost");
+    expect(readFileSync(join(dir, "catalogues", "vg", "cargo.json"), "utf8")).toBe(stored);
+    expect(qex.calls().some((c) => c[0] === "submit")).toBe(true);
+  });
+
+  // why: S15. list_types reported `declared` and `linked` as the same catalogue count and had no exercised/passing figures. With the checked-in inventory and
+  // the imported runs they are separate numbers: declared 3 (the inventory), linked 3 (the catalogue), exercised 2 and passing 2 (the imported run).
+  // proves: CLAIM(S15-inventory)
+  it("reports declared, linked, exercised and passing separately", async () => {
+    const { root, qex, context, call, session } = await toolWorld();
+    write(root, "paneweft.inventory.json", JSON.stringify(inventory));
+    must(await context.jobs!.refreshCatalogue({ requestId: "cat-ok", repo: "vg", adapter: "cargo" }), "refresh");
+    await vi.waitFor(async () => { expect(must(await context.jobs!.status("cat-ok"), "status").state).toBe("succeeded"); }, { timeout: 20_000, interval: 50 });
+    must(await importCollection(session, collectionImport("vigil-redelivered")), "import");
+    const { payload } = await call("list_types", { repo: "vg" });
+    expect(payload.details.coverage).toMatchObject({ declared: 3, linked: 3, exercised: 2, passing: 2 });
+    expect(payload.details.coverage.gaps).toEqual([{ viewId: "event.details", reason: "no-example" }]);
+    expect(qex.calls().length).toBeGreaterThan(0);
+  });
+
+  // why: S15. The Vitest exporter compiled the manifest with NO independent list of declared modules, so a module whose import was removed from
+  // paneweft.views.ts was invisible. It now reads the repository's checked-in inventory and refuses a manifest that lacks a declared module
+  // (the compiler's missing-import problem). Run on the real script and the shipped containmarks fixture.
+  // proves: CLAIM(S15-inventory) CLAIM(IV3)
+  it("the Vitest catalogue export fails when a declared module is no longer imported", () => {
+    const root = join(FIXTURES, "packages/containmarks-lite");
+    const run = (declared: string[]) => {
+      const staging = tmp("vitest-catalogue");
+      const file = join(staging, "inventory.json");
+      writeFileSync(file, JSON.stringify({ schemaVersion: "paneweft.inventory/1", views: declared.map((module, index) => ({ id: `declared.view-${index}`, module })), examples: [] }));
+      const result = spawnSync(process.execPath, [join(FIXTURES, "../scripts/collect-vitest.mjs"), "--staging", staging, "--root", root, "--tsconfig", "tsconfig.json", "--catalogue", "--manifest", "paneweft.views.ts", "--inventory", file], { encoding: "utf8", timeout: 120_000 });
+      return { status: result.status, stderr: result.stderr };
+    };
+    const ok = run(["src/mappings/containerMappings.paneweft.ts"]);
+    expect(ok.status, ok.stderr).toBe(0);
+    const removed = run(["src/mappings/containerMappings.paneweft.ts", "src/mappings/removed.paneweft.ts"]);
+    expect(removed.status).toBe(3);
+    expect(removed.stderr).toContain("missing-import");
+    expect(removed.stderr).toContain("src/mappings/removed.paneweft.ts");
+  });
+});
+
+describe("[S16] discovery covers every registered catalogue", () => {
+  async function twoCatalogues() {
+    const world = await toolWorld();
+    const cm = loadFixture<any>("v1/catalogues/containmarks.catalogue.json");
+    const record = { schemaVersion: "paneweft.catalogue-record/1", repo: "vg", adapter: "vitest", catalogue: cm, fingerprint: { digest: "0".repeat(64), members: [], declaredExtras: [], exclusions: [] }, collectedAt: "2026-11-11T12:00:00Z" };
+    writeFileSync(join(world.dir, "catalogues", "vg", "vitest.json"), JSON.stringify(record));
+    return world;
+  }
+
+  // why: S16. list_types and list_examples read `records[0]` only, so with a Rust and a TypeScript adapter registered for one repository the other adapter's
+  // declarations vanished. Both catalogues are listed, each item says which scope it came from, and the reply names every scope.
+  // proves: CLAIM(S16-discovery)
+  it("lists the types and the examples of every adapter's catalogue", async () => {
+    const { okCall } = await twoCatalogues();
+    const types = await okCall("list_types", { repo: "vg" });
+    expect(types.payload.items.map((item: any) => item.typeId)).toEqual(["containmarks::ContainerMappingRecord", "vigil::watch::Event", "vigil::watch::WatchFile"]);
+    expect(types.payload.details.scopes.map((scope: any) => scope.adapter)).toEqual(["cargo", "vitest"]);
+    const examples = await okCall("list_examples", { repo: "vg" });
+    expect(examples.payload.items.map((item: any) => item.id)).toEqual(expect.arrayContaining(["mapping.work", "mapping.renamed", "watch.cancelled", "watch.pending"]));
+    expect(examples.payload.counts.total).toBe(examples.payload.items.length);
+    const typescript = await okCall("list_types", { repo: "vg", language: "typescript" });
+    expect(typescript.payload.items.map((item: any) => item.typeId)).toEqual(["containmarks::ContainerMappingRecord"]);
+  });
+
+  // why: S16. list_views_for_type ignored its `target` argument. A target selects the scope whose package, target or adapter id it names, and an unknown one
+  // is refused with the scopes that exist; without one, the views of the type come from every scope that declares it.
+  // proves: CLAIM(S16-discovery)
+  it("honours the target argument and reports the scope it used", async () => {
+    const { okCall, call } = await twoCatalogues();
+    const selected = await okCall("list_views_for_type", { repo: "vg", type: "containmarks::ContainerMappingRecord", target: "containmarks-lite" });
+    expect(selected.payload.items.map((item: any) => item.id)).toEqual(["mapping.details"]);
+    expect(selected.payload.details.scopes.map((scope: any) => scope.adapter)).toEqual(["vitest"]);
+    const wrong = await call("list_views_for_type", { repo: "vg", type: "containmarks::ContainerMappingRecord", target: "watchfile" });
+    expect(wrong.outcome.ok).toBe(true);
+    expect(wrong.payload.items).toEqual([]);
+    expect(wrong.payload.completeness.status).toBe("partial");
+    const unknown = await call("list_views_for_type", { repo: "vg", type: "containmarks::ContainerMappingRecord", target: "nowhere" });
+    expect(unknown.outcome.ok).toBe(false);
+    expect(unknown.payload.code).toBe("NOT_FOUND");
+    expect(unknown.payload.message).toContain("containmarks-lite");
+    const all = await okCall("list_views_for_type", { repo: "vg", type: "vigil::watch::WatchFile" });
+    expect(all.payload.items.map((item: any) => item.id).sort()).toEqual(["watch.events", "watch.status"]);
   });
 });

@@ -12,7 +12,7 @@
 // Catalogue mode imports the repository's explicit manifest under tsx (so tsconfig paths apply) and writes
 // <staging>/catalogue/manifest.json; it never runs an example.
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -31,7 +31,19 @@ if (flag("--catalogue-child")) {
   const manifest = loaded.manifest ?? loaded.default;
   const compile = manifest?.[Symbol.for("paneweft.compile")];
   if (typeof compile !== "function") fail(`${manifestPath} does not export a manifest made with defineManifest(...)`, 3);
-  const result = compile();
+  // The independent list of declared modules is the repository's checked-in inventory (S15): a module it names that the manifest no longer carries is
+  // a `missing-import` problem, which the compiler reports. Without an inventory nothing is declared independently of the manifest.
+  const inventoryPath = resolve(option("--inventory") ?? join(resolve(option("--root") ?? process.cwd()), "paneweft.inventory.json"));
+  let declared = [];
+  if (existsSync(inventoryPath)) {
+    try {
+      const inventory = JSON.parse(readFileSync(inventoryPath, "utf8"));
+      declared = [...new Set([...(inventory.views ?? []), ...(inventory.examples ?? [])].map((entry) => entry.module).filter((module) => typeof module === "string"))];
+    } catch (error) {
+      fail(`${inventoryPath} is not a readable inventory: ${error.message}`, 3);
+    }
+  }
+  const result = compile(declared);
   mkdirSync(join(staging, "catalogue"), { recursive: true });
   if (!result.ok) {
     console.error(`collect-vitest: the manifest has problems: ${JSON.stringify(result.problems)}`);
@@ -56,7 +68,8 @@ const run = (command, argv, options = {}) => new Promise((done) => {
 if (flag("--catalogue")) {
   const tsx = import.meta.resolve("tsx/esm");
   const manifest = join(root, option("--manifest") ?? "paneweft.views.ts");
-  process.exit(await run(process.execPath, ["--import", tsx, fileURLToPath(import.meta.url), "--catalogue-child", "--manifest", manifest, "--staging", staging], { cwd: root, env: { ...process.env, TSX_TSCONFIG_PATH: join(root, tsconfig) } }));
+  const inventory = option("--inventory") === undefined ? [] : ["--inventory", option("--inventory")];
+  process.exit(await run(process.execPath, ["--import", tsx, fileURLToPath(import.meta.url), "--catalogue-child", "--manifest", manifest, "--staging", staging, "--root", root, ...inventory], { cwd: root, env: { ...process.env, TSX_TSCONFIG_PATH: join(root, tsconfig) } }));
 }
 
 // run mode: typecheck, then vitest
