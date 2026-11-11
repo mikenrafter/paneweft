@@ -132,9 +132,12 @@ describe("[S2] a crashed holder never wedges or corrupts the session", () => {
     expect((await holder.done()).result).toMatchObject({ ok: true });
     const next = spawnLockWriter(dir, importing("delivery-path"), children);
     expect((await next.done()).result).toMatchObject({ ok: true });
-
-    expect(isRunning(helperPid!), "the orphaned helper is gone").toBe(false);
     expect(await viewIds(dir)).toEqual(["delivery-path", "modules"]);
+
+    // The helper exits asynchronously after the holder leaves, so wait for it (bounded) instead of asserting right after the next writer.
+    const deadline = Date.now() + 5000;
+    while (isRunning(helperPid!) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(isRunning(helperPid!), "the orphaned helper is gone").toBe(false);
   });
 });
 
