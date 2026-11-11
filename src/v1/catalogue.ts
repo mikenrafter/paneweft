@@ -31,7 +31,11 @@ export function mergeCatalogue(parts: CataloguePart[], target: Catalogue["target
     const result: Array<T & { id: string }> = [];
     for (const [id, items] of seen) {
       result.push(items[0] as T & { id: string });
-      if (items.length > 1) duplicates.push({ id, kind, sources: sourcesOf(items.map((item) => ({ path: item.source.path, line: item.source.line }))) });
+      // One declaration linked into several test binaries (a lib that every integration test links) is seen once per binary: it is the
+      // same declaration, not a duplicate. Only distinct source locations are.
+      const places = new Map<string, { path: string; line: number }>();
+      for (const item of items) places.set(`${item.source.path}:${item.source.line}`, { path: item.source.path, line: item.source.line });
+      if (places.size > 1) duplicates.push({ id, kind, sources: sourcesOf([...places.values()]) });
     }
     return byKey(result, (item) => item.id);
   };

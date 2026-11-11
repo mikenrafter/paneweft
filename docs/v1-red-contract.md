@@ -21,7 +21,7 @@ Week-one scope is amendment S1; claims outside it are tagged `later` in the repo
 | CLI | `src/cli/v1-commands.ts` (table; wiring is green) | `paneweft <words>` as a process |
 | MCP | `src/mcp/server.ts` (wiring is green) | `paneweft mcp` over stdio |
 
-Stubs answer `NOT_IMPLEMENTED` (host: `notImplemented()` Results; SDKs: inert values or `ViewError::not_implemented`). Green deletes
+Green (this branch) implements every module; no `NOT_IMPLEMENTED` remains (`grep -rn NOT_IMPLEMENTED src packages crates scripts` is empty).
 every use: `grep -rn NOT_IMPLEMENTED src packages crates scripts` must be empty. The v0 surface (thirteen tools, v0 help) is
 unchanged in red; `test/v1/surface.test.ts` is the amendment that green must make true, and the three v0 pins of "thirteen tools"
 (`src/cli/usage.test.ts`, `src/cli/repo.test.ts`, `src/core/operations.discovery.test.ts`) are amended in green.

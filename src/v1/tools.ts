@@ -506,6 +506,13 @@ async function viewResult(call: Call): Promise<OperationOutcome> {
   if (observation !== undefined) matches = matches.filter((entry) => objectOf(entry) === observation || entry.viewId === observation || entry.entity.id === observation);
   if (matches.length === 0) return failure(call.format, "NOT_FOUND", `run "${runId}" has no stored view "${wanted}"${observation === undefined ? "" : ` for ${observation}`}`, { details: { candidates: [...new Set(index.map((entry) => entry.viewDefinitionId))].sort(compareCodeUnits) } });
   matches.sort((a, b) => objectNumber(objectOf(a)) - objectNumber(objectOf(b)));
+  if (matches.length > 1 && observation === undefined) {
+    // The selected (top-level) example's own capture wins over the captures of the examples it composed: when exactly one match was
+    // published by an invocation nobody called, that is the answer to "what did the example I asked for show".
+    const captureOf = (entry: (typeof index)[number]): string => entry.entity.id.slice(0, entry.entity.id.lastIndexOf("."));
+    const topLevel = matches.filter((entry) => stored.value.run.invocations.some((invocation) => invocation.capture.captureId === captureOf(entry) && invocation.parent === null));
+    if (topLevel.length === 1) matches = topLevel;
+  }
   if (matches.length > 1) return failure(call.format, "UNRESOLVED_TARGET", `${matches.length} stored views match "${wanted}": name one with observation (an object id)`, { details: { candidates: matches.map((entry) => ({ object: objectOf(entry), storedViewId: entry.viewId, view: entry.viewId, exampleId: exampleOfCapture(stored.value.run, entry.entity.id.slice(0, entry.entity.id.lastIndexOf("."))) ?? null, label: entry.title })) } });
   const entry = matches[0] as (typeof index)[number];
   const loaded = await session.getView({ viewId: entry.viewId, snapshotId });

@@ -120,7 +120,7 @@ function v1Command(spec: V1Command): Command {
 const OWNER_COMMANDS: Command[] = [
   { words: ["adapter", "add"], summary: "register a collection adapter record (owner decision; CLI only)", flags: { "--file": () => undefined }, example: "paneweft adapter add --file fixtures/v1/adapters/cargo.json" },
   { words: ["adapter", "list"], summary: "list the registered adapters", flags: { "--format": () => undefined }, example: "paneweft adapter list --format json" },
-  { words: ["renderers", "trust"], summary: "trust a repo-owned renderer by its content digest (owner decision; CLI only)", flags: { "--repo": () => undefined, "--id": () => undefined, "--digest": () => undefined }, example: "paneweft renderers trust --repo cm --id mapping-card --digest <sha256 from: paneweft renderers list>" },
+  { words: ["renderers", "trust"], summary: "trust a repo-owned renderer by its content digest (owner decision; CLI only)", flags: { "--repo": () => undefined, "--id": () => undefined, "--digest": () => undefined }, example: "paneweft renderers trust --repo cm --id mapping-card --digest e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" },
   { words: ["renderers", "list"], summary: "list the renderers under a registered root with their digests and trust", flags: { "--repo": () => undefined, "--format": () => undefined }, example: "paneweft renderers list --repo cm" },
   { words: ["catalogue", "refresh"], summary: "compile the catalogue by running the reserved export tests through qex (owner/developer command)", flags: { "--repo": () => undefined, "--adapter": () => undefined, "--request-id": () => undefined }, example: "paneweft catalogue refresh --repo vg --adapter cargo" },
 ];

@@ -11,7 +11,7 @@ import type { Session } from "../core/session.ts";
 import type { Catalogue } from "../generated/v1/Catalogue.ts";
 import type { Diagnostic } from "../generated/v1/ObjectGraph.ts";
 import type { TestRun } from "../generated/v1/TestRun.ts";
-import { buildProcess, parseCargoLists, reconcile, selectExamples, type AdapterRecord, type ProcessSpec, type Selection } from "./adapters.ts";
+import { buildProcess, foldExactFilters, parseCargoLists, reconcile, selectExamples, type AdapterRecord, type ProcessSpec, type Selection } from "./adapters.ts";
 import { validateObjectGraph } from "./capture.ts";
 import { mergeCatalogue, type CataloguePart } from "./catalogue.ts";
 import { compareFingerprints, computeFingerprint, sampleConsistency, type Fingerprint } from "./fingerprint.ts";
@@ -161,7 +161,17 @@ function panicLocation(log: string, declared: { source: { path: string; line: nu
   return declared === undefined ? undefined : { path: declared.source.path, line: declared.source.line };
 }
 
-export function createJobService(deps: JobServiceDeps): JobService {
+/** The catalogue the owner's last `catalogue refresh` stored for a repository and adapter (`catalogues/<repo>/<adapter>.json`). */
+async function storedCatalogue(sessionDir: string, repo: string, adapter: string): Promise<Catalogue | null> {
+  try {
+    return (JSON.parse(await readFile(join(sessionDir, "catalogues", repo, `${adapter}.json`), "utf8")) as { catalogue: Catalogue }).catalogue;
+  } catch {
+    return null;
+  }
+}
+
+export function createJobService(rawDeps: JobServiceDeps): JobService {
+  const deps: JobServiceDeps = { ...rawDeps, catalogueFor: rawDeps.catalogueFor ?? ((repo, adapter) => storedCatalogue(rawDeps.sessionDir, repo, adapter)) };
   const now = (): string => (deps.clock?.() ?? new Date()).toISOString();
   const crash = async (point: CrashPoint): Promise<void> => void (await deps.crashAt?.(point));
   const jobDir = (id: string): string => join(deps.sessionDir, "jobs", id);
@@ -265,26 +275,50 @@ export function createJobService(deps: JobServiceDeps): JobService {
 
   // ---- finishing: reconcile, import, terminal state ------------------------------------------------------------------------------
 
-  async function withLease<T>(id: string, body: () => Promise<T>): Promise<{ held: true; value: T } | { held: false }> {
+  /** Ids whose lease THIS service instance holds (re-entrant: the waiter that holds it also performs the import). */
+  const held = new Set<string>();
+
+  /** Creates the lease file unless a LIVE other process holds it; a lease of a dead process is stolen. */
+  async function takeLease(id: string): Promise<boolean> {
     const path = join(jobDir(id), "import.lease");
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         const handle = await open(path, "wx");
         await handle.writeFile(JSON.stringify({ pid: process.pid, at: now() }));
         await handle.close();
-        try {
-          return { held: true, value: await body() };
-        } finally {
-          await unlink(path).catch(() => undefined);
-        }
+        return true;
       } catch (cause) {
         if ((cause as NodeJS.ErrnoException).code !== "EEXIST") throw cause;
       }
       const holder = await readJson<{ pid: number }>(path);
-      if (holder !== undefined && typeof holder.pid === "number" && alive(holder.pid)) return { held: false };
+      if (holder !== undefined && typeof holder.pid === "number" && alive(holder.pid)) return false;
+      if (holder === undefined) {
+        // created but not yet written by its owner: give it a moment rather than stealing a lease that is being taken
+        await sleep(10);
+        if ((await readJson<{ pid: number }>(path)) === undefined && attempt === 2) await unlink(path).catch(() => undefined);
+        continue;
+      }
       await unlink(path).catch(() => undefined);
     }
-    return { held: false };
+    return false;
+  }
+
+  async function leaseIsLive(id: string): Promise<boolean> {
+    const holder = await readJson<{ pid: number }>(join(jobDir(id), "import.lease"));
+    return holder !== undefined && typeof holder.pid === "number" && alive(holder.pid);
+  }
+
+  /** Runs `body` as the follower of the job: the lease is held for the whole body, so no other instance advances or imports meanwhile. */
+  async function withLease<T>(id: string, body: () => Promise<T>): Promise<{ held: true; value: T } | { held: false }> {
+    if (held.has(id)) return { held: true, value: await body() };
+    if (!(await takeLease(id))) return { held: false };
+    held.add(id);
+    try {
+      return { held: true, value: await body() };
+    } finally {
+      held.delete(id);
+      await unlink(join(jobDir(id), "import.lease")).catch(() => undefined);
+    }
   }
 
   async function readStaging(stagingDir: string): Promise<{ invocations: Array<{ started: Record<string, unknown> | null; completed: Record<string, unknown> | null }>; captures: Map<string, { document: unknown; file: string }>; reporter: unknown; typecheck: { exitCode: number; output: string } | undefined; parts: Array<{ name: string; document: Record<string, unknown> }> }> {
@@ -486,10 +520,7 @@ export function createJobService(deps: JobServiceDeps): JobService {
     const adapter = adapterFor(intent.params);
     let state = await readState(id);
     if (state !== undefined && TERMINAL_JOB_STATES.includes(state.state)) return ok({ intent, state });
-    if (state?.state === "importing") {
-      const lease = await readJson<{ pid: number }>(join(jobDir(id), "import.lease"));
-      if (lease !== undefined && typeof lease.pid === "number" && alive(lease.pid)) return ok({ intent, state });
-    }
+    if (!held.has(id) && (await leaseIsLive(id))) return ok({ intent, state }); // another live instance follows this job: observe, do not interfere
     if (adapter === undefined) return err("NOT_FOUND", `the adapter "${intent.params.adapter}" of job "${id}" is not registered any more`, { errors: [{ code: "CONSTRAINT", pointer: "/adapter", constraint: "a registered adapter", hint: "Register it again with: paneweft adapter add (owner action)" }] });
     const submitted = await ensureSubmitted(id, intent);
     if (!submitted.ok) return submitted;
@@ -545,7 +576,8 @@ export function createJobService(deps: JobServiceDeps): JobService {
     const built = buildProcess(adapter, selection, mode, { runId, stagingDir, attempt: 1, ...(params.limits === undefined ? {} : { limits: params.limits }) });
     if (!built.ok) return built;
     const timeoutMs = adapter.limits.timeoutMs;
-    const created = await createIntent(id, params, { selection, process: built.value, timeoutMs, runId, stagingDir });
+    const process = adapter.grammar === "cargo-test/1" ? { ...built.value, argv: foldExactFilters(built.value.argv) } : built.value;
+    const created = await createIntent(id, params, { selection, process, timeoutMs, runId, stagingDir });
     if (!created.ok) return created;
     if (!created.value.created) {
       const advanced = await advance(id);
@@ -570,7 +602,21 @@ export function createJobService(deps: JobServiceDeps): JobService {
       if (!Number.isInteger(wait) || wait < 0 || wait > 30) return err("INVALID_ARGUMENT", `waitSeconds must be an integer from 0 to 30 (got ${String(wait)}): a status wait is bounded to 30 seconds`, { errors: [{ code: "OUT_OF_RANGE", pointer: "/waitSeconds", constraint: "maximum: 30", hint: "Call again to keep waiting." }] });
       const deadline = Date.now() + wait * 1000;
       let stopped: QexJob | undefined;
+      // A status that waits FOLLOWS the job: it holds the lease for the whole wait, is woken by qex the moment the job stops, and performs
+      // the import itself. Other instances that look meanwhile observe the persisted state and never race it.
+      const following = wait > 0 && !held.has(id) && (await readIntent(id)) !== undefined && (await takeLease(id));
+      if (following) held.add(id);
+      try {
       for (;;) {
+        if (wait > 0 && !held.has(id) && (await leaseIsLive(id))) {
+          // somebody else follows this job: read what they persist
+          const intent = await readIntent(id);
+          const state = await readState(id);
+          if (intent === undefined) return err("NOT_FOUND", `no collection job "${id}" in this session`);
+          if ((state !== undefined && TERMINAL_JOB_STATES.includes(state.state)) || Date.now() >= deadline) return ok(view(id, intent, state, false));
+          await sleep(100);
+          continue;
+        }
         const advanced = await advance(id, stopped);
         stopped = undefined;
         if (!advanced.ok) return advanced;
@@ -599,6 +645,12 @@ export function createJobService(deps: JobServiceDeps): JobService {
           }
         }
         await sleep(100);
+      }
+      } finally {
+        if (following) {
+          held.delete(id);
+          await unlink(join(jobDir(id), "import.lease")).catch(() => undefined);
+        }
       }
     },
 

@@ -187,6 +187,25 @@ export function buildProcess(adapter: AdapterRecord, selection: Selection, mode:
   return ok({ executable: adapter.executable, argv, cwd: packageDir, env });
 }
 
+/** libtest accepts `--exact` ONCE ("Option 'exact' given more than once") and then any number of test names, whereas the cargo-test/1
+ * grammar states one `--exact <name>` pair per example. The pure grammar keeps its pairs; this folds them into the single form the real
+ * binary takes, at the moment a process is handed to the queue. */
+export function foldExactFilters(argv: string[]): string[] {
+  const split = argv.indexOf("--");
+  if (split < 0) return argv;
+  const head = argv.slice(0, split + 1);
+  const names: string[] = [];
+  const rest: string[] = [];
+  const tail = argv.slice(split + 1);
+  for (let index = 0; index < tail.length; index += 1) {
+    if (tail[index] === "--exact" && index + 1 < tail.length) {
+      names.push(tail[index + 1] as string);
+      index += 1;
+    } else rest.push(tail[index] as string);
+  }
+  return names.length === 0 ? argv : [...head, "--exact", ...names, ...rest];
+}
+
 // ---- reconciliation (S6) ----------------------------------------------------------------------------------------------------------
 
 export interface ReconcileInput {
