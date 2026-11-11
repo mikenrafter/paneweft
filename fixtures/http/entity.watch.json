@@ -1,0 +1,114 @@
+{
+  "entity": {
+    "repository": "r",
+    "id": "watch",
+    "kind": "vigil/watch",
+    "snapshotId": "snap-1",
+    "label": "watch",
+    "dataRoles": [
+      "modules",
+      "layout",
+      "delivery",
+      "source",
+      "shape",
+      "example"
+    ],
+    "relations": [
+      {
+        "name": "module",
+        "target": {
+          "repository": "r",
+          "id": "mcp",
+          "kind": "code/module"
+        }
+      }
+    ]
+  },
+  "views": {
+    "views": [
+      {
+        "definitionId": "def-modules",
+        "title": "Modules",
+        "priority": 10,
+        "component": "list",
+        "availability": {
+          "status": "available"
+        },
+        "fallback": false
+      },
+      {
+        "definitionId": "def-layout",
+        "title": "Layout",
+        "priority": 20,
+        "component": "tree",
+        "availability": {
+          "status": "available"
+        },
+        "fallback": false
+      },
+      {
+        "definitionId": "def-delivery",
+        "title": "Delivery path",
+        "priority": 30,
+        "component": "graph",
+        "availability": {
+          "status": "available"
+        },
+        "fallback": false
+      },
+      {
+        "definitionId": "def-source",
+        "title": "Denial branch",
+        "priority": 40,
+        "component": "source",
+        "availability": {
+          "status": "available"
+        },
+        "fallback": false
+      },
+      {
+        "definitionId": "def-shape",
+        "title": "Watch shape",
+        "priority": 50,
+        "component": "shape",
+        "availability": {
+          "status": "available"
+        },
+        "fallback": false
+      },
+      {
+        "definitionId": "def-example",
+        "title": "One change fires",
+        "priority": 60,
+        "component": "example",
+        "availability": {
+          "status": "available"
+        },
+        "fallback": false
+      },
+      {
+        "definitionId": "builtin:metadata",
+        "title": "Metadata",
+        "priority": 1000,
+        "component": "shape",
+        "availability": {
+          "status": "available"
+        },
+        "fallback": true
+      },
+      {
+        "definitionId": "builtin:raw",
+        "title": "Raw",
+        "priority": 1001,
+        "component": "shape",
+        "availability": {
+          "status": "available"
+        },
+        "fallback": true
+      }
+    ],
+    "selected": {
+      "definitionId": "def-modules"
+    }
+  }
+}

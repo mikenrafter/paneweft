@@ -1,0 +1,68 @@
+{
+  "revision": 7,
+  "definitions": [
+    {
+      "id": "def-modules",
+      "entityKind": "vigil/watch",
+      "title": "Modules",
+      "priority": 10,
+      "component": "list",
+      "requires": [],
+      "dataRole": "modules"
+    },
+    {
+      "id": "def-layout",
+      "entityKind": "vigil/watch",
+      "title": "Layout",
+      "priority": 20,
+      "component": "tree",
+      "requires": [],
+      "dataRole": "layout"
+    },
+    {
+      "id": "def-delivery",
+      "entityKind": "vigil/watch",
+      "title": "Delivery path",
+      "priority": 30,
+      "component": "graph",
+      "requires": [],
+      "dataRole": "delivery"
+    },
+    {
+      "id": "def-source",
+      "entityKind": "vigil/watch",
+      "title": "Denial branch",
+      "priority": 40,
+      "component": "source",
+      "requires": [],
+      "dataRole": "source"
+    },
+    {
+      "id": "def-shape",
+      "entityKind": "vigil/watch",
+      "title": "Watch shape",
+      "priority": 50,
+      "component": "shape",
+      "requires": [],
+      "dataRole": "shape"
+    },
+    {
+      "id": "def-example",
+      "entityKind": "vigil/watch",
+      "title": "One change fires",
+      "priority": 60,
+      "component": "example",
+      "requires": [],
+      "dataRole": "example"
+    },
+    {
+      "id": "def-story",
+      "entityKind": "notes/page",
+      "title": "Cancellation notebook",
+      "priority": 10,
+      "component": "notebook",
+      "requires": [],
+      "dataRole": "story"
+    }
+  ]
+}

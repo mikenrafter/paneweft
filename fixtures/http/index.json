@@ -1,0 +1,46 @@
+{
+  "views": [
+    {
+      "viewId": "modules",
+      "snapshotId": "snap-1",
+      "component": "list",
+      "title": "Modules"
+    },
+    {
+      "viewId": "layout",
+      "snapshotId": "snap-1",
+      "component": "tree",
+      "title": "Layout"
+    },
+    {
+      "viewId": "delivery-path",
+      "snapshotId": "snap-1",
+      "component": "graph",
+      "title": "Delivery path"
+    },
+    {
+      "viewId": "check-source",
+      "snapshotId": "snap-1",
+      "component": "source",
+      "title": "Denial branch"
+    },
+    {
+      "viewId": "watch-shape",
+      "snapshotId": "snap-1",
+      "component": "shape",
+      "title": "Watch shape"
+    },
+    {
+      "viewId": "cancellation-notebook",
+      "snapshotId": "snap-1",
+      "component": "notebook",
+      "title": "Cancellation notebook"
+    },
+    {
+      "viewId": "vigil-one-write",
+      "snapshotId": "snap-1",
+      "component": "example",
+      "title": "One change fires"
+    }
+  ]
+}

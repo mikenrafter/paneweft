@@ -1,0 +1,23 @@
+{
+  "expectedRevision": 1,
+  "blocks": [
+    {
+      "id": "b2",
+      "kind": "view",
+      "viewId": "delivery-path",
+      "provenance": "read",
+      "evidence": [
+        "s1"
+      ]
+    },
+    {
+      "id": "b1",
+      "kind": "prose",
+      "markdown": "Why does cancellation preserve a result?",
+      "provenance": "read",
+      "evidence": [
+        "s1"
+      ]
+    }
+  ]
+}

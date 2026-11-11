@@ -105,3 +105,12 @@ target.
 `assertion` (`data-passed`, text = statement and PASS/FAIL), `result-link` (entity), `rerun-instruction`
 (text names the CLI command `paneweft example run <runnerId>`; the viewer never runs anything),
 `not-run` (shown when `runs` is empty; text `not run`).
+
+## Round 2 addition (S7): notebook editing
+
+`block` (notebook) contains two `block-move` buttons, `data-direction="up"` and `data-direction="down"` (aria-label
+`Move <block id> up|down`; the first block has no `up`, the last no `down`). Activating one reorders the page's blocks and calls
+`ViewerSource.updateNotebook(pageId, revision, blocks)` (HTTP: `POST /api/notebooks/<pageId>/revisions`
+`{expectedRevision, blocks}`). `notebook-revision` (`data-revision`, text `revision N`) shows the revision the page was read at and
+becomes N+1 after a successful write; a `CONFLICT` answer shows an `error` element (`data-code="CONFLICT"`) and leaves the page and
+its revision unchanged. Editing prose is later work; only reordering is pinned.

@@ -1,0 +1,50 @@
+{
+  "entity": {
+    "repository": "r",
+    "id": "notes",
+    "kind": "notes/page",
+    "snapshotId": "snap-1",
+    "label": "notes",
+    "dataRoles": [
+      "story"
+    ],
+    "relations": []
+  },
+  "views": {
+    "views": [
+      {
+        "definitionId": "def-story",
+        "title": "Cancellation notebook",
+        "priority": 10,
+        "component": "notebook",
+        "availability": {
+          "status": "available"
+        },
+        "fallback": false
+      },
+      {
+        "definitionId": "builtin:metadata",
+        "title": "Metadata",
+        "priority": 1000,
+        "component": "shape",
+        "availability": {
+          "status": "available"
+        },
+        "fallback": true
+      },
+      {
+        "definitionId": "builtin:raw",
+        "title": "Raw",
+        "priority": 1001,
+        "component": "shape",
+        "availability": {
+          "status": "available"
+        },
+        "fallback": true
+      }
+    ],
+    "selected": {
+      "definitionId": "def-story"
+    }
+  }
+}
