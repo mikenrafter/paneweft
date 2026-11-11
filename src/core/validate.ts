@@ -19,6 +19,7 @@ import { compareCodeUnits, canonicalJson } from "./canonical.ts";
 import type { IssueCode, ValidationIssue } from "./errors.ts";
 import { LIMITS } from "./limits.ts";
 import { createSchemaRegistry, loadSchemaDocuments, type SchemaDocument } from "../schemas/index.ts";
+import { createAjv } from "../schemas/ajv.ts";
 import type { EntityRef } from "./wire.ts";
 
 /** A registered view definition as the context knows it (S8): identity plus the metadata an instance must agree with. */
@@ -789,4 +790,29 @@ export function validateDefinition(input: unknown, registered: Array<{ id: strin
     }
   }
   return reportOf("definition", issues);
+}
+
+// ---- owner-supplied schemas (runner parameters) -------------------------------------------------------------------
+
+const ownerSchemas = new Map<string, ValidateFunction>();
+/**
+ * Validates `value` against a JSON Schema the OWNER wrote (a runner's parameterSchema) and reports issues in the same vocabulary as
+ * every other validation, with pointers prefixed by `prefix`. An owner schema that cannot be compiled is a CONSTRAINT issue at
+ * the prefix rather than an exception.
+ */
+export function validateAgainstOwnerSchema(schema: Record<string, unknown>, value: unknown, prefix: string): ValidationIssue[] {
+  const key = canonicalJson(schema);
+  let validate = ownerSchemas.get(key);
+  if (validate === undefined) {
+    try {
+      validate = createAjv({ verbose: true, strict: false }).compile(schema);
+      ownerSchemas.set(key, validate);
+    } catch (error) {
+      return [{ code: "CONSTRAINT", pointer: prefix, constraint: "owner schema", hint: `The runner's parameterSchema cannot be compiled: ${error instanceof Error ? error.message : String(error)}` }];
+    }
+  }
+  if (validate(value)) return [];
+  const issues = new IssueSet();
+  normaliseAjvErrors(validate.errors ?? [], issues, prefix);
+  return issues.sorted();
 }
