@@ -51,6 +51,10 @@ export interface SessionTestHooks {
   onLockContended?: (info: { operation: string }) => void | Promise<void>;
   /** S5: after reading the manifest INSIDE the lock; held until the hook resolves. */
   afterManifestRead?: (info: { operation: string }) => void | Promise<void>;
+  /** S2: a contender decided the lock's owner is dead, before it tries to break the lock. Other contenders may finish recovery while this is held. */
+  afterStaleObserved?: (info: { operation: string }) => void | Promise<void>;
+  /** S2: that contender's attempt to break the stale lock finished; `broke` says whether it removed the lock it had judged stale. */
+  afterStaleResolved?: (info: { operation: string; broke: boolean }) => void | Promise<void>;
   /** Called immediately before the manifest swap of a mutation; throwing simulates a failed save. */
   beforeManifestSwap?: (info: { operation: string }) => void | Promise<void>;
   /** Called after each file written while staging a mutation. */
@@ -328,14 +332,16 @@ class DirectorySession implements Session {
         contended = true;
         await this.hooks.onLockContended?.({ operation });
       }
-      if (await this.breakStaleLock(lock)) continue;
+      if (await this.breakStaleLock(lock, operation)) continue;
       if (Date.now() > deadline) throw new LockTimeout();
       await new Promise<void>((resolve) => setTimeout(resolve, LOCK_POLL_MS));
     }
   }
 
   /** A lock whose owner process is gone (and that is not brand new) is removed. */
-  private async breakStaleLock(lock: string): Promise<boolean> {
+  private async breakStaleLock(lock: string, operation: string): Promise<boolean> {
+    let broke = false;
+    let observedDead = false;
     try {
       const info = await stat(lock);
       const text = await readFile(join(lock, "owner"), "utf8").catch(() => null);
@@ -343,11 +349,16 @@ class DirectorySession implements Session {
       const age = Date.now() - info.mtimeMs;
       const ownerAlive = owner?.pid === undefined ? age < 5_000 : processIsAlive(owner.pid);
       if (ownerAlive) return false;
+      observedDead = true;
+      await this.hooks.afterStaleObserved?.({ operation });
       await unlink(join(lock, "owner")).catch(() => {});
       await rmdir(lock);
+      broke = true;
       return true;
     } catch {
       return false;
+    } finally {
+      if (observedDead) await this.hooks.afterStaleResolved?.({ operation, broke });
     }
   }
 
