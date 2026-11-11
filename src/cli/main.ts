@@ -62,16 +62,18 @@ const COMMANDS: Command[] = [
   { words: ["notebook", "update"], summary: "replace a notebook page's blocks against an expected revision", tool: "notebook_update", flags: {} },
   { words: ["example", "record"], summary: "record one run of an example with its result bundle", tool: "example_record", flags: {} },
   { words: ["example", "run"], summary: "run an owner-registered runner and record its result", flags: { "--runners": () => undefined, "--view": () => undefined, "--snapshot": () => undefined, "--format": () => undefined }, repeatable: ["--param"], positional: { name: "RUNNER_ID" } },
+  { words: ["repo", "add"], summary: "register a repository root (ID=ROOT) so freshness can be checked; CLI only", flags: {}, positional: { name: "ID=ROOT" } },
+  { words: ["repo", "list"], summary: "list the registered repository roots", flags: { "--format": () => undefined } },
   { words: ["serve"], summary: "serve the local viewer for a session", flags: { "--host": () => undefined, "--port": () => undefined, "--assets": () => undefined }, repeatable: ["--repo"] },
   { words: ["mcp"], summary: "serve the tools over stdio MCP", flags: {} },
 ];
-const TOP_LEVEL = ["components", "describe", "validate", "render", "register", "open", "navigate", "inspect", "search", "notebook", "example", "serve", "mcp"];
+const TOP_LEVEL = ["components", "describe", "validate", "render", "register", "open", "navigate", "inspect", "search", "notebook", "example", "repo", "serve", "mcp"];
 
 function helpText(): string {
   const width = Math.max(...TOP_LEVEL.map((word) => word.length));
   const lines = TOP_LEVEL.map((word) => {
     const first = COMMANDS.find((command) => command.words[0] === word) as Command;
-    const summary = first.words.length === 1 ? first.summary : word === "notebook" ? "create, get and update notebook pages" : "record or run examples";
+    const summary = first.words.length === 1 ? first.summary : word === "notebook" ? "create, get and update notebook pages" : word === "repo" ? "register and list repository roots (CLI only)" : "record or run examples";
     return `  ${word.padEnd(width)}  ${summary}`;
   });
   return [
@@ -273,6 +275,27 @@ async function runExampleCommand(parsed: Parsed, session: Session | null, io: Cl
   return 0;
 }
 
+/** `repo add ID=ROOT` / `repo list`: repository roots decide whether freshness can be verified. CLI only: no MCP tool can name a directory to trust. */
+async function repoCommand(parsed: Parsed, session: Session | null, io: CliIo): Promise<number> {
+  const word = parsed.command.words.join(" ");
+  if (session === null) throw new UsageError(`${word} needs --session DIR (or PANEWEFT_SESSION)`);
+  if (word === "repo add") {
+    const entry = parsed.positional[0];
+    const at = entry === undefined ? -1 : entry.indexOf("=");
+    if (entry === undefined || at <= 0 || at === entry.length - 1) throw new UsageError(`repo add needs ID=ROOT, not ${entry === undefined ? "nothing" : `"${entry}"`}`);
+    const root = resolve(io.cwd, entry.slice(at + 1));
+    const registered = await session.registerRepository({ id: entry.slice(0, at), root });
+    if (!registered.ok) return printError(registered.error, io);
+    io.stdout(`registered ${entry.slice(0, at)} -> ${root}\n`);
+    return 0;
+  }
+  const format = parsed.values.get("--format") ?? "text";
+  if (format !== "text" && format !== "json") throw new UsageError(`--format must be text or json, not "${format}"`);
+  const repositories = await session.repositories();
+  io.stdout(format === "json" ? JSON.stringify({ schemaVersion: "paneweft.repositories/1", repositories }) : repositories.map((repository) => `${repository.id}=${repository.root}\n`).join(""));
+  return 0;
+}
+
 async function serveCommand(parsed: Parsed, session: Session | null, io: CliIo): Promise<number> {
   if (session === null) throw new UsageError("serve needs --session DIR (or PANEWEFT_SESSION)");
   for (const entry of parsed.repeated.get("--repo") ?? []) {
@@ -320,6 +343,7 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
     try {
       const word = command.words.join(" ");
       if (word === "example run") return await runExampleCommand(parsed, session, io);
+      if (word === "repo add" || word === "repo list") return await repoCommand(parsed, session, io);
       if (word === "serve") return await serveCommand(parsed, session, io);
       if (word === "mcp") {
         const { runMcpStdio } = await import("../mcp/server.ts");

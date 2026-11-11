@@ -15,13 +15,13 @@ import { issuePairs, parseBody, runnerRegistryFor, seedClosed, wireJson, wirePat
 
 const makeTemp = useTempDirs();
 
-/** The thirteen commands of red-contract 9 (`register` added by S9), pinned by name (an emptied list must not pass). */
-const COMMANDS = ["components", "describe", "validate", "render", "register", "open", "navigate", "inspect", "search", "notebook", "example", "serve", "mcp"];
+/** The fourteen commands of red-contract 9 (`register` added by S9, `repo` by T3), pinned by name (an emptied list must not pass). */
+const COMMANDS = ["components", "describe", "validate", "render", "register", "open", "navigate", "inspect", "search", "notebook", "example", "repo", "serve", "mcp"];
 
 describe("cli: help and unknown commands", () => {
   // why: an agent discovers the surface through `--help`; a command missing from it is undiscoverable (red-contract 9).
   // proves: CLAIM(MC11)
-  it("[MC11] `paneweft --help` exits 0 and lists all thirteen commands on stdout, nothing on stderr", async () => {
+  it("[MC11] `paneweft --help` exits 0 and lists all fourteen commands on stdout, nothing on stderr", async () => {
     const run = await runCliInProcess(["--help"]);
     expect(run.exitCode).toBe(0);
     expect(run.stderr).toBe("");

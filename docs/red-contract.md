@@ -228,11 +228,18 @@ into the session directory while serving and removed on `close`; `render` replie
 
 `paneweft [--session DIR] <command> ...` (`PANEWEFT_SESSION` is the fallback). Commands: `components`,
 `describe`, `validate`, `render`, `open`, `navigate`, `inspect`, `search`, `notebook create|get|update`,
-`example record|run`, `serve`, `mcp`. Every operation command accepts the tool's arguments verbatim as
+`example record|run`, `repo add|list`, `serve`, `mcp`. Every operation command accepts the tool's arguments verbatim as
 `--args '<json>'`, `--args-file FILE` or `--args-file -`; flags (`--file`, `--format`, `--max-bytes`,
 `--cursor`, `--component`...) are sugar for the same arguments. stdout = the reply body (also for
 operation errors); exit 0 ok, 1 operation error, 2 usage error (stderr). CLI and MCP bodies for the same
 request are byte-identical (except `viewerUrl` when a server runs).
+
+CLI-only commands (no MCP tool, because a model must not be able to name a directory to trust):
+`repo add ID=ROOT` registers a repository root (relative ROOT resolved against the working directory; the id ends at
+the first `=`; an existing id gets the new root) and prints `registered ID -> ROOT`; `repo list [--format text|json]`
+prints `ID=ROOT` lines or `{"schemaVersion":"paneweft.repositories/1","repositories":[{id,root}]}`. Both need a session.
+`example run` accepts `--format text|json` (JSON: `{"schemaVersion":"paneweft.example_run/1","recorded":{...}}`).
+A session directory that cannot be opened is reported as its `STORAGE_FAILED` error (exit 1), not as `SESSION_REQUIRED`.
 
 ## 10. Runners (`runner.ts`)
 
