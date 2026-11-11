@@ -61,7 +61,7 @@ const COMMANDS: Command[] = [
   { words: ["notebook", "get"], summary: "read a notebook page", tool: "notebook_get", flags: { "--page": (v, a) => setOnce(a, "pageId", v, "--page"), "--snapshot": (v, a) => setOnce(a, "snapshotId", v, "--snapshot"), "--revision": () => undefined } },
   { words: ["notebook", "update"], summary: "replace a notebook page's blocks against an expected revision", tool: "notebook_update", flags: {} },
   { words: ["example", "record"], summary: "record one run of an example with its result bundle", tool: "example_record", flags: {} },
-  { words: ["example", "run"], summary: "run an owner-registered runner and record its result", flags: { "--runners": () => undefined, "--view": () => undefined, "--snapshot": () => undefined }, repeatable: ["--param"], positional: { name: "RUNNER_ID" } },
+  { words: ["example", "run"], summary: "run an owner-registered runner and record its result", flags: { "--runners": () => undefined, "--view": () => undefined, "--snapshot": () => undefined, "--format": () => undefined }, repeatable: ["--param"], positional: { name: "RUNNER_ID" } },
   { words: ["serve"], summary: "serve the local viewer for a session", flags: { "--host": () => undefined, "--port": () => undefined, "--assets": () => undefined }, repeatable: ["--repo"] },
   { words: ["mcp"], summary: "serve the tools over stdio MCP", flags: {} },
 ];
@@ -261,7 +261,8 @@ async function runExampleCommand(parsed: Parsed, session: Session | null, io: Cl
     } catch { /* a plain string */ }
     parameters[entry.slice(0, at)] = value;
   }
-  const format = parsed.values.get("--format") === "json" ? "json" : "text";
+  const format = parsed.values.get("--format") ?? "text";
+  if (format !== "text" && format !== "json") throw new UsageError(`--format must be text or json, not "${format}"`);
   if (session === null) return errorBody("SESSION_REQUIRED", "example run needs a session; pass --session DIR (or set PANEWEFT_SESSION)", io);
   const registry = parsed.values.get("--runners") ?? io.env.PANEWEFT_RUNNERS;
   if (registry === undefined) return errorBody("RUNNER_NOT_FOUND", "no runner registry is configured; pass --runners FILE (or set PANEWEFT_RUNNERS)", io);
