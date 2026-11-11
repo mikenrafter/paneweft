@@ -1,0 +1,12 @@
+{
+  "name": "@paneweft/sdk",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Paneweft TypeScript SDK: typed views and executable examples beside the code they explain. Development-only: never import it from a production entry point.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./vitest": "./src/vitest.ts"
+  },
+  "files": ["src"]
+}

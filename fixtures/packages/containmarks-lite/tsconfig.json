@@ -1,0 +1,12 @@
+{
+  "extends": "../../../tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "@paneweft/sdk": ["../../../packages/paneweft-ts/src/index.ts"],
+      "@paneweft/sdk/vitest": ["../../../packages/paneweft-ts/src/vitest.ts"]
+    }
+  },
+  "include": ["src", "tests", "paneweft.views.ts", "vitest.config.ts"]
+}
