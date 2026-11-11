@@ -1,8 +1,14 @@
 // Capture validation and the lowering of SDK records into v0 envelopes (docs/v1-red-contract.md sections 3 and 4).
-import type { Result } from "../core/errors.ts";
+//
+// Admission is the trust boundary for SDK artifacts: schema, every cross reference, every content hash and the run binding are
+// checked BEFORE anything is stored, and every fault carries the JSON pointer of the offending member. Lowering turns the records
+// into ordinary paneweft.view/1 envelopes, so the unchanged v0 operations (open_entity, navigate, inspect_view) serve them.
+import { canonicalJson } from "../core/canonical.ts";
+import { sha256Hex } from "../core/digest.ts";
+import { err, ok, type Result, type ValidationIssue } from "../core/errors.ts";
 import type { Entity, EntityRef, Envelope, ViewDefinition } from "../core/wire.ts";
 import type { ObjectGraph, ObjectRecord, ViewRecord } from "../generated/v1/ObjectGraph.ts";
-import { notImplemented } from "./stub.ts";
+import { validateAgainstV1 } from "./schemas.ts";
 
 export interface LowerContext {
   repo: string;
@@ -13,32 +19,195 @@ export interface LowerContext {
   generatedAt: string;
 }
 
-/** Admission of one SDK artifact: the schema, every cross reference (edge targets, roots, view objects, row targets, page ids and
- * hashes), the content hash of every object record, and the run binding: `graph.runId` must equal `expectedRunId` or the artifact is
- * foreign/stale and refused. STUB. */
-export function validateObjectGraph(document: unknown, context: { expectedRunId: string }): Result<ObjectGraph> {
-  return notImplemented("validateObjectGraph");
-}
+const issue = (code: ValidationIssue["code"], pointer: string, constraint: string, hint: string): ValidationIssue => ({ code, pointer, constraint, hint });
 
-/** The content hash of an object record: sha256 of the canonical JSON of {domainKey, fields, label, typeId}. STUB: "". */
+/** The content hash of an object record: sha256 of the canonical JSON of {domainKey, fields, label, typeId}. */
 export function objectContentHash(record: Pick<ObjectRecord, "typeId" | "domainKey" | "label" | "fields">): string {
-  return "";
+  return sha256Hex(canonicalJson({ domainKey: record.domainKey, fields: record.fields, label: record.label, typeId: record.typeId }));
 }
 
-/** `vigil::watch::WatchFile` -> `vigil/watch/watch-file` (section 4). STUB: "". */
+/** `vigil::watch::WatchFile` -> `vigil/watch/watch-file`: lowercase, `::` -> `/`, CamelCase -> kebab-case (section 4). Characters a kind
+ * cannot hold become `-`, and a segment that would not start with a letter gets a `t` prefix, so the result is always a valid kind. */
 export function entityKindOf(typeId: string): string {
-  return "";
+  const segment = (text: string): string => {
+    const kebab = text.replace(/([a-z0-9])([A-Z])/g, "$1-$2").toLowerCase().replace(/[^a-z0-9_.-]/g, "-");
+    return /^[a-z]/.test(kebab) ? kebab : `t${kebab}`;
+  };
+  const kind = typeId.split("::").filter((part) => part.length > 0).map(segment).join("/");
+  return kind.length > 0 ? kind.slice(0, 128) : "t";
 }
 
-/** The entity an object record maps to: {repo, `<captureId>.<objectId>`, kind}. STUB. */
+const entityId = (graph: Pick<ObjectGraph, "captureId">, objectId: string): string => `${graph.captureId}.${objectId}`;
+
+function recordOf(graph: ObjectGraph, objectId: string): ObjectRecord {
+  const record = graph.objects.find((candidate) => candidate.id === objectId);
+  if (record === undefined) throw new Error(`object ${objectId} is not in capture ${graph.captureId}`);
+  return record;
+}
+
+/** The entity an object record maps to: {repo, `<captureId>.<objectId>`, kind} in the snapshot of its run. The data roles are the ids of
+ * the views the object has, so a declared view with no captured instance is distinguishable from an available one. */
 export function entityOfObject(repo: string, graph: ObjectGraph, objectId: string): Entity {
-  return { repository: repo, id: "", kind: "", snapshotId: "", label: "", dataRoles: [], relations: [] };
+  const record = recordOf(graph, objectId);
+  const relations: Entity["relations"] = [];
+  for (const edge of record.edges) {
+    if (edge.kind === "not-captured" || edge.target === undefined) continue;
+    const target = recordOf(graph, edge.target);
+    relations.push({ name: edge.name, target: { repository: repo, id: entityId(graph, target.id), kind: entityKindOf(target.typeId) } });
+  }
+  return { repository: repo, id: entityId(graph, objectId), kind: entityKindOf(record.typeId), snapshotId: `snap-${graph.runId}`, label: record.label.length > 0 ? record.label : record.id, dataRoles: [...record.views], relations };
+}
+
+/** Admission of one SDK artifact. `expectedRunId` is the run being imported: a graph of another run is foreign or stale and refused. */
+export function validateObjectGraph(document: unknown, context: { expectedRunId: string }): Result<ObjectGraph> {
+  const shape = validateAgainstV1("urn:paneweft:schema:v1:object-graph:1", document);
+  if (shape.length > 0) return err("VALIDATION_FAILED", `the object graph does not match paneweft.object-graph/1 (${shape.length} fault${shape.length === 1 ? "" : "s"})`, { errors: shape });
+  const graph = document as ObjectGraph;
+  const issues: ValidationIssue[] = [];
+  if (graph.runId !== context.expectedRunId) {
+    issues.push(issue("CONSTRAINT", "/runId", `const: ${JSON.stringify(context.expectedRunId)}`, `This graph was captured by run "${graph.runId}", not by the run being imported ("${context.expectedRunId}"); a stale or foreign artifact cannot satisfy this run. Recollect.`));
+    return err("VALIDATION_FAILED", "the object graph belongs to another run", { errors: issues });
+  }
+  const ids = new Set<string>();
+  graph.objects.forEach((object, index) => {
+    if (ids.has(object.id)) issues.push(issue("DUPLICATE_ID", `/objects/${index}/id`, "object ids are unique within a capture", `The id "${object.id}" appears twice.`));
+    ids.add(object.id);
+  });
+  const dangling = (pointer: string, target: string, what: string): void => {
+    if (!ids.has(target)) issues.push(issue("DANGLING_REFERENCE", pointer, `${what} names an object of this capture`, `"${target}" is not an object id of capture "${graph.captureId}".`));
+  };
+  graph.roots.forEach((root, index) => dangling(`/roots/${index}`, root, "a root"));
+  let references = 0;
+  graph.objects.forEach((object, index) => {
+    const expected = objectContentHash(object);
+    if (object.contentHash !== expected) issues.push(issue("CONSTRAINT", `/objects/${index}/contentHash`, `sha256 of the canonical {domainKey, fields, label, typeId} is ${expected}`, "The record was edited after it was hashed; recapture instead of editing the artifact."));
+    object.edges.forEach((edge, edgeIndex) => {
+      if (edge.kind === "not-captured") return;
+      references += 1;
+      if (edge.target !== undefined) dangling(`/objects/${index}/edges/${edgeIndex}/target`, edge.target, "an edge target");
+    });
+  });
+  const pageIds = new Set(graph.pages.map((page) => page.pageId));
+  const seenViews = new Set<string>();
+  const checkRows = (rows: unknown[], base: string): void => {
+    rows.forEach((row, rowIndex) => {
+      const target = (row as { target?: { object?: string } } | null)?.target;
+      if (target?.object !== undefined) dangling(`${base}/${rowIndex}/target/object`, target.object, "a row target");
+    });
+  };
+  graph.views.forEach((view, index) => {
+    dangling(`/views/${index}/objectId`, view.objectId, "a view's object");
+    const key = `${view.objectId}\u0000${view.viewId}`;
+    if (seenViews.has(key)) issues.push(issue("DUPLICATE_ID", `/views/${index}/viewId`, "a view id is recorded once per object", `Object "${view.objectId}" already has a record for "${view.viewId}".`));
+    seenViews.add(key);
+    if (view.component === "list" && view.data !== undefined) {
+      const rows = (view.data as { rows?: unknown[] }).rows ?? [];
+      checkRows(rows, `/views/${index}/data/rows`);
+      if (rows.length > graph.limits.viewRows) issues.push(issue("LIMIT_EXCEEDED", `/views/${index}/data/rows`, `at most ${graph.limits.viewRows} rows per view (the capture's own limit)`, "Recollect with fewer rows or a larger declared limit."));
+    }
+    view.pages.forEach((page, pageIndex) => {
+      if (!pageIds.has(page.pageId)) issues.push(issue("DANGLING_REFERENCE", `/views/${index}/pages/${pageIndex}/pageId`, "a view page names a stored page of this capture", `No stored page "${page.pageId}" is in the capture.`));
+    });
+  });
+  graph.pages.forEach((page, index) => {
+    const expected = `sha256:${sha256Hex(canonicalJson(page.rows))}`;
+    if (page.pageId !== expected) issues.push(issue("CONSTRAINT", `/pages/${index}/pageId`, `the page id is the sha256 of its canonical rows (${expected})`, "A stored page is content addressed; a page whose id does not match its rows is refused."));
+    dangling(`/pages/${index}/objectId`, page.objectId, "a page's object");
+    checkRows(page.rows, `/pages/${index}/rows`);
+  });
+  if (graph.objects.length > graph.limits.objects) issues.push(issue("LIMIT_EXCEEDED", "/objects", `at most ${graph.limits.objects} objects (the capture's own limit)`, "The artifact exceeds the limits it declares; a hostile or buggy SDK produced it."));
+  if (references > graph.limits.references) issues.push(issue("LIMIT_EXCEEDED", "/objects", `at most ${graph.limits.references} references (the capture's own limit)`, "The artifact exceeds the limits it declares."));
+  if (graph.roots.length > graph.limits.roots) issues.push(issue("LIMIT_EXCEEDED", "/roots", `at most ${graph.limits.roots} roots (the capture's own limit)`, "The artifact exceeds the limits it declares."));
+  if (issues.length > 0) return err("VALIDATION_FAILED", `the object graph is not admissible (${issues.length} fault${issues.length === 1 ? "" : "s"})`, { errors: issues.sort((a, b) => (a.pointer < b.pointer ? -1 : a.pointer > b.pointer ? 1 : 0)) });
+  return ok(graph);
+}
+
+function limitsSummary(graph: ObjectGraph): string {
+  const { depth, objects, references, stringBytes, pageRows } = graph.limits;
+  return `captured under depth ${depth}, objects ${objects}, references ${references}, string ${stringBytes} bytes, ${pageRows} rows per stored page`;
+}
+
+/** The v0 completeness of a view record. A complete capture names its criterion; every omission is a named gap; rows kept in stored
+ * pages are a gap too, because the envelope holds only the first page. */
+function lowerCompleteness(view: ViewRecord): Envelope["completeness"] {
+  const completeness = view.completeness;
+  if (completeness.status === "unsupported") return { status: "unsupported", reason: completeness.reason ?? "unsupported", missingCapabilities: [] };
+  const gaps: Array<{ id: string; question: string; reason: string }> = [];
+  for (const [name, omission] of Object.entries(completeness.omitted ?? {})) {
+    gaps.push({ id: `omitted-${name}`, question: `Which ${name} were not captured?`, reason: omission.known ? `${omission.count} ${name} were refused by a capture bound (${completeness.reason ?? "limit"})` : `an unknown number of ${name} were refused by a capture bound` });
+  }
+  const stored = view.pages.reduce((sum, page) => sum + page.rowCount, 0);
+  if (stored > 0) gaps.push({ id: "stored-pages", question: "Where are the remaining rows?", reason: `${stored} more rows are stored in ${view.pages.length} content-addressed page(s): ${view.pages.map((page) => page.pageId).join(", ")}`.slice(0, 1000) });
+  if (gaps.length > 0) return { status: "partial", gaps: gaps as [(typeof gaps)[number], ...typeof gaps] };
+  const total = view.rowsTotal;
+  return { status: "complete", criterion: total === undefined || total === null ? "every value the view selected at capture time" : `all ${total} rows the view selected at capture time` };
 }
 
 /** A view record becomes an ordinary paneweft.view/1 envelope with a run source and `observed` items; a row `target` becomes the
- * row's `entity`. The stored view id is `<captureId>.<objectId>.<viewId>`. STUB. */
-export function lowerViewRecord(graph: ObjectGraph, view: ViewRecord, context: LowerContext): Result<{ envelope: Envelope; definition: ViewDefinition; entity: Entity }> {
-  return notImplemented("lowerViewRecord");
+ * row's `entity`. The stored view id is `<captureId>.<objectId>.<viewId>`. */
+export interface CustomOverlay {
+  /** Where the view came from, so the viewer can find the renderer under the repository's registered root. */
+  repo: string;
+  renderer: { id: string; apiVersion: number; payloadSchemaDigest: string; assetDigest: string };
+  payload: unknown;
+  /** Object ids the renderer may name, each with the entity that opens it. */
+  objects: Record<string, EntityRef>;
+}
+
+export function lowerViewRecord(graph: ObjectGraph, view: ViewRecord, context: LowerContext): Result<{ envelope: Envelope; definition: ViewDefinition; entity: Entity; overlay?: CustomOverlay }> {
+  const object = graph.objects.find((candidate) => candidate.id === view.objectId);
+  if (object === undefined) return err("VALIDATION_FAILED", `view ${view.viewId} names the object ${view.objectId}, which is not in capture ${graph.captureId}`, { errors: [issue("DANGLING_REFERENCE", "/objectId", "a view's object is in the capture", `Unknown object "${view.objectId}".`)] });
+  const entity = entityOfObject(context.repo, graph, object.id);
+  const entityRef: EntityRef = { repository: entity.repository, id: entity.id, kind: entity.kind };
+  const kindOfObject = (id: string): string => entityKindOf(recordOf(graph, id).typeId);
+  let data: unknown = view.data;
+  let component: string = view.component;
+  let overlay: CustomOverlay | undefined;
+  if (view.component === "custom") {
+    // A repo-owned renderer is an overlay on an ORDINARY view: the stored envelope is the standard fallback (so text, the agent tools and
+    // the unchanged v0 operations read the same facts), and the renderer, its payload and the objects it may name are kept beside it.
+    const custom = validateAgainstV1("urn:paneweft:schema:v1:component:custom:1", view.data);
+    if (custom.length > 0) return err("VALIDATION_FAILED", `the custom view ${view.viewId} does not match its component schema`, { errors: custom.map((fault) => ({ ...fault, pointer: `/data${fault.pointer}` })) });
+    const body = view.data as { renderer: CustomOverlay["renderer"]; payload: unknown; objects: string[]; fallback: { component: string; data: Record<string, unknown> } };
+    const unknown = body.objects.find((id) => !graph.objects.some((object) => object.id === id));
+    if (unknown !== undefined) return err("VALIDATION_FAILED", `the custom view ${view.viewId} names the object ${unknown}, which is not in capture ${graph.captureId}`, { errors: [issue("DANGLING_REFERENCE", "/data/objects", "a renderer may only name captured objects", `Unknown object "${unknown}".`)] });
+    component = body.fallback.component;
+    data = body.fallback.data;
+    if (component === "shape") {
+      const shape = body.fallback.data as { fields: Array<Record<string, unknown>> };
+      data = { ...shape, fields: shape.fields.map((field, index) => (index === 0 && field.entity === undefined ? { ...field, entity: entityRef } : field)) };
+    }
+    overlay = { repo: context.repo, renderer: body.renderer, payload: body.payload, objects: Object.fromEntries(body.objects.map((id) => [id, { repository: context.repo, id: entityId(graph, id), kind: kindOfObject(id) }])) };
+  }
+  if (view.component === "list" && view.data !== undefined) {
+    const list = view.data as { rows: Array<Record<string, unknown>> } & Record<string, unknown>;
+    data = {
+      ...list,
+      rows: list.rows.map((row) => {
+        const { target, ...rest } = row as { target?: { object?: string } } & Record<string, unknown>;
+        return target?.object === undefined ? rest : { ...rest, entity: { repository: context.repo, id: entityId(graph, target.object), kind: kindOfObject(target.object) } };
+      }),
+    };
+  }
+  const envelope = {
+    schemaVersion: "paneweft.view/1",
+    id: `${entity.id}.${view.viewId}`,
+    title: view.title,
+    question: view.question,
+    entity: entityRef,
+    snapshotId: context.snapshotId,
+    component,
+    viewDefinitionId: view.viewId,
+    scope: { repositories: [context.repo], roots: [], excludes: [], limits: [limitsSummary(graph)] },
+    sources: [{ id: "run", kind: "run", run_id: graph.runId, runner_id: context.runnerId, started_at: context.startedAt, finished_at: context.finishedAt }],
+    generatedAt: context.generatedAt,
+    freshness: { repositories: [] },
+    links: [],
+    completeness: lowerCompleteness(view),
+    ...(data === undefined ? {} : { data }),
+  } as unknown as Envelope;
+  const definition: ViewDefinition = { id: view.viewId, entityKind: entity.kind, title: view.title, priority: view.priority, component: component as ViewDefinition["component"], requires: [], dataRole: view.viewId };
+  return ok({ envelope, definition, entity, ...(overlay === undefined ? {} : { overlay }) });
 }
 
 export type { EntityRef };

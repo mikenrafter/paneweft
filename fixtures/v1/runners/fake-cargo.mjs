@@ -7,6 +7,7 @@
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 
 const scenario = (() => { try { return JSON.parse(readFileSync(process.env.FAKE_RUNNER_SCENARIO ?? "", "utf8")); } catch { return { mode: "pass" }; } })();
 if (scenario.countFile) appendFileSync(scenario.countFile, `${process.pid} ${process.env.PANEWEFT_RUN_ID ?? "-"}\n`);
@@ -42,10 +43,11 @@ if (scenario.mode === "hang" || scenario.mode === "heartbeat") {
   for (const name of names) {
     index += 1;
     const id = `inv-${index}`;
-    const exampleId = name.replace(/^paneweft_example_/, "").replace(/_/g, ".");
+    // libtest paths carry the module (`tests::paneweft_example_x`); the SDK records the example id, never the module
+    const exampleId = name.split("::").pop().replace(/^paneweft_example_/, "").replace(/_/g, ".");
     if (staging) {
       const captureId = id;
-      writeFileSync(join(staging, "captures", `${captureId}.json`), JSON.stringify({ schemaVersion: "paneweft.object-graph/1", captureId, runId: scenario.graphRunId ?? runId, invocationId: id, roots: ["o1"], objects: [{ id: "o1", typeId: "fixture::watch::WatchFile", domainKey: null, label: "watch", fields: {}, edges: [], views: [], contentHash: "0".repeat(64) }], views: [], pages: [], diagnostics: [], limits: { depth: 4, objects: 1000, references: 4000, rootBytes: 2097152, stringBytes: 16384, pageRows: 100, collectionBytes: 33554432, roots: 100, viewRows: 10000, viewBudgetMs: 100 }, completeness: { status: "complete" } }));
+      writeFileSync(join(staging, "captures", `${captureId}.json`), JSON.stringify({ schemaVersion: "paneweft.object-graph/1", captureId, runId: scenario.graphRunId ?? runId, invocationId: id, roots: ["o1"], objects: [{ id: "o1", typeId: "fixture::watch::WatchFile", domainKey: null, label: "watch", fields: {}, edges: [], views: [], contentHash: createHash("sha256").update('{"domainKey":null,"fields":{},"label":"watch","typeId":"fixture::watch::WatchFile"}').digest("hex") }], views: [], pages: [], diagnostics: [], limits: { depth: 4, objects: 1000, references: 4000, rootBytes: 2097152, stringBytes: 16384, pageRows: 100, collectionBytes: 33554432, roots: 100, viewRows: 10000, viewBudgetMs: 100 }, completeness: { status: "complete" } }));
       writeFileSync(join(staging, "invocations", `${id}.started.json`), JSON.stringify({ id, exampleId, attempt: 1, parent: null, startedAt: T }));
       writeFileSync(join(staging, "invocations", `${id}.json`), JSON.stringify({ id, exampleId, attempt: 1, parent: null, native: failing ? { outcome: "failed", message: "check failed" } : { outcome: "passed" }, capture: { outcome: "captured", captureId, diagnostics: [] }, checks: [{ claim: "C", passed: !failing }], result: { captureId, object: "o1" }, startedAt: T, finishedAt: T }));
     }

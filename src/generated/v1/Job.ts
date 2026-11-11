@@ -13,15 +13,25 @@ export interface JobIntent {
   dedupeKey: string;
   params: Params;
   createdAt: string;
+  /**
+   * What the request resolved to when the intent was written (selection, process, timeout), so a recovery submits exactly that and never re-resolves against a catalogue that may have changed.
+   */
+  resolved?: {};
 }
 export interface Params {
   repo: Id;
   adapter: Id;
   /**
-   * @minItems 1
+   * Exact example ids; empty only in catalogue mode.
+   *
+   * @minItems 0
    * @maxItems 256
    */
-  examples: [Id, ...Id[]];
+  examples: Id[];
+  /**
+   * run (default) collects the selected examples; catalogue runs only the reserved export tests and stores the catalogue.
+   */
+  mode?: "run" | "catalogue";
   /**
    * @maxItems 256
    */

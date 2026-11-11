@@ -34,11 +34,17 @@ export function createV1SchemaRegistry(): SchemaValidator {
   return ajv;
 }
 
+// Compiling every schema costs more than validating a document, and admission validates every artifact: share one registry.
+let sharedRegistry: SchemaValidator | undefined;
+function sharedV1Registry(): SchemaValidator {
+  sharedRegistry ??= createV1SchemaRegistry();
+  return sharedRegistry;
+}
+
 /** Validates `value` against the v1 schema with `$id` `id`; the issues carry the instance pointer. */
 export function validateAgainstV1(id: string, value: unknown): ValidationIssue[] {
-  const ajv = createV1SchemaRegistry();
-  const validate = ajv.getSchema(id);
+  const validate = sharedV1Registry().getSchema(id);
   if (validate === undefined) throw new Error(`unknown schema ${id}`);
   if (validate(value) as boolean) return [];
-  return (validate.errors ?? []).map((error) => ({ code: "CONSTRAINT" as const, pointer: error.instancePath, constraint: `${error.keyword}: ${error.message ?? ""}`, hint: "See the schema." }));
+  return (validate.errors ?? []).map((error) => ({ code: "CONSTRAINT" as const, pointer: error.keyword === "required" ? `${error.instancePath}/${String((error.params as { missingProperty?: string }).missingProperty)}` : error.instancePath, constraint: `${error.keyword}: ${error.message ?? ""}`, hint: "See the schema." }));
 }

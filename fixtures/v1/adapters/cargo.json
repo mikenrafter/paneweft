@@ -1,0 +1,14 @@
+{
+  "schemaVersion": "paneweft.adapter/1",
+  "id": "cargo",
+  "kind": "cargo",
+  "grammar": "cargo-test/1",
+  "repo": "vigil",
+  "executable": "/usr/local/cargo/bin/cargo",
+  "workspaceRoot": "/work/vigil",
+  "entry": ".",
+  "features": ["paneweft"],
+  "supportedVersions": ["1.97"],
+  "limits": { "timeoutMs": 900000, "logBytes": 1048576 },
+  "queue": { "wrapper": "qex", "cpu": "2", "mem": "4GB", "tags": ["paneweft"] }
+}

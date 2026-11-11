@@ -14,7 +14,8 @@
       "properties": {
         "repo": { "$ref": "#/$defs/Id" },
         "adapter": { "$ref": "#/$defs/Id" },
-        "examples": { "type": "array", "items": { "$ref": "#/$defs/Id" }, "minItems": 1, "maxItems": 256 },
+        "examples": { "type": "array", "items": { "$ref": "#/$defs/Id" }, "minItems": 0, "maxItems": 256, "description": "Exact example ids; empty only in catalogue mode." },
+        "mode": { "enum": ["run", "catalogue"], "description": "run (default) collects the selected examples; catalogue runs only the reserved export tests and stores the catalogue." },
         "views": { "type": "array", "items": { "$ref": "#/$defs/Id" }, "maxItems": 256 },
         "limits": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 1 } },
         "timeoutMs": { "type": "integer", "minimum": 1 }
@@ -29,7 +30,8 @@
         "requestId": { "$ref": "#/$defs/RequestId" },
         "dedupeKey": { "type": "string", "pattern": "^paneweft:[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" },
         "params": { "$ref": "#/$defs/Params" },
-        "createdAt": { "type": "string" }
+        "createdAt": { "type": "string" },
+        "resolved": { "type": "object", "description": "What the request resolved to when the intent was written (selection, process, timeout), so a recovery submits exactly that and never re-resolves against a catalogue that may have changed." }
       }
     },
     "JobState": {

@@ -39,20 +39,22 @@ impl WatchFile {
 #[cfg(feature = "paneweft")]
 mod instrumentation {
     use super::{Event, WatchFile};
-    use paneweft::{Context, Inspectable, ViewMeta, ViewSetResult};
 
-    impl Inspectable for Event {
-        const PANEWEFT_TYPE_ID: &'static str = "vigil::watch::Event";
-        fn views(&self, cx: &mut Context) -> ViewSetResult {
-            const META: ViewMeta = ViewMeta { id: "event.details", title: "Event", question: "Which event is this, and was it redelivered?", component: "shape", priority: 10 };
+    // The event view selects event_id, tick and redelivered and OMITS `summary`, which can contain log content. The tick and the
+    // redelivered flag are also declared object fields: two redelivered events with one event_id differ only in them, and the
+    // object's content hash must tell them apart.
+    #[paneweft::views(type_id = "vigil::watch::Event")]
+    impl Event {
+        #[paneweft::view(id = "event.details", title = "Event", component = "shape", priority = 10, question = "Which event is this, and was it redelivered?")]
+        fn details_view(&self, cx: &mut paneweft::Context) -> paneweft::ViewResult {
             cx.label(&self.event_id);
+            cx.field("tick", self.tick);
+            cx.field("redelivered", self.redelivered);
             let mut details = cx.details();
             details.field("event_id", self.event_id.as_str());
             details.field("tick", self.tick);
             details.field("redelivered", self.redelivered);
-            let mut set = ViewSetResult::new();
-            set.push(META, details.finish());
-            set
+            details.finish()
         }
     }
 
