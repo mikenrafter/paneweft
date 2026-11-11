@@ -1,0 +1,9 @@
+{
+  "id": "def-help-example",
+  "entityKind": "vigil/watch",
+  "title": "Help example",
+  "priority": 10,
+  "component": "list",
+  "requires": [],
+  "dataRole": "modules"
+}
