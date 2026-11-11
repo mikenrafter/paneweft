@@ -56,6 +56,8 @@ export interface RunExampleRequest {
   runnerId: string;
   parameters: Record<string, Scalar>;
   key: ViewKey;
+  /** Aborting kills the runner's whole process group and answers RUNNER_FAILED (details.aborted). */
+  signal?: AbortSignal;
 }
 
 /** Substitutes `{param:name}` in one pass. A placeholder naming a parameter that was not supplied is reported, not guessed. */
