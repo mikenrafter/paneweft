@@ -46,7 +46,7 @@ describe("[S9] an evidence control with data-source shows the declared source", 
     await page.settled(() => expect(page.pw("source-detail")).toHaveLength(1));
     const detail = page.pw("source-detail")[0] as HTMLElement;
     expect(detail.getAttribute("data-source")).toBe("sd");
-    expect(fieldsOf(page)).toMatchObject({ id: "sd", kind: "document", repository: "r", path: "docs/design.md", sha256: "87e3143fd01462f82d2d2c3aea39e7e35f52d88a09b99d750b465f837d01e68f" });
+    expect(fieldsOf(page)).toMatchObject({ id: "sd", kind: "document", repository: "r", path: "docs/design.md", sha256: "d130a8070810e4e9e9b0881c45490aa8ea6d1ad63136d07c7230b170f3aadd3d" });
   });
 
   it.each(["Enter", " "])("keyboard: %j on a focused source link of a claim opens the detail of THAT source; the same key again closes it", async (key) => {

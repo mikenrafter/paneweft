@@ -45,7 +45,7 @@ also carries two `example` blocks (`ex1`, `ex2`) that the design's prose describ
 | `web/src/nkp-landscape.ts` | `6eeb5997136297df81c28a9dfec1a4005a8d5560d61e5d0b914015d44523a9df` |
 | `web/src/landscape-selection.ts` | `38418e62f565f9f32020068263e5344cb9759a39c17523d6832198f5933e0795` |
 | `web/src/nkp-landscape.test.ts` | `d1f9db2be5dffa209793da697ea7c971f4ed07d90a1ab9a15c3ce57f0d5ecd8b` |
-| `docs/design.md` (paneweft, source `sd`) | `87e3143fd01462f82d2d2c3aea39e7e35f52d88a09b99d750b465f837d01e68f` |
+| `docs/design.md` (paneweft, source `sd`) | `d130a8070810e4e9e9b0881c45490aa8ea6d1ad63136d07c7230b170f3aadd3d` |
 
 The `sd` hash is the SHA-256 of `docs/design.md` **at fixture-writing time (2026-11-11)**. If the design note is edited, recompute
 `sha256sum docs/design.md` and replace it in `story.bundle.json` (`sources[sd].sha256` and `freshness.repositories[paneweft].files`)

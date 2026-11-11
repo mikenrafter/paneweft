@@ -6,7 +6,7 @@ import type { Envelope } from "../../src/core/wire.ts";
 
 const HELLO = "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"; // sha256("hello\n")
 const RESIDUAL_TEST = "d1f9db2be5dffa209793da697ea7c971f4ed07d90a1ab9a15c3ce57f0d5ecd8b"; // design 6 table
-const DESIGN = "87e3143fd01462f82d2d2c3aea39e7e35f52d88a09b99d750b465f837d01e68f"; // sha256sum docs/design.md on the authoring host
+const DESIGN = "d130a8070810e4e9e9b0881c45490aa8ea6d1ad63136d07c7230b170f3aadd3d"; // sha256sum docs/design.md on the authoring host
 
 export const PAGE_ID = "context-survival";
 export const NOTEBOOK_BLOCK_IDS = ["intro", "v1", "v2", "D1", "r1", "D2", "ex1", "D3"] as const;
