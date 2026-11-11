@@ -207,8 +207,8 @@ pub(crate) struct State {
     pages: Vec<Json>,
     diagnostics: Vec<Json>,
     roots: Vec<String>,
-    /// Typed address -> object index, valid only inside one publish call (an address is not an identity across calls).
-    by_address: HashMap<(usize, &'static str), usize>,
+    /// Capture-local identity token -> object index. The only way two references become one object (S9): a borrowed address cannot
+    /// be trusted, because the slot of a dropped temporary is reused by the next one and a value can change between two references.
     by_token: HashMap<String, usize>,
     path: Vec<usize>,
     references: u64,
@@ -247,7 +247,6 @@ impl State {
             pages: Vec::new(),
             diagnostics: Vec::new(),
             roots: Vec::new(),
-            by_address: HashMap::new(),
             by_token: HashMap::new(),
             path: Vec::new(),
             references: 0,
@@ -381,11 +380,7 @@ impl State {
 
     /// Registers `value` (or finds it again) and, for a new object, computes its views before returning.
     fn open<T: Inspectable>(&mut self, parent: Option<(usize, String)>, key: Option<&str>, value: &T, token: Option<&str>) -> ObjectRef {
-        let address = (std::mem::size_of::<T>() > 0).then(|| (value as *const T as *const () as usize, std::any::type_name::<T>()));
-        let existing = match token {
-            Some(token) => self.by_token.get(token).copied(),
-            None => address.and_then(|key| self.by_address.get(&key).copied()),
-        };
+        let existing = token.and_then(|token| self.by_token.get(token).copied());
         if let Some(index) = existing {
             let id = self.objects[index].id.clone();
             if let Some((owner, name)) = &parent {
@@ -421,9 +416,6 @@ impl State {
         }
         self.meter.spend(skeleton - edge_cost);
         self.objects.push(ObjectRec { id: id.clone(), type_id, domain_key: key.map(str::to_string), label: None, fields: Map::new(), edges: Vec::new(), views: Vec::new(), depth: parent_depth.map_or(0, |d| d + 1), charged_label: default_label });
-        if let Some(address) = address {
-            self.by_address.insert(address, index);
-        }
         if let Some(token) = token {
             self.by_token.insert(token.to_string(), index);
         }
@@ -646,8 +638,11 @@ impl<'a> Context<'a> {
     pub fn details(&mut self) -> DetailsBuilder { DetailsBuilder::new(self.state.limits(), self.budget(), self.state.meter.clone()) }
     pub fn table(&mut self) -> TableBuilder { TableBuilder::new(self.state.limits(), self.budget(), self.state.meter.clone()) }
 
-    /// Publishes `value` (once per active traversal; a second reference to the same borrowed value returns the same object)
-    /// and returns a reference. Beyond a bound it returns `ObjectRef::NotCaptured`, not an error.
+    /// Publishes `value` as a NEW observation and returns a reference. Beyond a bound it returns `ObjectRef::NotCaptured`, not an error.
+    ///
+    /// A borrowed address is not an identity (S9): the slot of a dropped temporary is reused by the next one, and a value may change between
+    /// two references, so two references to "the same address" are not known to be the same observation. A value that is shared, or that
+    /// a cycle returns to, is referenced with [`Context::reference_with_identity`], which makes the sharing explicit.
     pub fn reference<T: Inspectable>(&mut self, value: &T) -> Result<ObjectRef, ViewError> {
         self.reference_full(self.view.unwrap_or("reference"), None, value)
     }
@@ -659,13 +654,21 @@ impl<'a> Context<'a> {
     pub fn reference_named<T: Inspectable>(&mut self, name: &str, value: &T) -> Result<ObjectRef, ViewError> {
         self.reference_full(name, None, value)
     }
-    /// The general form: an edge name and an optional domain key.
+    /// The general form: an edge name and an optional domain key. Every call is a new observation.
     pub fn reference_full<T: Inspectable>(&mut self, name: &str, key: Option<&str>, value: &T) -> Result<ObjectRef, ViewError> {
+        self.reference_identified(name, key, value, None)
+    }
+    /// As `reference_full`, naming the observation: a later reference (or a root published with `publish_with_identity`) that carries the
+    /// same capture-local `identity` is the SAME object, as an `alias` edge, or a `cycle` edge when it returns to an ancestor.
+    pub fn reference_with_identity<T: Inspectable>(&mut self, name: &str, key: Option<&str>, value: &T, identity: &str) -> Result<ObjectRef, ViewError> {
+        self.reference_identified(name, key, value, Some(identity))
+    }
+    fn reference_identified<T: Inspectable>(&mut self, name: &str, key: Option<&str>, value: &T, identity: Option<&str>) -> Result<ObjectRef, ViewError> {
         if name.is_empty() {
             return Err(ViewError::new("reference", "an edge name must not be empty"));
         }
         let name = crate::value::cut_str(name, 256).0.to_string();
-        Ok(self.state.open(Some((self.object, name)), key, value, None))
+        Ok(self.state.open(Some((self.object, name)), key, value, identity))
     }
     /// A declared field of the object being captured (tagged values survive in the object record).
     pub fn field(&mut self, name: &str, value: impl Into<Value>) {
@@ -681,7 +684,7 @@ impl<'a> Context<'a> {
     }
 }
 
-/// Owns the visited map, the limits and the emitted records of one invocation.
+/// Owns the identity tokens, the limits and the emitted records of one invocation.
 pub struct Capture {
     state: State,
 }
@@ -690,7 +693,6 @@ impl Capture {
     pub fn new(options: CaptureOptions) -> Capture { Capture { state: State::new(options) } }
 
     fn publish_root<T: Inspectable>(&mut self, value: &T, key: Option<&str>, token: Option<&str>) -> Result<ObjectRef, ViewError> {
-        self.state.by_address.clear();
         Ok(self.state.open(None, key, value, token))
     }
 

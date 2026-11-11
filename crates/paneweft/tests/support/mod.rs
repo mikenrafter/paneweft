@@ -110,7 +110,8 @@ impl Inspectable for Node {
         let mut set = ViewSetResult::new();
         let links: Vec<(String, Rc<Node>)> = self.links.borrow().clone();
         for (name, child) in links {
-            let outcome = cx.reference_full(&name, child.key.as_deref(), &*child);
+            // sharing is explicit (S9): the scenario's nodes are `Rc`s that outlive the traversal, so a node is named by its pointer within one publish
+            let outcome = cx.reference_with_identity(&name, child.key.as_deref(), &*child, &node_identity(&child));
             if let Err(error) = outcome {
                 set.push(NODE_VIEW, Err(error));
                 return set;
@@ -119,6 +120,15 @@ impl Inspectable for Node {
         set.push(NODE_VIEW, details.finish());
         set
     }
+}
+
+thread_local! {
+    static PUBLISH_INDEX: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The capture-local identity of a scenario node within the current publish call: separate publishes stay separate observations.
+fn node_identity(node: &Rc<Node>) -> String {
+    format!("{:p}@{}", Rc::as_ptr(node), PUBLISH_INDEX.with(std::cell::Cell::get))
 }
 
 pub fn build_nodes(scenario: &Json) -> BTreeMap<String, Rc<Node>> {
@@ -142,10 +152,12 @@ pub fn run_scenario(scenario: &Json) -> Json {
     let nodes = build_nodes(scenario);
     let options = CaptureOptions { limits: limits_from(&scenario["limits"]), ..CaptureOptions::default() };
     let mut capture = Capture::new(options);
-    for publish in scenario["publish"].as_array().unwrap() {
+    for (index, publish) in scenario["publish"].as_array().unwrap().iter().enumerate() {
+        PUBLISH_INDEX.with(|cell| cell.set(index));
         match publish {
             Json::String(name) => {
-                must(capture.publish(&*nodes[name.as_str()]), "publish");
+                let node = &nodes[name.as_str()];
+                must(capture.publish_with_identity(&**node, &node_identity(node)), "publish");
             }
             other => {
                 let node = &nodes[other["node"].as_str().unwrap()];

@@ -68,9 +68,11 @@ A view that fails (panic, thrown error) is isolated: no record for it, a `view-e
 
 ## 4. Identity, entities, stored views
 
-Identity is per **observation**: `cx.reference` dedupes by the typed address (Rust, only during the active traversal) or object
-identity (TS) inside one publish call; separate unkeyed publish calls are separate observations even for the same value; an explicit
-`publish_with_identity(value, token)` makes them one. A domain key never merges objects: equal keys with different content stay
+Identity is per **observation**: TS `cx.reference` dedupes by object identity inside one publish call (a JavaScript object stays alive
+while the capture holds it, so its identity cannot be reused). Rust never dedupes by address (S9): the slot of a dropped temporary is
+reused by the next one and a value can change between two references, so every `cx.reference*` call is a new observation unless the
+caller names the sharing with `cx.reference_with_identity(name, key, value, token)` (and `publish_with_identity` for a root); separate
+unkeyed publish calls are separate observations even for the same value. A domain key never merges objects: equal keys with different content stay
 distinct (vigil redelivery).
 
 Host mapping of an object: entity `{repository: <adapter repo>, id: "<captureId>.<objectId>", kind: kindOf(typeId)}`,
