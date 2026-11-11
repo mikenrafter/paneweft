@@ -9,7 +9,7 @@ import type { OperationOutcome } from "./operations.ts";
 import { entityIdsOfLines, failure, jsonPages, okJson, okText, textPages, useOps, type OpsEnv } from "../../test/helpers/ops-env.ts";
 import { describeSequenceDifference, filterRows, followCursors, orderRows, treeFilter } from "../../test/helpers/ops-oracle.ts";
 import {
-  bundleOf, claimBlock, commandSource, complete, edge, fileSource, graphView, listView, moduleRef, node, notebookView,
+  bundleOf, claimBlock, commandSource, complete, toolSource, edge, fileSource, graphView, listView, moduleRef, node, notebookView,
   proseBlock, row, treeNode, treeView, viewBlock,
 } from "../../test/helpers/ops-views.ts";
 
@@ -38,7 +38,7 @@ const DATA: Array<[id: string, rank: number, kind: string, provenance: "read" | 
   ["u-1", 10, "beta", "compiled"], ["r-g", 5, "alpha", "read"], ["q-b", 1, "beta", "read"], ["r-f", 5, "beta", "read"],
   ["t-1", 9, "beta", "observed"], ["r-c", 5, "alpha", "read"], ["q-m", 1, "alpha", "compiled"], ["r-b", 5, "beta", "read"], ["r-e", 5, "alpha", "read"],
 ]; // deliberately shuffled: storage order must not leak into the result order
-const SOURCES = [fileSource("s1"), commandSource("s2"), commandSource("s3", "run-1")];
+const SOURCES = [fileSource("s1"), toolSource("s2"), commandSource("s3", "run-1")];
 const EVIDENCE = { read: ["s1"], compiled: ["s2"], observed: ["s3"] } as const;
 const dataRows = () =>
   DATA.map(([id, rank, kind, provenance, label]) =>

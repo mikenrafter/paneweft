@@ -236,7 +236,7 @@ describe("[MC5] provenance in the browser", () => {
     await typeInto(v, need(v.container, "filter-input"), "beta");
     expect(ids(qa(v.container, "row"))).toEqual(["r2"]);
     expect(text(need(v.container, "provenance-summary"))).toBe("read=1 parsed=1 compiled=1 observed=1 inferred=1");
-    expect(text(need(v.container, "evidence-coverage"))).toBe("sources=s1,s2");
+    expect(text(need(v.container, "evidence-coverage"))).toBe("sources=s1,s2,tc"); // s2 = run source, tc = the tool source the compiled row cites (S4)
   });
   // why: design 7 MC5 "A filtered-empty view still reports its evidence coverage".
   // proves: CLAIM(MC5) / CLAIM(MC4)
@@ -247,7 +247,7 @@ describe("[MC5] provenance in the browser", () => {
     const count = need(v.container, "match-count");
     expect([count.getAttribute("data-matched"), count.getAttribute("data-total")]).toEqual(["0", "5"]);
     expect(text(need(v.container, "provenance-summary"))).toBe("read=1 parsed=1 compiled=1 observed=1 inferred=1");
-    expect(text(need(v.container, "evidence-coverage"))).toBe("sources=s1,s2");
+    expect(text(need(v.container, "evidence-coverage"))).toBe("sources=s1,s2,tc"); // s2 = run source, tc = the tool source the compiled row cites (S4)
     expect(qa(v.container, "row")).toHaveLength(0);
   });
   // why: design 4 "provenance badges on facts" includes graph nodes and edges, drawn inside the SVG.

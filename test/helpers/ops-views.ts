@@ -45,6 +45,10 @@ export const unsupported = (reason: string, ...missing: string[]) => ({ status: 
 export function fileSource(id: string, path = "src/mcp.rs"): Json {
   return { id, kind: "file", repository: "r", path, sha256: SHA, capturedAt: "2026-11-11T00:00:00Z", method: "read" };
 }
+/** S4: the compiler/language-service source that `compiled` items must cite. */
+export function toolSource(id: string, name = "rustc", version = "1.91.0"): Json {
+  return { id, kind: "tool", name, version };
+}
 export function commandSource(id: string, runId?: string): Json {
   return {
     id, kind: "command", sha256: SHA, capturedAt: "2026-11-11T00:00:00Z", method: `tool ${id}`,

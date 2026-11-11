@@ -8,14 +8,14 @@
 import { describe, expect, it } from "vitest";
 import { okJson, okText, useOps } from "../../test/helpers/ops-env.ts";
 import {
-  bundleOf, commandSource, complete, edge, fileSource, graphView, listView, moduleRef, node, row, shapeField, shapeView,
+  bundleOf, commandSource, complete, edge, fileSource, graphView, listView, moduleRef, node, row, shapeField, shapeView, toolSource,
 } from "../../test/helpers/ops-views.ts";
 
 const open = useOps();
 const ARGS = (viewId: string) => ({ viewId, snapshotId: "snap-1" });
 
 const REASON = "Both callers pass through the same guard";
-const SOURCES = [fileSource("s1"), commandSource("s2"), commandSource("s3", "run-1")];
+const SOURCES = [fileSource("s1"), toolSource("s2"), commandSource("s3", "run-1")];
 // four provenance kinds in one view; order name asc -> alpha, beta, delta, gamma
 const mixed = () =>
   bundleOf([
@@ -76,7 +76,7 @@ describe("[MC5] provenance in text and JSON summaries", () => {
   const noObserved = () =>
     bundleOf([
       listView({
-        id: "plain", definitionId: "def-plain", sources: [fileSource("s1"), commandSource("s2")], completeness: complete("three rows"),
+        id: "plain", definitionId: "def-plain", sources: [fileSource("s1"), toolSource("s2")], completeness: complete("three rows"),
         rows: [
           row("x1", { name: "x1" }, { entity: moduleRef("x1") }),
           row("x2", { name: "x2" }, { entity: moduleRef("x2") }),

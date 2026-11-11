@@ -222,18 +222,25 @@ export function selectedTab(pane: ParentNode): HTMLElement {
 export const tabDefinitionIds = (pane: ParentNode): Array<string | null> => qa(pane, "tab").map((t) => t.getAttribute("data-definition-id"));
 
 /** Container elements whose own text is chrome (labels, option texts), not content: the golden does not pin it. */
-const CHROME_TEXT = new Set(["viewer", "pane-trail", "pane", "view-tabs", "status-strip", "tabpanel", "claim-filter", "relation-filter", "graph", "graph-edge-list", "list", "tree", "shape", "source", "notebook", "example"]);
+const CHROME_TEXT = new Set([
+  "viewer", "pane-trail", "pane", "view-tabs", "status-strip", "tabpanel", "claim-filter", "relation-filter", "graph", "graph-edge-list", "list", "tree", "shape", "source", "notebook", "example",
+  // S6: incidental microcopy. Their existence and attributes are pinned; the wording is not (it is covered where it is a contract).
+  "pin", "actions-button", "no-target", "match-count", "load-affordance", "layout-info",
+]);
+/** S6: geometry is pinned ONLY by the dedicated geometry goldens and the layout suites, not repeated in every component outline. */
+const GEOMETRY_ATTRIBUTES = /\s(?:d|data-x|data-y)="[^"]*"/g;
 /**
- * Outline of the mounted viewer for goldens. Not pinned (docs/contract-additions/dom.md F): the text of the two built-in tabs,
- * the own text of container elements (labels and option texts around controls), and role/tabindex of evidence-link
- * (an SVG text needs a role, an HTML button does not).
+ * Outline of the mounted viewer for goldens. Not pinned (docs/contract-additions/dom.md F, round 2 S6): the text of the two
+ * built-in tabs, the own text of container elements and of incidental chrome (pin, action buttons, match counts, the no-target
+ * and load affordances, the layout size label), the coordinates and SVG path strings (`d`, `data-x`, `data-y`), and
+ * role/tabindex of evidence-link (an SVG text needs a role, an HTML button does not).
  */
 export function viewerOutline(container: ParentNode): string {
   const root = q(container, "viewer");
   if (root === null) return "(no [data-pw=viewer] element was rendered)\n";
   return outline(root).split("\n").map((line) => {
     const name = line.trimStart().split(" ")[0] ?? "";
-    let out = line;
+    let out = line.replace(GEOMETRY_ATTRIBUTES, "");
     if (/data-definition-id="builtin:/.test(out) || CHROME_TEXT.has(name)) out = out.replace(/ "(?:[^"\\]|\\.)*"$/, "");
     if (name === "evidence-link") out = out.replace(/ role="[^"]*"/, "").replace(/ tabindex="[^"]*"/, "");
     return out;
@@ -275,3 +282,16 @@ export function elementsWithHandlerAttributes(root: ParentNode): Array<{ tag: st
   }
   return found;
 }
+
+/**
+ * S6: the geometry of the mounted graph, one line per element: the layout label, node positions and edge paths. The component
+ * outlines do not repeat these (viewerOutline drops them); the geometry golden files pin them once, by hand-computed values.
+ */
+export function geometryOutline(container: ParentNode): string {
+  const info = need(container, "layout-info");
+  const lines = [`layout ${info.getAttribute("data-layout")} ${info.getAttribute("data-layout-version")} ${text(info)}`];
+  for (const node of qa(container, "graph-node")) lines.push(`node ${node.getAttribute("data-id")} ${node.getAttribute("data-x")} ${node.getAttribute("data-y")}`);
+  for (const edge of qa(container, "graph-edge")) lines.push(`edge ${edge.getAttribute("data-id")} ${need(edge, "edge-path").getAttribute("d")}`);
+  return lines.join("\n") + "\n";
+}
+export const goldenGeometry = (name: string): string => readFileSync(join(REPO_ROOT, "test", "goldens", `${name}.geometry.txt`), "utf8");

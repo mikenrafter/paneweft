@@ -6,13 +6,19 @@
 //   node 160 x 40, gapX 80, gapY 24, margin 16  ->  x = 16 + layer*240, y = 16 + row*64
 //   width  = 32 + (maxLayer+1)*160 + maxLayer*80       height = 32 + maxRows*40 + (maxRows-1)*24     (empty graph: 32 x 32)
 //   forward edge (layer(from) < layer(to)):  M {fx+160} {fy+20} L {tx} {ty+20}
-//   same layer / SCC member / back edge:     M {fx+80} {fy+40} L {fx+80} {yb} L {tx+80} {yb} L {tx+80} {ty+40},  yb = max(fy,ty)+52
-//   self loop:  M {fx+160} {fy+20} L {fx+200} {fy+20} L {fx+200} {fy+52} L {fx+80} {fy+52} L {fx+80} {fy+40}
+//   same layer / SCC member (S6, left-gutter route; tx = fx always, because one layer is one column):
+//     downward (ty > fy):  M {fx} {fy+20} L {fx-6}  {fy+20} L {fx-6}  {ty+20} L {tx} {ty+20}
+//     upward   (ty < fy):  M {fx} {fy+20} L {fx-12} {fy+20} L {fx-12} {ty+20} L {tx} {ty+20}
+//   self loop (S6, a small U under the node, 12 inside the bottom margin):
+//     M {fx+100} {fy+40} L {fx+100} {fy+52} L {fx+60} {fy+52} L {fx+60} {fy+40}
+//   Round 2 replaced two defects of the first routing: the self loop reached x = fx+200, outside the canvas for a node in the last
+//   layer, and the bottom route repeated a point and ran through both nodes (the points fx+80 and tx+80 coincide).
 //   grid edge:  centre to centre, centre = (x+80, y+20)
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { computeGraphLayout, graphNeighborhood } from "./layout.ts";
 import type { GraphLayout, GraphLayoutInput } from "./layout.ts";
+import { fixtureGraphs } from "../../test/helpers/fixture-graphs.ts";
 
 type E = { id: string; from: string; to: string };
 const edge = (id: string, from: string, to: string): E => ({ id, from, to });
@@ -83,11 +89,11 @@ describe("layered layout, hand-computed goldens", () => {
   //      maxLayer 1, maxRows 3: width 32+2*160+80 = 432, height 32+3*40+2*24 = 200.
   //      a (16,16); b (256,16); c (256,80); d (256,144).
   //      ab (forward): M 176 36 L 256 36.
-  //      bc (same layer): fx=256 fy=16 tx=256 ty=80, yb = max(16,80)+52 = 132: M 336 56 L 336 132 L 336 132 L 336 120.
-  //      cd: fy=80 ty=144, yb = 196:  M 336 120 L 336 196 L 336 196 L 336 184.
-  //      db: fy=144 ty=16, yb = 196:  M 336 184 L 336 196 L 336 196 L 336 56.
+  //      bc (same layer, downward): fx=256 fy=16 ty=80: M 256 36 L (256-6=250) 36 L 250 (80+20=100) L 256 100.
+  //      cd (downward): fy=80 ty=144: M 256 100 L 250 100 L 250 164 L 256 164.
+  //      db (upward, gutter 256-12=244): fy=144 ty=16: M 256 164 L 244 164 L 244 36 L 256 36.
   // proves: CLAIM(MC9)
-  it("[MC9] a 3-cycle hanging off a node: the cycle shares one layer and same-layer edges use the bottom route", () => {
+  it("[MC9] a 3-cycle hanging off a node: the cycle shares one layer and same-layer edges use the left-gutter route", () => {
     const out = layoutOf(["a", "b", "c", "d"], [edge("ab", "a", "b"), edge("bc", "b", "c"), edge("cd", "c", "d"), edge("db", "d", "b")]);
     expect(out).toStrictEqual({
       version: "layout/1",
@@ -97,16 +103,16 @@ describe("layered layout, hand-computed goldens", () => {
       nodes: [node("a", 16, 16, 0, 0), node("b", 256, 16, 1, 0), node("c", 256, 80, 1, 1), node("d", 256, 144, 1, 2)],
       edges: [
         { id: "ab", d: "M 176 36 L 256 36" },
-        { id: "bc", d: "M 336 56 L 336 132 L 336 132 L 336 120" },
-        { id: "cd", d: "M 336 120 L 336 196 L 336 196 L 336 184" },
-        { id: "db", d: "M 336 184 L 336 196 L 336 196 L 336 56" },
+        { id: "bc", d: "M 256 36 L 250 36 L 250 100 L 256 100" },
+        { id: "cd", d: "M 256 100 L 250 100 L 250 164 L 256 164" },
+        { id: "db", d: "M 256 164 L 244 164 L 244 36 L 256 36" },
       ],
     });
   });
 
   // why: a cycle with NO entry node still gets layer 0 (a topological-sort layering that waits for in-degree 0 never
   //      terminates or drops it). a<->b: one group, layer 0, rows a0 b1. width 32+160 = 192, height 32+80+24 = 136.
-  //      ab: fx=16 fy=16 tx=16 ty=80 yb=132: M 96 56 L 96 132 L 96 132 L 96 120.   ba: M 96 120 L 96 132 L 96 132 L 96 56.
+  //      ab (downward): fx=16 fy=16 ty=80: M 16 36 L 10 36 L 10 100 L 16 100.   ba (upward, gutter 16-12=4): M 16 100 L 4 100 L 4 36 L 16 36.
   // proves: CLAIM(MC9)
   it("[MC9] a pure two-cycle with no entry point sits in layer 0", () => {
     expect(layoutOf(["b", "a"], [edge("ba", "b", "a"), edge("ab", "a", "b")])).toStrictEqual({
@@ -116,8 +122,8 @@ describe("layered layout, hand-computed goldens", () => {
       height: 136,
       nodes: [node("a", 16, 16, 0, 0), node("b", 16, 80, 0, 1)],
       edges: [
-        { id: "ab", d: "M 96 56 L 96 132 L 96 132 L 96 120" },
-        { id: "ba", d: "M 96 120 L 96 132 L 96 132 L 96 56" },
+        { id: "ab", d: "M 16 36 L 10 36 L 10 100 L 16 100" },
+        { id: "ba", d: "M 16 100 L 4 100 L 4 36 L 16 36" },
       ],
     });
   });
@@ -126,16 +132,16 @@ describe("layered layout, hand-computed goldens", () => {
   //      layer 1 holds group {b,z} (smallest member b) and singleton c, so the order is b, z, c (rows 0,1,2). Plain sorting
   //      of node ids would give b, c, z. r (16,16); b (256,16); z (256,80); c (256,144). width 432, height 200.
   //      rb: M 176 36 L 256 36.  rc: M 176 36 L 256 (144+20=164).
-  //      bz: fy=16 ty=80 yb=132: M 336 56 L 336 132 L 336 132 L 336 120.  zb: fy=80 ty=16 yb=132: M 336 120 L 336 132 L 336 132 L 336 56.
+  //      bz (downward): M 256 36 L 250 36 L 250 100 L 256 100.  zb (upward): M 256 100 L 244 100 L 244 36 L 256 36.
   // proves: CLAIM(MC9)
   it("[MC9] groups are ordered by smallest member id, so an SCC's members stay together", () => {
     const out = layoutOf(["c", "z", "b", "r"], [edge("rb", "r", "b"), edge("rc", "r", "c"), edge("bz", "b", "z"), edge("zb", "z", "b")]);
     expect(out.nodes).toStrictEqual([node("b", 256, 16, 1, 0), node("c", 256, 144, 1, 2), node("r", 16, 16, 0, 0), node("z", 256, 80, 1, 1)]);
     expect(out.edges).toStrictEqual([
-      { id: "bz", d: "M 336 56 L 336 132 L 336 132 L 336 120" },
+      { id: "bz", d: "M 256 36 L 250 36 L 250 100 L 256 100" },
       { id: "rb", d: "M 176 36 L 256 36" },
       { id: "rc", d: "M 176 36 L 256 164" },
-      { id: "zb", d: "M 336 120 L 336 132 L 336 132 L 336 56" },
+      { id: "zb", d: "M 256 100 L 244 100 L 244 36 L 256 36" },
     ]);
     expect([out.width, out.height]).toStrictEqual([432, 200]);
   });
@@ -164,8 +170,9 @@ describe("layered layout, hand-computed goldens", () => {
     expect([out.width, out.height]).toStrictEqual([432, 136]);
   });
 
-  // why: a self loop is a single-node SCC with its own path rule: a (16,16): M 176 36 L 216 36 L 216 68 L 96 68 L 96 56
-  //      (fx+160=176, fy+20=36, fx+200=216, fy+52=68, fx+80=96, fy+40=56). One node: width 192, height 72.
+  // why: a self loop is a single-node SCC with its own path rule (S6): a (16,16): M 116 56 L 116 68 L 76 68 L 76 56
+  //      (fx+100=116, fy+40=56, fy+52=68, fx+60=76). One node: width 192, height 72; every point lies inside 0..192 x 0..72
+  //      (the first routing reached x = fx+200 = 216 > 192, outside the canvas: the S6 defect).
   // proves: CLAIM(MC9)
   it("[MC9] a node with a self loop", () => {
     expect(layoutOf(["a"], [edge("loop", "a", "a")])).toStrictEqual({
@@ -174,18 +181,18 @@ describe("layered layout, hand-computed goldens", () => {
       width: 192,
       height: 72,
       nodes: [node("a", 16, 16, 0, 0)],
-      edges: [{ id: "loop", d: "M 176 36 L 216 36 L 216 68 L 96 68 L 96 56" }],
+      edges: [{ id: "loop", d: "M 116 56 L 116 68 L 76 68 L 76 56" }],
     });
   });
 
   // why: a self loop must not push the node a layer down (a->b plus b->b leaves b in layer 1), and the loop path is anchored at
-  //      b's own box: b (256,16): M 416 36 L 456 36 L 456 68 L 336 68 L 336 56 (256+160, 16+20, 256+200, 16+52, 256+80, 16+40).
-  //      Width is the layer formula (432), not widened for the loop.
+  //      b's own box: b (256,16): M 356 56 L 356 68 L 316 68 L 316 56 (256+100, 16+40, 16+52, 256+60). b is in the LAST layer:
+  //      the loop's rightmost point 356 is inside the layer formula's width 432 (the first routing reached 456, outside it).
   // proves: CLAIM(MC9)
   it("[MC9] a self loop does not change layering", () => {
     const out = layoutOf(["a", "b"], [edge("ab", "a", "b"), edge("bb", "b", "b")]);
     expect(out.nodes).toStrictEqual([node("a", 16, 16, 0, 0), node("b", 256, 16, 1, 0)]);
-    expect(out.edges).toStrictEqual([{ id: "ab", d: "M 176 36 L 256 36" }, { id: "bb", d: "M 416 36 L 456 36 L 456 68 L 336 68 L 336 56" }]);
+    expect(out.edges).toStrictEqual([{ id: "ab", d: "M 176 36 L 256 36" }, { id: "bb", d: "M 356 56 L 356 68 L 316 68 L 316 56" }]);
     expect([out.width, out.height]).toStrictEqual([432, 72]);
   });
 
@@ -393,8 +400,15 @@ describe("layout properties (seed 42, 300 graphs)", () => {
           } else {
             expect(onBoundary(points![0]!, from), `${e.id} starts on ${e.from}`).toBe(true);
             expect(onBoundary(points![points!.length - 1]!, to), `${e.id} ends on ${e.to}`).toBe(true);
-            const shape = e.from === e.to ? 5 : from.layer < to.layer ? 2 : 4;
+            const shape = e.from === e.to ? 4 : from.layer < to.layer ? 2 : 4;
             expect(points!.length, `${e.id} route kind`).toBe(shape);
+          }
+          // S6: containment and no repeated point, for every edge of every random graph, in both layouts.
+          for (const [x, y] of points!) {
+            expect(x >= 0 && x <= out.width && y >= 0 && y <= out.height, `${e.id} point (${x},${y}) inside ${out.width}x${out.height}`).toBe(true);
+          }
+          if (!(sample.layout === "grid" && e.from === e.to)) {
+            points!.slice(1).forEach((point, index) => expect(point, `${e.id} repeats a point at step ${index + 1}`).not.toStrictEqual(points![index]));
           }
         }
       }),
@@ -526,5 +540,54 @@ describe("graphNeighborhood", () => {
       }),
       { seed: 42, numRuns: 300 },
     );
+  });
+});
+
+describe("[S6] every graph in every committed fixture (containment, no degenerate routes, determinism)", () => {
+  // why: S6 "add containment and determinism checks across all fixtures". The hand-computed goldens cover a few graphs; the demos
+  //   carry the graphs that matter (vigil-lifecycle has four self loops in the last layer, the case that left the canvas). For each
+  //   fixture graph, in BOTH layouts: every node box and every path point lies inside 0..width x 0..height; no path repeats a
+  //   point; layered paths start and end on the boundary of their endpoint boxes; the layout is identical when computed twice
+  //   and when the input is reversed (nodes) and rotated (edges); and no number is NaN or Infinity.
+  //   The graphs are pinned by name so that an empty or shrunken fixture set fails instead of passing vacuously.
+  // proves: CLAIM(MC9) CLAIM(S6-containment) CLAIM(S6-determinism)
+  const graphs = fixtureGraphs();
+  const REQUIRED = ["vigil-lifecycle", "vigil-delivery-path", "v-graph", "flow-graph", "delivery-path", "A-graph", "h-graph"];
+  it("[S6] the fixture walk finds the required graphs, including one with self loops in a last layer", () => {
+    for (const viewId of REQUIRED) expect(graphs.map((g) => g.viewId), `fixture graph ${viewId}`).toContain(viewId);
+    const lifecycle = graphs.find((g) => g.viewId === "vigil-lifecycle")!;
+    expect(lifecycle.edges.filter((e) => e.from === e.to).length, "self loops in vigil-lifecycle").toBeGreaterThanOrEqual(2);
+  });
+  it.each(graphs.map((g) => [`${g.file} ${g.viewId}`, g] as const))("[S6] %s: contained, non-degenerate and deterministic in both layouts", (_name, g) => {
+    for (const layout of ["layered", "grid"] as const) {
+      const input: GraphLayoutInput = { nodes: g.nodes.map((n) => ({ id: n.id })), edges: g.edges.map((e) => ({ id: e.id, from: e.from, to: e.to })), layout };
+      const out = computeGraphLayout(input);
+      expect(out.nodes.length, `${layout}: every node present`).toBe(g.nodes.length);
+      expect(out.edges.length, `${layout}: every edge present`).toBe(g.edges.length);
+      expect(out.width > 0 && out.height > 0, `${layout}: positive canvas`).toBe(true);
+      for (const n of out.nodes) {
+        expect(n.x >= 0 && n.y >= 0 && n.x + 160 <= out.width && n.y + 40 <= out.height, `${layout}: node ${n.id} inside ${out.width}x${out.height}`).toBe(true);
+      }
+      const byId = new Map(out.nodes.map((n) => [n.id, n]));
+      for (const e of g.edges) {
+        const d = out.edges.find((x) => x.id === e.id)!.d;
+        const points = parsePath(d);
+        expect(points, `${layout}: path syntax of ${e.id}: ${d}`).not.toBeNull();
+        for (const [x, y] of points!) {
+          expect(x >= 0 && x <= out.width && y >= 0 && y <= out.height, `${layout}: ${e.id} point (${x},${y}) escapes the ${out.width}x${out.height} canvas: ${d}`).toBe(true);
+        }
+        if (layout === "layered" || e.from !== e.to) {
+          points!.slice(1).forEach((point, index) => expect(point, `${layout}: ${e.id} repeats a point: ${d}`).not.toStrictEqual(points![index]));
+        }
+        if (layout === "layered") {
+          expect(onBoundary(points![0]!, byId.get(e.from)!), `${e.id} starts on ${e.from}: ${d}`).toBe(true);
+          expect(onBoundary(points![points!.length - 1]!, byId.get(e.to)!), `${e.id} ends on ${e.to}: ${d}`).toBe(true);
+        }
+      }
+      expect(computeGraphLayout(input), `${layout}: second call`).toStrictEqual(out);
+      const reordered: GraphLayoutInput = { ...input, nodes: [...input.nodes].reverse(), edges: [...input.edges.slice(1), ...input.edges.slice(0, 1)] };
+      expect(computeGraphLayout(reordered), `${layout}: reversed nodes and rotated edges`).toStrictEqual(out);
+      expect(JSON.stringify(out), `${layout}: a NaN or Infinity would serialise as null`).not.toContain("null");
+    }
   });
 });

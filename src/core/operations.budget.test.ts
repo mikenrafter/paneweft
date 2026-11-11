@@ -8,7 +8,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT, allBundle } from "../../test/helpers/fixtures.ts";
 import {
-  assertBodyWithin, assertChainCounts, cursorOf, entityIdsOfLines, failure, jsonPages, okJson, okText, textPages, useOps, validateAgainst, type OpsEnv,
+  assertBodyWithin, assertChainCounts, cursorOf, entityIdsOfLines, failure, fragmentsOfJson, fragmentsOfText, jsonPages, okJson, okText, pendingAfter, plainItemsOfJson, reassemble,
+  textPages, useOps, validateAgainst, type FragmentPiece, type OpsEnv,
 } from "../../test/helpers/ops-env.ts";
 import {
   describeSequenceDifference, followCursors, orderRows, rankSearch, utf8Length, type SearchDocument,
@@ -21,6 +22,9 @@ const open = useOps();
 const WIDE = { viewId: "wide", snapshotId: "snap-1" };
 const wideBundle = () => bundleOf([wideListView()]);
 // expected order of the 200 wide rows: the view's order (name asc), ties by id (names are unique here).
+// two small rows beneath a 6 KB mandatory header (question and criterion are 1024 three-byte characters each: the schema maximum)
+const BIG = "€".repeat(1024);
+const rows = [row("a", { name: "a" }, { entity: moduleRef("a") }), row("b", { name: "b" }, { entity: moduleRef("b") })];
 const wideExpectedIds = () => orderRows(wideRows(), { key: "name", direction: "asc" }).map((r) => r.id as string);
 
 describe("[MC3] bounded list replies: multibyte labels, 200 rows", () => {
@@ -151,8 +155,6 @@ describe("[MC3] budget bounds and BUDGET_TOO_SMALL", () => {
   // schema maximum) cannot fit 2048. minimumBytes must be the SMALLEST fitting budget: one less still fails with the
   // same minimum, the minimum itself succeeds with the header intact.
   // proves: CLAIM(MC3) header larger than the minimum budget.
-  const BIG = "€".repeat(1024);
-  const rows = [row("a", { name: "a" }, { entity: moduleRef("a") }), row("b", { name: "b" }, { entity: moduleRef("b") })];
   it.each(["text", "json"] as const)("[MC3] %s: a 6 KB mandatory header at maxBytes 2048 -> BUDGET_TOO_SMALL with the exact minimum, which then succeeds", async (format) => {
     const env = await open(bundleOf([listView({ id: "bigh", definitionId: "def-bigh", rows, question: BIG, completeness: complete(BIG) })]));
     const args = { viewId: "bigh", snapshotId: "snap-1", format };
@@ -216,73 +218,125 @@ describe("[MC3] no match, one huge item, minimum budget", () => {
     expect(cursorOf(outcome)).toBeNull();
   });
 
-  // why: one item larger than the whole budget must be clipped at a code-point boundary (never mid-"€"), flagged
-  // clipped with its original size, and must not displace the header (red-contract 3 last paragraph). The four
-  // budgets 2048..2051 give four residues mod 3 for the cut point, so a byte-offset slicer must land inside a "€".
-  // proves: CLAIM(MC3) one huge item.
+  // why: S3. One item larger than the whole budget is SPLIT into fragments {item_id, offset, length, total, text}; nothing is discarded
+  //      and nothing is flagged "clipped". The four budgets 2048..2051 give four residues mod 3 for the cut point of a 3-byte "€",
+  //      so a byte-offset slicer must land inside a code point; the 32768 budget is the largest page and the item (60,000+ bytes) still
+  //      needs two pages. The reconstruction oracle is independent of the implementation: `total` must equal the UTF-8 length of
+  //      JSON.stringify(original row) (the canonical item text has no whitespace, so its length does not depend on key order) and
+  //      the concatenated texts must parse back to a row deep-equal to the submitted row. Order name desc puts the huge row FIRST:
+  //      [huge, zz, a-small]; zz and a-small fit a page whole, so they are never fragmented and are delivered exactly once.
+  // proves: CLAIM(MC3) CLAIM(S3-fragments) one huge item, lossless, within budget, header on every page.
   const HUGE = "€".repeat(20_000); // 60,000 bytes: below the 64 KiB string limit, above every budget
   const hugeRows = () => [
     row("a-small", { name: "a-small" }, { entity: moduleRef("a-small") }),
     row("zz", { name: "zz" }, { entity: moduleRef("zz") }),
     row("huge", { name: HUGE }, { entity: moduleRef("huge") }),
   ];
-  // order name desc: "€" (U+20AC) sorts above ASCII, so the huge row is FIRST: [huge, zz, a-small].
   const hugeBundle = () => bundleOf([listView({ id: "hugev", definitionId: "def-hugev", rows: hugeRows(), order: { key: "name", direction: "desc" }, completeness: complete("three rows") })]);
   const hugeArgs = { viewId: "hugev", snapshotId: "snap-1" };
+  const hugeOriginal = () => hugeRows()[2];
 
-  it("[MC3] JSON: the 60,000-byte cell is clipped to a code-point prefix, flagged clipped with originalBytes, header intact (budgets 2048..2051)", async () => {
+  it.each([2048, 2049, 2050, 2051, 32768])("[S3] JSON at maxBytes %i: the 60,000-byte row arrives as fragments that rebuild exactly the submitted row; zz and a-small arrive whole, once", async (maxBytes) => {
     const env = await open(hugeBundle());
-    for (const maxBytes of [2048, 2049, 2050, 2051]) {
-      const outcome = await env.call("inspect_view", { ...hugeArgs, format: "json", maxBytes });
-      assertBodyWithin(outcome.body, maxBytes, `budget ${maxBytes}`);
+    const pages = await jsonPages(env, "inspect_view", hugeArgs, maxBytes);
+    const pieces = pages.flatMap((page) => fragmentsOfJson(page.reply));
+    const { order, texts } = reassemble(pieces);
+    expect(order).toEqual(["huge"]);
+    const rebuilt = texts.get("huge") as string;
+    expect(pieces[0]?.total, "total = UTF-8 bytes of the canonical item text").toBe(utf8Length(JSON.stringify(hugeOriginal())));
+    expect(utf8Length(rebuilt)).toBe(pieces[0]?.total);
+    expect(JSON.parse(rebuilt)).toEqual(hugeOriginal());
+    expect(pieces.length, "a 60 KB item cannot fit one page").toBeGreaterThanOrEqual(2);
+    // the whole items, in page order, and each exactly once
+    expect(pages.flatMap((page) => plainItemsOfJson(page.reply).map((item: { id: string }) => item.id))).toEqual(["zz", "a-small"]);
+    // document order of the events: the fragments of `huge` all precede zz and a-small
+    const events = pages.flatMap((page) => page.reply.items.map((item: any) => (item.fragment === undefined ? item.id : item.fragment.item_id)));
+    expect(events.filter((id: string, i: number) => i === 0 || id !== events[i - 1])).toEqual(["huge", "zz", "a-small"]);
+    // nothing is "clipped" any more and every page keeps its header
+    expect(JSON.stringify(pages.map((page) => page.reply))).not.toMatch(/"clipped"|"originalBytes"/);
+    for (const page of pages) {
+      expect(page.reply.question).toBe("What is in this set, and which members matter?");
+      expect(page.reply.completeness).toMatchObject({ status: "complete", criterion: "three rows" });
+    }
+    assertChainCounts(pages.map((p) => ({ counts: p.reply.counts, cursor: p.cursor, pending: pendingAfter(fragmentsOfJson(p.reply)) })), { total: 3, matched: 3 });
+    pages.forEach((page, index) => expect(page.reply.counts.truncated, `page ${index + 1}: truncated iff something follows`).toBe(page.cursor !== null));
+  });
+  it.each([2048, 2049, 2050, 2051])("[S3] text at maxBytes %i: fragment lines rebuild the item's whole line; no clipped marker; header intact on every page", async (maxBytes) => {
+    const env = await open(hugeBundle());
+    const pages = await textPages(env, "inspect_view", hugeArgs, maxBytes);
+    const pieces = pages.flatMap((page) => fragmentsOfText(page.reply.body));
+    const { order, texts } = reassemble(pieces);
+    // the item's text line is the red-contract list-row line: `<first cell> -> <kind>:<entity id>; <provenance>; <evidence ids>`
+    const wholeLine = `${HUGE} -> code/module:huge; read; s1`;
+    expect(order).toEqual(["huge"]);
+    expect(texts.get("huge")).toBe(wholeLine);
+    expect(pieces[0]?.total).toBe(utf8Length(wholeLine)); // 60,000 + 30 bytes: " -> " 4, "code/module:huge" 16, "; read" 6, "; s1" 4
+    expect(pages.flatMap((page) => entityIdsOfLines(page.reply.body))).toEqual(["zz", "a-small"]);
+    for (const page of pages) {
+      expect(page.reply.header.completeness).toBe("complete (three rows)");
+      expect(page.reply.raw).not.toMatch(/clipped/);
+    }
+    assertChainCounts(pages.map((p) => ({ counts: p.reply.counts, cursor: p.cursor, pending: pendingAfter(fragmentsOfText(p.reply.body)) })), { total: 3, matched: 3 });
+  });
+
+  // why: S3 "the cursor encodes (item index, byte offset)": it does not bind the budget (red-contract 3), so a chain may change maxBytes
+  //      between pages and must still deliver every byte once. Page 1 at 2048, then 8192, then 4096, then 32768 for the rest:
+  //      the reconstruction is the same as with a constant budget. A cursor that restarted the item, or counted offsets in
+  //      characters, would duplicate or skip bytes here.
+  // proves: CLAIM(S3-fragments) CLAIM(MC19)
+  it("[S3] a chain that changes maxBytes between pages still rebuilds the item exactly once", async () => {
+    const env = await open(hugeBundle());
+    const budgets = [2048, 8192, 4096, 32768];
+    const pieces: FragmentPiece[] = [];
+    const wholeIds: string[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < 40; page++) {
+      const outcome = await env.call("inspect_view", { ...hugeArgs, format: "json", maxBytes: budgets[Math.min(page, budgets.length - 1)], ...(cursor === null ? {} : { cursor }) });
       const reply = okJson(outcome);
-      expect(reply.question).toBe("What is in this set, and which members matter?");
-      expect(reply.completeness).toMatchObject({ status: "complete", criterion: "three rows" });
-      const huge = reply.items.find((item: { id: string }) => item.id === "huge");
-      expect(huge.clipped, `budget ${maxBytes}`).toBe(true);
-      expect(huge.originalBytes).toBe(60_000);
-      expect(reply.items.filter((item: { id: string }) => item.id !== "huge").some((item: object) => "clipped" in item), "only the clipped item carries the flag").toBe(false);
-      const kept: string = huge.cells.name;
-      expect(HUGE.startsWith(kept)).toBe(true);
-      expect(kept.length).toBeGreaterThan(0);
-      expect(utf8Length(kept)).toBeLessThan(maxBytes);
-      expect(utf8Length(kept) % 3).toBe(0); // whole 3-byte characters only
-      expect(reply.counts.truncated).toBe(true);
+      assertBodyWithin(outcome.body, budgets[Math.min(page, budgets.length - 1)] as number);
+      pieces.push(...fragmentsOfJson(reply));
+      wholeIds.push(...plainItemsOfJson(reply).map((item: { id: string }) => item.id));
+      cursor = cursorOf(outcome);
+      if (cursor === null) break;
     }
+    expect(cursor, "the chain terminated").toBeNull();
+    expect(JSON.parse(reassemble(pieces).texts.get("huge") as string)).toEqual(hugeOriginal());
+    expect(wholeIds).toEqual(["zz", "a-small"]);
   });
-  it("[MC3] text: the same clipping, with a visible clipped marker naming the original size, header intact (budgets 2048..2051)", async () => {
-    const env = await open(hugeBundle());
-    for (const maxBytes of [2048, 2049, 2050, 2051]) {
-      const outcome = await env.call("inspect_view", { ...hugeArgs, format: "text", maxBytes });
-      assertBodyWithin(outcome.body, maxBytes, `budget ${maxBytes}`);
-      const reply = okText(outcome);
-      expect(reply.header.completeness).toBe("complete (three rows)");
-      const line = reply.body.find((l) => l.includes("code/module:huge"));
-      expect(line, `budget ${maxBytes}: the huge row is listed`).toBeDefined();
-      expect(line?.startsWith("€"), `budget ${maxBytes}`).toBe(true);
-      expect(reply.body.join("\n")).toMatch(/clipped[^\n]*60000/);
-      expect(reply.counts.truncated).toBe(true);
+
+  // why: S3 "the minimum budget is the header size plus 64 payload bytes, so every page makes progress". This closes the open question
+  //      of the first round (ops.md 7.1: at exactly minimumBytes a page could carry zero items and a chain would stall). The view has
+  //      a 6 KB mandatory header; its minimum is read from the BUDGET_TOO_SMALL error (and is the smallest fitting value, tested above).
+  //      At that budget every page must deliver payload: either a whole item or a fragment of at least 61 bytes (64 minus one
+  //      4-byte code point), and the chain must TERMINATE within a bound derived from the content size, not from the implementation:
+  //      pages <= ceil(contentBytes / 61) + items + 1. Items: rows "a" and "b" (about 100 bytes of canonical JSON each).
+  // proves: CLAIM(S3-progress) CLAIM(MC3)
+  it.each(["json", "text"] as const)("[S3] %s: at the reported minimum every page makes progress and the chain terminates within the content-derived bound", async (format) => {
+    const env = await open(bundleOf([listView({ id: "bigh", definitionId: "def-bigh", rows, question: BIG, completeness: complete(BIG) })]));
+    const args = { viewId: "bigh", snapshotId: "snap-1" };
+    const refused = failure(await env.call("inspect_view", { ...args, format, maxBytes: 2048 }));
+    const minimum = (refused.details as { minimumBytes: number }).minimumBytes;
+    const pages = format === "json" ? await jsonPages(env, "inspect_view", args, minimum) : await textPages(env, "inspect_view", args, minimum);
+    const delivered = (page: (typeof pages)[number]): number => {
+      const reply = (page as { reply: any }).reply;
+      return format === "json"
+        ? fragmentsOfJson(reply).length + plainItemsOfJson(reply).length
+        : fragmentsOfText(reply.body).length + entityIdsOfLines(reply.body).length;
+    };
+    pages.forEach((page, index) => expect(delivered(page), `page ${index + 1} delivers a whole item or a fragment`).toBeGreaterThan(0));
+    const content = rows.reduce((sum, r) => sum + utf8Length(JSON.stringify(r)), 0);
+    expect(pages.length, `terminates in at most ceil(${content}/61) + 2 + 1 pages`).toBeLessThanOrEqual(Math.ceil(content / 61) + 3);
+    if (format === "json") {
+      const pieces = pages.flatMap((page) => fragmentsOfJson((page as { reply: any }).reply));
+      const { texts } = reassemble(pieces);
+      const rebuilt = [
+        ...pages.flatMap((page) => plainItemsOfJson((page as { reply: any }).reply)),
+        ...[...texts.values()].map((text) => JSON.parse(text)),
+      ];
+      expect(rebuilt.map((r: { id: string }) => r.id).sort()).toEqual(["a", "b"]);
+      for (const item of rebuilt) expect(item).toEqual(rows.find((r) => r.id === item.id));
     }
-  });
-  it("[MC3] a clipped item still counts as returned and is not repeated: the chain over [huge, zz, a-small] has each id once (budget 2048)", async () => {
-    const env = await open(hugeBundle());
-    const pages = await jsonPages(env, "inspect_view", hugeArgs, 2048);
-    expect(pages.flatMap((p) => p.reply.items.map((i: { id: string }) => i.id))).toEqual(["huge", "zz", "a-small"]);
-    assertChainCounts(pages.map((p) => ({ counts: p.reply.counts, cursor: p.cursor })), { total: 3, matched: 3 });
-  });
-  it("[MC3] truncated is true when only clipping happened: a view holding just the huge row at 32768 returns 1, omits 0, clipped", async () => {
-    // derivation: one row, 60,000 bytes > 32768, so it is clipped (not omitted): returned 1, omitted 0, truncated = (omitted > 0 || clipped) = true.
-    // (With other rows beside it, whether the huge row is clipped on this page or deferred is an implementation choice, so it is not pinned.)
-    const only = bundleOf([listView({ id: "hugeonly", definitionId: "def-hugeonly", rows: [hugeRows()[2]], completeness: complete("one row") })]);
-    const env = await open(only);
-    const outcome = await env.call("inspect_view", { viewId: "hugeonly", snapshotId: "snap-1", format: "json", maxBytes: 32768 });
-    const reply = okJson(outcome);
-    expect(reply.items).toHaveLength(1);
-    expect(reply.items[0].clipped).toBe(true);
-    expect(reply.items[0].originalBytes).toBe(60_000);
-    expect(reply.counts).toEqual({ unit: "rows", total: 1, matched: 1, returned: 1, omitted: 0, truncated: true });
-    expect(reply.cursor).toBeNull();
-    assertBodyWithin(outcome.body, 32768);
+    assertChainCounts(pages.map((p) => ({ counts: (p as any).reply.counts, cursor: p.cursor, pending: pendingAfter(format === "json" ? fragmentsOfJson((p as any).reply) : fragmentsOfText((p as any).reply.body)) })), { total: 2, matched: 2 });
   });
 
   // why: the minimum budget 2048 must work for every v0 component (design 4: "minimum 2048"); a header that

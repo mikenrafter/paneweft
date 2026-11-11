@@ -204,19 +204,74 @@ export function entityIdsOfLines(lines: readonly string[]): string[] {
 }
 
 export interface PageCounts { total: number; matched: number; returned: number; omitted: number }
+
+// ---- fragments (S3) -------------------------------------------------------------------------------
+/** One slice of an item too large for a page (docs/contract-additions/round2.md S3). */
+export interface FragmentPiece { item_id: string; offset: number; length: number; total: number; text: string }
+
+/** The `{fragment:{...}}` entries of a JSON page, in page order. Asserts nothing about them beyond their shape key. */
+export function fragmentsOfJson(reply: Json): FragmentPiece[] {
+  return (reply.items as Json[]).filter((item) => item !== null && typeof item === "object" && "fragment" in item).map((item) => item.fragment as FragmentPiece);
+}
+/** The stored items of a JSON page (everything that is not a fragment entry), in page order. */
+export function plainItemsOfJson(reply: Json): Json[] {
+  return (reply.items as Json[]).filter((item) => !(item !== null && typeof item === "object" && "fragment" in item));
+}
+const TEXT_FRAGMENT = /^\[fragment item=(\S+) offset=(\d+) length=(\d+) total=(\d+)\] (.*)$/;
+/** Fragment lines of a text body: `[fragment item=<id> offset=<o> length=<l> total=<t>] <payload>`. */
+export function fragmentsOfText(body: readonly string[]): FragmentPiece[] {
+  const pieces: FragmentPiece[] = [];
+  for (const line of body) {
+    const match = TEXT_FRAGMENT.exec(line);
+    if (match !== null) pieces.push({ item_id: match[1] as string, offset: Number(match[2]), length: Number(match[3]), total: Number(match[4]), text: match[5] as string });
+  }
+  return pieces;
+}
+/** True when the last fragment on the page leaves the rest of its item for a later page. */
+export function pendingAfter(pieces: readonly FragmentPiece[]): boolean {
+  const last = pieces[pieces.length - 1];
+  return last !== undefined && last.offset + last.length < last.total;
+}
+/**
+ * Reassembles fragments of ONE chain (page order). Asserts the S3 invariants per item: the first piece starts at offset 0, each next piece
+ * starts where the previous ended, `length` is the UTF-8 length of `text`, `total` never changes, and the last piece ends exactly at `total`.
+ * Returns item_id -> reconstructed text (and the order in which items first appeared).
+ */
+export function reassemble(pieces: readonly FragmentPiece[]): { order: string[]; texts: Map<string, string> } {
+  const texts = new Map<string, string>();
+  const totals = new Map<string, number>();
+  const next = new Map<string, number>();
+  const order: string[] = [];
+  for (const piece of pieces) {
+    const where = `fragment ${piece.item_id}@${piece.offset}`;
+    if (!texts.has(piece.item_id)) { order.push(piece.item_id); texts.set(piece.item_id, ""); totals.set(piece.item_id, piece.total); next.set(piece.item_id, 0); }
+    expect(piece.offset, `${where}: starts where the previous piece ended`).toBe(next.get(piece.item_id));
+    expect(piece.length, `${where}: length is the UTF-8 length of text`).toBe(Buffer.byteLength(piece.text, "utf8"));
+    expect(piece.length, `${where}: a piece carries at least one byte`).toBeGreaterThan(0);
+    expect(piece.total, `${where}: total is stable`).toBe(totals.get(piece.item_id));
+    expect(isWellFormedUtf8Text(piece.text), `${where}: text is whole code points`).toBe(true);
+    texts.set(piece.item_id, (texts.get(piece.item_id) ?? "") + piece.text);
+    next.set(piece.item_id, piece.offset + piece.length);
+  }
+  for (const [id, end] of next) expect(end, `item ${id}: the last piece ends at total (nothing silently dropped)`).toBe(totals.get(id));
+  return { order, texts };
+}
 /**
  * docs/contract-additions/ops.md section 2: along one cursor chain `total` and `matched` are constant,
- * `offset + returned + omitted = matched` where offset = items on earlier pages, `omitted` is what FOLLOWS
- * this page, the cursor is null exactly when `omitted = 0`, and the pages together return `matched` items.
+ * `offset + returned + omitted = matched` where offset = items started on earlier pages, `omitted` is what FOLLOWS
+ * this page, the cursor is null exactly when nothing remains (`omitted = 0` and no pending fragment, S3), and the pages together
+ * return `matched` items.
  */
-export function assertChainCounts(pages: ReadonlyArray<{ counts: PageCounts; cursor: string | null }>, expected: { total: number; matched: number }): void {
+export function assertChainCounts(pages: ReadonlyArray<{ counts: PageCounts; cursor: string | null; pending?: boolean }>, expected: { total: number; matched: number }): void {
   let offset = 0;
   pages.forEach((page, index) => {
     const where = `page ${index + 1}/${pages.length}`;
     expect(page.counts.total, `${where}: total`).toBe(expected.total);
     expect(page.counts.matched, `${where}: matched`).toBe(expected.matched);
     expect(offset + page.counts.returned + page.counts.omitted, `${where}: offset+returned+omitted`).toBe(expected.matched);
-    expect(page.cursor === null, `${where}: cursor is null iff omitted = 0`).toBe(page.counts.omitted === 0);
+    // S3: `returned` counts the items whose FIRST byte is on this page, `omitted` those that start later; a cursor is null exactly when
+    // nothing is left to deliver, which includes the rest of a fragmented item (`pending`).
+    expect(page.cursor === null, `${where}: cursor is null iff omitted = 0 and no fragmented item is pending`).toBe(page.counts.omitted === 0 && page.pending !== true);
     offset += page.counts.returned;
   });
   expect(offset, "pages together return every matched item").toBe(expected.matched);

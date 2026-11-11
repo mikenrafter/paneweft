@@ -8,7 +8,7 @@
 // to "fresh" (freshness has its own tests), 1024x768, locale en-US.
 import { describe, expect, it } from "vitest";
 import {
-  SUBJECT, byId, click, fixedFresh, goldenBundle, goldenOutline, ids, need, openBundle, ownText, qa, q, sourceRepoSetup, text, useViewerCleanup, viewerOutline,
+  SUBJECT, byId, click, fixedFresh, geometryOutline, goldenBundle, goldenGeometry, goldenOutline, ids, need, openBundle, ownText, qa, q, sourceRepoSetup, text, useViewerCleanup, viewerOutline,
   type MountSetup, type MountedViewer,
 } from "../../test/helpers/dom-harness.ts";
 import { outline } from "../../test/helpers/structure.ts";
@@ -76,13 +76,23 @@ describe("[MC9] structure goldens (hand-derived)", () => {
     //   width = 2*16 + 3*160 + 2*80 = 672 ; height = 2*16 + 3*40 + 2*24 = 200  -> "672 x 200".
     // Edge paths: forward (layer(from) < layer(to)): "M fx+160 fy+20 L tx ty+20".
     //   e1 a->b: M 176 36 L 256 36.   e4 b->d: M 416 36 L 496 36.   e5 a->e: M 176 36 L 256 164 (ty+20 = 144+20).
-    // Same layer (b,c are one SCC): bottom route with yb = max(fy,ty)+40+12.
-    //   e2 b->c: yb = max(16,80)+52 = 132: M 336 56 L 336 132 L 336 132 L 336 120.   (fx+80=336, fy+40=56, ty+40=120)
-    //   e3 c->b: yb = 132 as well:        M 336 120 L 336 132 L 336 132 L 336 56.
-    // Self loop e6 at d(496,16): M 656 36 L 696 36 L 696 68 L 576 68 L 576 56.
-    // Relation filters sorted by code unit: calls, invokes, logs, retries, writes. Counts unit = edges: 6 of 6.
+    // The coordinates and paths are NOT repeated in this component outline (S6): they are pinned once, by the geometry golden
+    // `graph-layered.geometry.txt` below and by layout.test.ts. This outline pins the elements, ids, relations, provenance and evidence.
     const v = await mountGolden(caseFor("graph"));
     expect(viewerOutline(v.container)).toBe(goldenOutline("graph"));
+  });
+  // why: S6. Geometry is pinned ONCE, here, instead of in every component outline: layered layout/1 node positions and edge
+  //      paths, covering the four path kinds (forward, same-layer downward, same-layer upward, self loop) in a 672 x 200 canvas.
+  //      The previous golden put the self loop at x = 696 > 672 (outside the canvas) and repeated a point in the b/c routes;
+  //      both are corrected here, by hand, from red-contract 6 (S6 amendment):
+  //        nodes a(16,16) b(256,16) c(256,80) d(496,16) e(256,144)   [x = 16+240*layer, y = 16+64*row]
+  //        e2 b->c downward: M 256 36 L 250 36 L 250 100 L 256 100     (fx, fy+20, fx-6, ty+20)
+  //        e3 c->b upward:   M 256 100 L 244 100 L 244 36 L 256 36     (gutter fx-12)
+  //        e6 d->d: fx=496 fy=16: M 596 56 L 596 68 L 556 68 L 556 56  (fx+100, fy+40, fy+52, fx+60) - max x 596 <= 672
+  // proves: CLAIM(MC9) CLAIM(S6-containment)
+  it("[S6] graph geometry golden: node positions and the four path kinds, the self loop inside the canvas", async () => {
+    const v = await mountGolden(caseFor("graph"));
+    expect(geometryOutline(v.container)).toBe(goldenGeometry("graph-layered"));
   });
   // why: an annotation click must highlight exactly its lines with file numbering from the stored excerpt.
   // proves: CLAIM(MC9) / CLAIM(MC6)
@@ -173,7 +183,7 @@ describe("[MC9] determinism", () => {
   // proves: CLAIM(MC9)
   it("[MC9] the graph outline pins layout \"layout/1\" and no golden-mounted viewer prints a timestamp", async () => {
     const graph = viewerOutline((await mountGolden(caseFor("graph"))).container);
-    expect(graph.split("\n").filter((l) => l.includes("data-layout-version"))).toEqual(['        layout-info data-layout="layered" data-layout-version="layout/1" "672 x 200"']);
+    expect(graph.split("\n").filter((l) => l.includes("data-layout-version"))).toEqual(['        layout-info data-layout="layered" data-layout-version="layout/1"']);
     const leaks: string[] = [];
     for (const g of GOLDENS) {
       const o = viewerOutline((await mountGolden(g)).container);
@@ -274,9 +284,9 @@ describe("[MC9] targeted mutation-sensitivity (the build-loop list)", () => {
   // why: "break a link" must fail a test: an evidence link without data-source cannot be followed.
   // proves: CLAIM(MC9) / CLAIM(MC5)
   it("[MC9] every evidence-link has a data-source equal to its text, and each fact lists exactly its input evidence ids in order", async () => {
-    // expected: the evidence arrays of the fixture literals (list rows r1..r5; example scenario/runs/assertions), 6 links per golden.
+    // expected: the evidence arrays of the fixture literals (list rows r1..r5; example scenario/runs/assertions): 7 links in list, 6 in example-runs.
     const tables: Array<{ golden: string; totalLinks: number; byItem: Record<string, string[]> }> = [
-      { golden: "list", totalLinks: 6, byItem: { r1: ["s1"], r2: ["s1"], r3: ["s1"], r4: ["s2"], r5: ["s1", "s2"] } },
+      { golden: "list", totalLinks: 7, byItem: { r1: ["s1"], r2: ["s1", "tc"], r3: ["s1"], r4: ["s2"], r5: ["s1", "s2"] } }, // r2 is compiled: it cites the tool source tc (S4)
       { golden: "example-runs", totalLinks: 6, byItem: { r1: ["s2"], r2: ["s3"], as1: ["s2"], as2: ["s2"], as3: ["s3"], scenario: ["s1"] } },
     ];
     const problems: string[] = [];

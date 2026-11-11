@@ -136,6 +136,12 @@
             "one_write"
           ],
           "exitCode": 0
+        },
+        {
+          "id": "tc",
+          "kind": "tool",
+          "name": "rustc",
+          "version": "1.91.0"
         }
       ],
       "generatedAt": "2026-11-11T00:00:00Z",
@@ -195,7 +201,8 @@
             "id": "n-mcp",
             "provenance": "compiled",
             "evidence": [
-              "s1"
+              "s1",
+              "tc"
             ],
             "cells": {
               "name": "mcp.rs"

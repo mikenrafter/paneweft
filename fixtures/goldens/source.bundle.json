@@ -59,6 +59,12 @@
           "sha256": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2",
           "capturedAt": "2026-11-11T00:00:00Z",
           "method": "read"
+        },
+        {
+          "id": "tc",
+          "kind": "tool",
+          "name": "rustc",
+          "version": "1.91.0"
         }
       ],
       "generatedAt": "2026-11-11T00:00:00Z",
@@ -118,7 +124,8 @@
             "id": "a2",
             "provenance": "compiled",
             "evidence": [
-              "s1"
+              "s1",
+              "tc"
             ],
             "lines": [
               10,

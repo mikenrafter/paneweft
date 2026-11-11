@@ -1,0 +1,12 @@
+layout layered layout/1 672 x 200
+node a 16 16
+node b 256 16
+node c 256 80
+node d 496 16
+node e 256 144
+edge e1 M 176 36 L 256 36
+edge e2 M 256 36 L 250 36 L 250 100 L 256 100
+edge e3 M 256 100 L 244 100 L 244 36 L 256 36
+edge e4 M 416 36 L 496 36
+edge e5 M 176 36 L 256 164
+edge e6 M 596 56 L 596 68 L 556 68 L 556 56
