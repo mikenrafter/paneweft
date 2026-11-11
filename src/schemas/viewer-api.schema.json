@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:viewer-api:1",
+  "title": "Viewer API responses",
+  "description": "Bodies of the viewer server's successful /api responses and of the one notebook write request (round 2, S7; final review N1). The browser bundle and the server both answer to these definitions.",
+  "$defs": {
+    "IndexView": {
+      "description": "One stored view: enough for the browser to find the instance of a definition for an entity without fetching every envelope.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["viewId", "snapshotId", "component", "title", "viewDefinitionId", "entity"],
+      "properties": {
+        "viewId": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
+        "snapshotId": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
+        "component": { "enum": ["list", "tree", "graph", "source", "shape", "notebook", "example"] },
+        "title": { "$ref": "urn:paneweft:schema:common:1#/$defs/Label" },
+        "viewDefinitionId": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
+        "entity": { "$ref": "urn:paneweft:schema:common:1#/$defs/EntityRef" }
+      }
+    },
+    "Index": {
+      "description": "GET /api/index: every registered entity and every stored view.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entities", "views"],
+      "properties": {
+        "entities": { "type": "array", "items": { "$ref": "urn:paneweft:schema:entity:1" } },
+        "views": { "type": "array", "items": { "$ref": "#/$defs/IndexView" } }
+      }
+    },
+    "Registry": {
+      "description": "GET /api/registry.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["revision", "definitions"],
+      "properties": {
+        "revision": { "type": "integer", "minimum": 0 },
+        "definitions": { "type": "array", "items": { "$ref": "urn:paneweft:schema:definition:1" } }
+      }
+    },
+    "Availability": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["status"], "properties": { "status": { "const": "available" } } },
+        {
+          "type": "object", "additionalProperties": false, "required": ["status", "missingRoles"],
+          "properties": { "status": { "const": "needs_data" }, "missingRoles": { "type": "array", "items": { "type": "string" } } }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["status", "reason"],
+          "properties": { "status": { "const": "unsupported" }, "reason": { "type": "string", "minLength": 1 } }
+        }
+      ]
+    },
+    "RankedView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["definitionId", "title", "priority", "component", "availability", "fallback"],
+      "properties": {
+        "definitionId": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
+        "title": { "type": "string", "minLength": 1 },
+        "priority": { "type": "number" },
+        "component": { "type": "string", "minLength": 1 },
+        "availability": { "$ref": "#/$defs/Availability" },
+        "fallback": { "type": "boolean" }
+      }
+    },
+    "RankOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["views", "selected"],
+      "properties": {
+        "views": { "type": "array", "items": { "$ref": "#/$defs/RankedView" } },
+        "selected": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object", "additionalProperties": false, "required": ["definitionId"],
+              "properties": {
+                "definitionId": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
+                "fallbackFrom": {
+                  "type": "object", "additionalProperties": false, "required": ["requested", "reason"],
+                  "properties": { "requested": { "type": "string" }, "reason": { "type": "string", "minLength": 1 } }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "EntityRead": {
+      "description": "GET /api/entity?snapshot=&repository=&id=&kind=: the entity and its ranked views.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entity", "views"],
+      "properties": {
+        "entity": { "$ref": "urn:paneweft:schema:entity:1" },
+        "views": { "$ref": "#/$defs/RankOutput" }
+      }
+    },
+    "Unverified": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["repository", "code", "reason"],
+        "properties": { "repository": { "type": "string" }, "code": { "const": "REPOSITORY_NOT_REGISTERED" }, "reason": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "FreshnessResult": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["status"], "properties": { "status": { "const": "fresh" } } },
+        {
+          "type": "object", "additionalProperties": false, "required": ["status", "changedPaths", "inaccessibleRoots"],
+          "properties": {
+            "status": { "const": "stale" },
+            "changedPaths": {
+              "type": "array",
+              "items": {
+                "type": "object", "additionalProperties": false, "required": ["repository", "path", "recordedSha256", "currentSha256"],
+                "properties": {
+                  "repository": { "type": "string" }, "path": { "type": "string" },
+                  "recordedSha256": { "$ref": "urn:paneweft:schema:common:1#/$defs/Sha256" },
+                  "currentSha256": { "oneOf": [{ "$ref": "urn:paneweft:schema:common:1#/$defs/Sha256" }, { "type": "null" }] }
+                }
+              }
+            },
+            "inaccessibleRoots": { "type": "array", "items": { "type": "string" } },
+            "unverified": { "$ref": "#/$defs/Unverified" }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["status", "inaccessibleRoots"],
+          "properties": { "status": { "const": "unknown" }, "inaccessibleRoots": { "type": "array", "items": { "type": "string" } }, "unverified": { "$ref": "#/$defs/Unverified" } }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["status", "unverified"],
+          "properties": { "status": { "const": "unverified" }, "unverified": { "$ref": "#/$defs/Unverified" } }
+        }
+      ]
+    },
+    "ViewModel": {
+      "description": "GET /api/view?viewId=&snapshotId=. A notebook view also carries the revision it was read at; any other view must not (N1).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["envelope", "freshness", "contentHash"],
+      "properties": {
+        "envelope": { "$ref": "urn:paneweft:schema:envelope:1" },
+        "freshness": { "$ref": "#/$defs/FreshnessResult" },
+        "contentHash": { "$ref": "urn:paneweft:schema:common:1#/$defs/Sha256" },
+        "notebookRevision": { "type": "integer", "minimum": 1 }
+      },
+      "if": { "type": "object", "required": ["envelope"], "properties": { "envelope": { "type": "object", "required": ["component"], "properties": { "component": { "const": "notebook" } } } } },
+      "then": { "type": "object", "required": ["notebookRevision"], "x-hint": "A notebook view read needs 'notebookRevision', the page revision it was read at." },
+      "else": { "type": "object", "properties": { "notebookRevision": false }, "x-hint": "Only notebook views carry 'notebookRevision'." }
+    },
+    "NotebookPage": {
+      "description": "Success body of POST /api/notebooks/<pageId>/revisions.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pageId", "revision", "envelope"],
+      "properties": {
+        "pageId": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "envelope": { "$ref": "urn:paneweft:schema:envelope:1" }
+      }
+    },
+    "NotebookWrite": {
+      "description": "Request body of POST /api/notebooks/<pageId>/revisions.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expectedRevision", "blocks"],
+      "properties": {
+        "expectedRevision": { "type": "integer", "minimum": 1 },
+        "blocks": { "type": "array", "items": { "type": "object" } }
+      }
+    }
+  }
+}

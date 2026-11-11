@@ -116,10 +116,10 @@ export function passedRun(overrides: Doc = {}): Doc {
   });
 }
 
-/** The example fixture with the run source `s2` and one passed run. */
+/** The example fixture with the `run` source `s2` (run id run-1) and one passed run. N2: an observed run is honest only through a `run` source. */
 export function exampleBase(runs: Doc[] = [passedRun()]): Doc {
   const view = componentFixture("example");
-  view.sources.push(runSource());
+  view.sources.push(runKindSource("s2", "run-1"));
   view.data.runs = runs;
   return view;
 }

@@ -25,7 +25,14 @@ const error = (status: number, code: string, message: string, details?: unknown)
 export async function startFixtureServer(): Promise<FixtureServer> {
   const requests: RecordedRequest[] = [];
   const state = { notebookRevision: 1, view: read("view.cancellation-notebook.json") };
-  const entityFiles: Record<string, string> = { watch: "entity.watch.json", notes: "entity.notes.json", mcp: "entity.mcp.json" };
+  // N5: entities are routed by their FULL identity (repository, kind, id) plus the snapshot. `mcp` exists twice with the same id
+  // and kind in two repositories, so an adapter that drops (or mixes up) the repository gets the wrong entity or a 404.
+  const entityFiles: Record<string, string> = {
+    "r|vigil/watch|watch": "entity.watch.json",
+    "r|notes/page|notes": "entity.notes.json",
+    "r|code/module|mcp": "entity.mcp.json",
+    "other|code/module|mcp": "entity.mcp.decoy.json",
+  };
   const viewFiles: Record<string, string> = { modules: "view.modules.json", "delivery-path": "view.delivery-path.json" };
 
   const server: Server = createServer((req: IncomingMessage, res) => {
@@ -43,8 +50,9 @@ export async function startFixtureServer(): Promise<FixtureServer> {
         if (record.method === "GET" && url.pathname === "/api/index") return json(200, read("index.json"));
         if (record.method === "GET" && url.pathname === "/api/registry") return json(200, read("registry.json"));
         if (record.method === "GET" && url.pathname === "/api/entity") {
-          const file = entityFiles[url.searchParams.get("id") ?? ""];
-          return file === undefined || url.searchParams.get("snapshot") !== "snap-1" ? error(404, "NOT_FOUND", "unknown entity") : json(200, read(file));
+          const identity = ["repository", "kind", "id"].map((name) => url.searchParams.get(name)).join("|");
+          const file = entityFiles[identity];
+          return file === undefined || url.searchParams.get("snapshot") !== "snap-1" ? error(404, "NOT_FOUND", `unknown entity ${identity}`) : json(200, read(file));
         }
         if (record.method === "GET" && url.pathname === "/api/view") {
           const id = url.searchParams.get("viewId") ?? "";

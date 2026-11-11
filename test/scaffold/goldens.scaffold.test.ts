@@ -56,7 +56,16 @@ describe("scaffold: DOM golden inputs", () => {
           expect(new Set(ids).size, `${view.id} duplicate ids`).toBe(ids.length);
           for (const item of items) for (const e of item.evidence) expect(sourceIds.has(e), `${view.id}/${item.id} evidence ${e}`).toBe(true);
           for (const item of items.filter((i) => i.provenance === "observed")) {
-            expect(item.evidence.some((e: string) => view.sources.find((s: any) => s.id === e)?.runId !== undefined), `${view.id}/${item.id} observed needs a run`).toBe(true);
+            // an observation needs a captured command with a run id, or (S4) a declared `run` source
+            const honest = (e: string) => { const s = view.sources.find((x: any) => x.id === e); return s?.runId !== undefined || s?.kind === "run"; };
+            expect(item.evidence.some(honest), `${view.id}/${item.id} observed needs a run`).toBe(true);
+          }
+          // N2: an observed example RUN is honest only through a `run` source whose run_id is the run's own id
+          if (view.component === "example") {
+            for (const run of d.runs.filter((r: any) => r.provenance === "observed")) {
+              const cited = run.evidence.map((e: string) => view.sources.find((x: any) => x.id === e));
+              expect(cited.some((s: any) => s?.kind === "run" && s.run_id === run.runId), `${view.id}/${run.id} needs its own run source`).toBe(true);
+            }
           }
           if (view.component === "graph") {
             const nodeIds = new Set(d.nodes.map((n: any) => n.id));

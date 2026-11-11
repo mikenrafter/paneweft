@@ -62,3 +62,59 @@ it("[S10] compiler control: generated declarations satisfy the contract; removin
   // Positive control for the compiler probe: this marked expression is valid, so the directive MUST fail.
   expect(diagnostics(generated + '\n// @ts-expect-error planted unused rejection\nconst valid: string = "ok";\n')).toEqual([expect.stringContaining("2578:")]);
 });
+
+// ---- N4: the envelope's data rules come from the schema's conditionals, never from a copy in the generator ------------------------
+// why: N4 (final spec review). The generated Envelope says "a supported view has data of its component's type, an unsupported view has no
+//   data". If the generator hard-codes that, the schema's own `if/then/else` can change (or grow a rule the generator never learned)
+//   while the committed declarations stay "current": the compiler then enforces a contract Ajv no longer states. Each mutation below
+//   edits a conditional of the envelope (or completeness) schema in a temporary copy and runs `--check` against the COMMITTED
+//   declarations: it must report them stale, or fail loudly because it cannot translate the conditional. Silent success is the bug.
+// proves: CLAIM(N4-derived-rules) CLAIM(S10-generated-types)
+function checkAgainstCommitted(edit: (schemas: string) => void) {
+  const schemas = join(tmp("type-mutation"), "schemas");
+  cpSync(join(REPO_ROOT, "src/schemas"), schemas, { recursive: true });
+  edit(schemas);
+  return generator(["--schemas", schemas, "--check"]);
+}
+function editJson(path: string, edit: (document: any) => void): void {
+  const document = JSON.parse(readFileSync(path, "utf8"));
+  edit(document);
+  writeFileSync(path, JSON.stringify(document));
+}
+const failsLoudly = (run: ReturnType<typeof generator>) => {
+  expect(run.status, `stdout ${run.stdout} stderr ${run.stderr}`).not.toBe(0);
+  expect(run.stderr).toMatch(/\S/);
+};
+
+it("[N4] control: the unmutated copy of the schemas checks clean (the probe can say yes)", () => {
+  const run = checkAgainstCommitted(() => {});
+  expect([run.status, run.stderr]).toEqual([0, ""]);
+});
+it("[N4] relaxing the unsupported branch (data no longer forbidden) changes the generated Envelope", () => {
+  const run = checkAgainstCommitted((schemas) => editJson(join(schemas, "envelope.schema.json"), (envelope) => { delete envelope.allOf[0].then.properties.data; }));
+  failsLoudly(run);
+});
+it("[N4] making data optional for supported views (the else branch) changes the generated Envelope", () => {
+  const run = checkAgainstCommitted((schemas) => editJson(join(schemas, "envelope.schema.json"), (envelope) => { envelope.allOf[0].else.required = []; }));
+  failsLoudly(run);
+});
+it("[N4] control (already derived): repointing a component's data schema in its conditional changes the generated Envelope", () => {
+  const run = checkAgainstCommitted((schemas) => editJson(join(schemas, "envelope.schema.json"), (envelope) => {
+    const list = envelope.allOf.find((rule: any) => rule.if?.properties?.component?.const === "list");
+    list.then.properties.data = { $ref: "urn:paneweft:schema:component:tree:1" };
+  }));
+  failsLoudly(run);
+});
+it("[N4] a conditional the generator cannot translate fails loudly instead of being ignored", () => {
+  const run = checkAgainstCommitted((schemas) => editJson(join(schemas, "envelope.schema.json"), (envelope) => {
+    envelope.allOf.push({ if: { type: "object", required: ["title"], properties: { title: { const: "special" } } }, then: { type: "object", required: ["links"] } });
+  }));
+  failsLoudly(run);
+});
+it("[N4] control (already derived): the completeness conditionals are derived too: dropping `gaps` from the partial branch changes the generated Completeness", () => {
+  const run = checkAgainstCommitted((schemas) => editJson(join(schemas, "common.schema.json"), (common) => {
+    const partial = common.$defs.Completeness.allOf.find((rule: any) => rule.if.properties.status.const === "partial");
+    partial.then.required = [];
+  }));
+  failsLoudly(run);
+});

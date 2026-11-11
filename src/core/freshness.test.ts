@@ -4,12 +4,13 @@
 // repositories (git on this host) and real directories; recorded hashes are LITERALS (derivation next to
 // each constant). The envelope's recorded root is deliberately a path that does not exist, so every test
 // that expects bytes to be read proves the REGISTERED root was used.
-import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { checkFreshness, type FreshnessResult } from "./freshness.ts";
 import type { RepositoryRegistration } from "./session.ts";
 import type { Envelope } from "./wire.ts";
+import { observeFilesystem } from "../../test/helpers/fs-spy.ts";
 import { git, initGitRepo, writeFiles } from "../../test/helpers/git.ts";
 import { useTempDirs } from "../../test/helpers/tmp.ts";
 
@@ -448,5 +449,74 @@ describe("checkFreshness: never reads outside the root", () => {
     const dir = plainDir("P");
     symlinkSync("src/a.txt", join(dir.root, "alias.txt"));
     expect(await check({ repositories: [record(dir, { "alias.txt": HELLO })] })).toEqual<FreshnessResult>({ status: "fresh" });
+  });
+});
+
+describe("checkFreshness: filesystem access is observed, not inferred from the result (N3)", () => {
+  /** Runs `check` while recording every fs call; the probe is always stopped. */
+  async function observed(freshness: Freshness) {
+    const spy = observeFilesystem();
+    try {
+      return { result: await check(freshness), spy };
+    } finally {
+      spy.stop();
+    }
+  }
+  const UNVERIFIED_F = [{ repository: "F", code: "REPOSITORY_NOT_REGISTERED" as const, reason: expect.stringMatching(/\S/) }];
+
+  // why: S1 says an envelope root never authorises access. The earlier tests compare RESULTS, so an implementation that stats, lists or
+  //   hashes the foreign root and then denies would pass them (a read-before-deny leak: timing and error behaviour still differ, and a
+  //   later refactor could start trusting what it read). Here the filesystem itself is observed: nothing under the unregistered root,
+  //   by either its lexical or its real path, may be touched by ANY fs call; the registered root IS read in the same call (positive
+  //   control: the probe sees this implementation's reads, so silence about the foreign root means something).
+  // proves: CLAIM(MC15) CLAIM(MC13) CLAIM(S1-no-probe)
+  it("[N3] an unregistered root is never touched by any fs call, while the registered root beside it is read (positive control)", async () => {
+    const registeredRepo = plainDir("A");
+    const foreign = join(tmp("fresh"), "foreign");
+    mkdirSync(foreign);
+    writeFiles(foreign, { "src/a.txt": "hello\n", "src/b.txt": "world\n" }); // matching bytes: a read-before-deny would find them fresh
+    const { result, spy } = await observed({ repositories: [record(registeredRepo, AB), { id: "F", root: foreign, gitRev: null, dirty: false, files: AB }] });
+    expect(result).toEqual<FreshnessResult>({ status: "unverified", unverified: UNVERIFIED_F });
+    expect(spy.touching(foreign), "lexical root").toEqual([]);
+    expect(spy.touching(realpathSync(foreign)), "real root").toEqual([]);
+    expect(spy.touching(registeredRepo.root).length, "positive control: the registered root is read").toBeGreaterThan(0);
+    expect(spy.touching(join(registeredRepo.root, "src/a.txt")).length, "the recorded file itself is read").toBeGreaterThan(0);
+  });
+
+  // why: the same silence for every shape of foreign root: matching bytes, different bytes, a symlinked directory, an absent path. Each
+  //   case also carries the positive control, so a probe that stopped recording cannot make the table pass.
+  // proves: CLAIM(S1-no-probe)
+  it.each(["matching bytes", "different bytes", "symlink to a directory", "absent"])("[N3] unregistered root with %s: no fs call names it", async (shape) => {
+    const registeredRepo = plainDir("A");
+    const base = tmp("fresh");
+    const real = join(base, "real");
+    mkdirSync(real);
+    writeFiles(real, { "src/a.txt": shape === "different bytes" ? "other\n" : "hello\n", "src/b.txt": "world\n" });
+    const foreign = shape === "symlink to a directory" ? join(base, "link") : shape === "absent" ? join(base, "absent") : real;
+    if (shape === "symlink to a directory") symlinkSync(real, foreign);
+    const { result, spy } = await observed({ repositories: [record(registeredRepo, AB), { id: "F", root: foreign, gitRev: null, dirty: false, files: AB }] });
+    expect(result).toEqual<FreshnessResult>({ status: "unverified", unverified: UNVERIFIED_F });
+    for (const path of new Set([foreign, real])) expect(spy.touching(path), `${shape}: ${path}`).toEqual([]);
+    expect(spy.touching(registeredRepo.root).length, "positive control").toBeGreaterThan(0);
+  });
+
+  // why: a recorded path that climbs out of a REGISTERED root must be refused before it is touched: confirming the hash of a file outside
+  //   the root (even only by opening it) is the leak MC15 forbids. The lexical `..` is a decision that needs no filesystem at all.
+  // proves: CLAIM(MC15) CLAIM(MC13)
+  it("[N3] a recorded ../ path is denied without any fs call naming the file outside the root", async () => {
+    const base = tmp("fresh");
+    const root = join(base, "repo");
+    mkdirSync(root);
+    writeFileSync(join(base, "secret.txt"), "TOP-SECRET-7f3a91\n");
+    writeFiles(root, { "src/a.txt": "hello\n" });
+    registered.push({ id: "A", root });
+    const { result, spy } = await observed({ repositories: [{ id: "A", root, gitRev: null, dirty: false, files: { "../secret.txt": SECRET, "src/a.txt": HELLO } }] });
+    expect(result).toEqual<FreshnessResult>({
+      status: "stale",
+      changedPaths: [{ repository: "A", path: "../secret.txt", recordedSha256: SECRET, currentSha256: null }],
+      inaccessibleRoots: [],
+    });
+    expect(spy.touching(join(base, "secret.txt")), "the file outside the root").toEqual([]);
+    expect(spy.touching(join(root, "src/a.txt")).length, "positive control: the inside file is read").toBeGreaterThan(0);
   });
 });

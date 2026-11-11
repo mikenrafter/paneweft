@@ -5,12 +5,12 @@
 // Two entry points: validateSubmission on an example view (intra-view rules) and validateRunOutput for a
 // paneweft.run/1 document (the same run rules, plus the result entity must resolve in the output bundle or
 // the ReferenceContext). Codes/pointers: red-contract section 2; shapes: src/schemas/components/example.
-import { describe, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { validateRunOutput, validateSubmission, type ReferenceContext } from "./validate.ts";
 import { allBundle } from "../../test/helpers/fixtures.ts";
 import { patch } from "../../test/helpers/patch.ts";
 import { calm, expectAccepted, expectOk, expectRejected } from "../../test/helpers/val-check.ts";
-import { exampleBase, item, passedRun, runKindSource } from "../../test/helpers/val-fixtures.ts";
+import { exampleBase, item, listBase, passedRun, runKindSource, runSource } from "../../test/helpers/val-fixtures.ts";
 
 const check = (doc: unknown) => calm(() => validateSubmission(doc), "validateSubmission");
 const checkRun = (doc: unknown, context?: ReferenceContext) => calm(() => validateRunOutput(doc, context), "validateRunOutput");
@@ -245,5 +245,41 @@ describe("[S4] a run is observed only through a run source of its own run id", (
     const broken = runKindSource("s3", "run-1");
     delete (broken as any).run_id;
     expectRejected(checkRun(patch(runOutput(), { op: "add", path: "/sources", value: [broken] })), [{ code: "REQUIRED", pointer: "/sources/0/run_id" }]);
+  });
+});
+
+describe("[N2] an observed example run has no command-only mode", () => {
+  // why: N2 (final spec review). S4 added the `run` source so that example evidence is honestly observed; v0 keeps no compatibility mode
+  //   for the older shape. A captured command that merely carries the run's id (`kind: command`, `runId: run-1`) says "something ran with
+  //   this label", not "the runner execution this run record describes", so an observed RUN citing only that is PROVENANCE_RUN_REQUIRED
+  //   at the run's provenance. The controls pin what stays valid: the migrated base, mixed file + run-source evidence, and an observed
+  //   fact OUTSIDE an example (a list row) that cites a captured command with a run id.
+  // proves: CLAIM(N2-no-compat) CLAIM(S4-run-source) CLAIM(MC5)
+  const commandOnly = (evidence: string[]) =>
+    patch(exampleBase(), { op: "replace", path: "/sources/1", value: runSource("s2", "run-1") }, { op: "replace", path: "/data/runs/0/evidence", value: evidence });
+  it("[N2] positive control: the migrated base cites a run source for run-1 and is accepted", () => {
+    const view = exampleBase();
+    expect(view.sources.map((source: { id: string; kind: string }) => [source.id, source.kind])).toEqual([["s1", "file"], ["s2", "run"]]);
+    expectAccepted(check(view), "envelope");
+  });
+  it("[N2] an observed run citing only a command source that carries its run id is PROVENANCE_RUN_REQUIRED at /data/runs/0/provenance", () => {
+    expectRejected(check(commandOnly(["s2"])), [{ code: "PROVENANCE_RUN_REQUIRED", pointer: "/data/runs/0/provenance" }], "envelope");
+  });
+  it("[N2] mixing the file source with that command source does not help; mixing it with the run source does", () => {
+    expectRejected(check(commandOnly(["s1", "s2"])), [{ code: "PROVENANCE_RUN_REQUIRED", pointer: "/data/runs/0/provenance" }], "envelope");
+    expectAccepted(check(patch(exampleBase(), { op: "replace", path: "/data/runs/0/evidence", value: ["s1", "s2"] })), "envelope");
+  });
+  it("[N2] the same command-only rule holds for a paneweft.run/1 output", () => {
+    const doc = patch(runOutput({ provenance: "observed", evidence: ["s3"] }), { op: "add", path: "/sources", value: [runSource("s3", "run-1")] });
+    expectRejected(checkRun(doc), [{ code: "PROVENANCE_RUN_REQUIRED", pointer: "/run/provenance" }]);
+  });
+  it("[N2] outside an example nothing changed: an observed list row citing a captured command with a run id is still accepted", () => {
+    const row = patch(
+      listBase(),
+      { op: "add", path: "/sources/-", value: runSource("s2", "run-1") },
+      { op: "replace", path: "/data/rows/0/provenance", value: "observed" },
+      { op: "replace", path: "/data/rows/0/evidence", value: ["s2"] },
+    );
+    expectAccepted(check(row), "envelope");
   });
 });

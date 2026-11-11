@@ -80,31 +80,19 @@
         },
         {
           "id": "s2",
-          "kind": "command",
-          "sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22",
-          "capturedAt": "2026-11-11T00:00:00Z",
-          "method": "cargo test one_write",
-          "runId": "run-1",
-          "argv": [
-            "cargo",
-            "test",
-            "one_write"
-          ],
-          "exitCode": 0
+          "kind": "run",
+          "run_id": "run-1",
+          "runner_id": "vigil-one-write",
+          "started_at": "2026-11-11T00:00:00Z",
+          "finished_at": "2026-11-11T00:00:02Z"
         },
         {
           "id": "s3",
-          "kind": "command",
-          "sha256": "2056a28ea38a000f3a3328cb7fabe330638d3258affe1a869e3f92986222d997",
-          "capturedAt": "2026-11-11T00:00:00Z",
-          "method": "cargo test one_write",
-          "runId": "run-2",
-          "argv": [
-            "cargo",
-            "test",
-            "one_write"
-          ],
-          "exitCode": 1
+          "kind": "run",
+          "run_id": "run-2",
+          "runner_id": "vigil-one-write",
+          "started_at": "2026-11-11T00:00:00Z",
+          "finished_at": "2026-11-11T00:00:02Z"
         }
       ],
       "generatedAt": "2026-11-11T00:00:00Z",

@@ -80,5 +80,6 @@
   "freshness": {
     "status": "fresh"
   },
-  "contentHash": "4c867e137ea906fcfc3a85b4ba5fe76a0b2cf4c694e087cb1c3cd21ba516dbcd"
+  "contentHash": "4c867e137ea906fcfc3a85b4ba5fe76a0b2cf4c694e087cb1c3cd21ba516dbcd",
+  "notebookRevision": 1
 }

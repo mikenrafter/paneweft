@@ -16,8 +16,9 @@ describe("scaffold: schemas compile under Ajv 2020-12 strict", () => {
   const documents = loadSchemaDocuments();
 
   it("registers every schema document, each declaring draft 2020-12 and a urn:paneweft $id", () => {
-    // 3 + 7 components + 13 tools + (common, envelope, bundle, entity, definition, run-output, error, reply) = 28
-    expect(documents).toHaveLength(28);
+    // 7 components + 13 tools + (common, envelope, bundle, entity, definition, run-output, error, reply, viewer-api) = 29
+    // (viewer-api was added by the final spec review, N1: the HTTP responses the browser and the server both answer to)
+    expect(documents).toHaveLength(29);
     for (const entry of documents) {
       expect(entry.document.$schema, entry.file).toBe("https://json-schema.org/draft/2020-12/schema");
       expect(entry.id, entry.file).toMatch(/^urn:paneweft:schema:/);

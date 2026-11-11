@@ -1,46 +1,135 @@
 {
+  "entities": [
+    {
+      "repository": "r",
+      "id": "watch",
+      "kind": "vigil/watch",
+      "snapshotId": "snap-1",
+      "label": "watch",
+      "dataRoles": [
+        "modules",
+        "layout",
+        "delivery",
+        "source",
+        "shape",
+        "example"
+      ],
+      "relations": [
+        {
+          "name": "module",
+          "target": {
+            "repository": "r",
+            "id": "mcp",
+            "kind": "code/module"
+          }
+        }
+      ]
+    },
+    {
+      "repository": "r",
+      "id": "notes",
+      "kind": "notes/page",
+      "snapshotId": "snap-1",
+      "label": "notes",
+      "dataRoles": [
+        "story"
+      ],
+      "relations": []
+    },
+    {
+      "repository": "r",
+      "id": "mcp",
+      "kind": "code/module",
+      "snapshotId": "snap-1",
+      "label": "mcp.rs",
+      "dataRoles": [],
+      "relations": []
+    }
+  ],
   "views": [
     {
       "viewId": "modules",
       "snapshotId": "snap-1",
       "component": "list",
-      "title": "Modules"
+      "title": "Modules",
+      "viewDefinitionId": "def-modules",
+      "entity": {
+        "repository": "r",
+        "id": "watch",
+        "kind": "vigil/watch"
+      }
     },
     {
       "viewId": "layout",
       "snapshotId": "snap-1",
       "component": "tree",
-      "title": "Layout"
+      "title": "Layout",
+      "viewDefinitionId": "def-layout",
+      "entity": {
+        "repository": "r",
+        "id": "watch",
+        "kind": "vigil/watch"
+      }
     },
     {
       "viewId": "delivery-path",
       "snapshotId": "snap-1",
       "component": "graph",
-      "title": "Delivery path"
+      "title": "Delivery path",
+      "viewDefinitionId": "def-delivery",
+      "entity": {
+        "repository": "r",
+        "id": "watch",
+        "kind": "vigil/watch"
+      }
     },
     {
       "viewId": "check-source",
       "snapshotId": "snap-1",
       "component": "source",
-      "title": "Denial branch"
+      "title": "Denial branch",
+      "viewDefinitionId": "def-source",
+      "entity": {
+        "repository": "r",
+        "id": "watch",
+        "kind": "vigil/watch"
+      }
     },
     {
       "viewId": "watch-shape",
       "snapshotId": "snap-1",
       "component": "shape",
-      "title": "Watch shape"
+      "title": "Watch shape",
+      "viewDefinitionId": "def-shape",
+      "entity": {
+        "repository": "r",
+        "id": "watch",
+        "kind": "vigil/watch"
+      }
     },
     {
       "viewId": "cancellation-notebook",
       "snapshotId": "snap-1",
       "component": "notebook",
-      "title": "Cancellation notebook"
+      "title": "Cancellation notebook",
+      "viewDefinitionId": "def-story",
+      "entity": {
+        "repository": "r",
+        "id": "notes",
+        "kind": "notes/page"
+      }
     },
     {
       "viewId": "vigil-one-write",
       "snapshotId": "snap-1",
       "component": "example",
-      "title": "One change fires"
+      "title": "One change fires",
+      "viewDefinitionId": "def-example",
+      "entity": {
+        "repository": "r",
+        "id": "watch",
+        "kind": "vigil/watch"
+      }
     }
   ]
 }

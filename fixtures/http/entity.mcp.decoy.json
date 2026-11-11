@@ -1,0 +1,38 @@
+{
+  "entity": {
+    "repository": "other",
+    "id": "mcp",
+    "kind": "code/module",
+    "snapshotId": "snap-1",
+    "label": "mcp.rs (decoy in another repository)",
+    "dataRoles": [],
+    "relations": []
+  },
+  "views": {
+    "views": [
+      {
+        "definitionId": "builtin:metadata",
+        "title": "Metadata",
+        "priority": 1000,
+        "component": "shape",
+        "availability": {
+          "status": "available"
+        },
+        "fallback": true
+      },
+      {
+        "definitionId": "builtin:raw",
+        "title": "Raw",
+        "priority": 1001,
+        "component": "shape",
+        "availability": {
+          "status": "available"
+        },
+        "fallback": true
+      }
+    ],
+    "selected": {
+      "definitionId": "builtin:metadata"
+    }
+  }
+}

@@ -151,7 +151,10 @@ describe("[S7] the shipped viewer bundle over successful HTTP responses", () => 
     expect(pw(window, "crumb")).toHaveLength(2);
     const entityRequests = server.requests.filter((request) => request.path === "/api/entity" && request.query.get("id") === "mcp");
     expect(entityRequests.length).toBeGreaterThanOrEqual(1);
-    for (const request of entityRequests) expect([request.query.get("snapshot"), request.query.get("kind"), request.authorization]).toEqual(["snap-1", "code/module", `Bearer ${API_TOKEN}`]);
+    // N5: the entity is addressed by its full identity. The fixture server also knows an `mcp` of kind code/module in repository
+    //   `other`; asking without the repository (or with a wrong one) is a 404, and the pane label proves which one was opened.
+    for (const request of entityRequests) expect([request.query.get("snapshot"), request.query.get("repository"), request.query.get("kind"), request.authorization]).toEqual(["snap-1", "r", "code/module", `Bearer ${API_TOKEN}`]);
+    expect(second.getAttribute("aria-label"), "the pane shows the entity of repository r, not the decoy of repository other").toBe("mcp.rs");
     expect(server.requests.every((request) => request.query.get("snapshot") === null || request.query.get("snapshot") === "snap-1"), "navigation never mixes snapshots").toBe(true);
   });
 
