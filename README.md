@@ -72,6 +72,20 @@ paneweft inspect --view modules --snapshot snap-1 --max-bytes 2048 --cursor '<to
 
 A cursor is bound to the view, snapshot, filter and order that issued it and to the content it paged (`CURSOR_MISMATCH` for another query, `CURSOR_STALE` when the listing changed, `CURSOR_INVALID` when it was altered); drop it to start again. The last page has no cursor.
 
+### Revise a view
+
+A view is stored per `(view id, snapshot id)` and never changes; a definition (`viewDefinitionId`) has one content for the whole session. So a revision is a **new snapshot id** for the facts, and the definition ids depend on what changed:
+
+* **The facts changed** (the code moved, a field is now present, you read more of it): submit the views again under a **new snapshot id** and **reuse** the same definition ids unchanged. Entities are restated under the new snapshot (an entity is unique per snapshot). The registry does not move. Resubmitting a view id under an old snapshot with other content is `SNAPSHOT_CONFLICT`.
+* **The definition's own content changed, same component and entity kind** (title, priority, `requires`, `dataRole`): an import that carries the new content under the old definition id is `SNAPSHOT_CONFLICT`. Change it with `register` and the current registry revision (`register --file DEFINITION.json --expected-revision N`); it replaces the definition for every snapshot.
+* **What the definition is changed** (another component or entity kind): **version the id**: `def-messages` becomes `def-messages-v2`, and new views use the new id. Redefining the old id in place is `IDENTITY_CONFLICT`, because views already stored under it keep their component; those old views and their id stay valid.
+
+`validate --session DIR` makes this decision before `render` does (see the workflow above), so a conflict shows up as an error with a pointer instead of a failed render.
+
+### Schemas
+
+The wire contracts are JSON Schemas in `src/schemas/` (not at the repository root). `describe NAME` prints one component's schema with its limits and a valid example, which is usually all an author needs. The files: `src/schemas/envelope.schema.json` (a view, `paneweft.view/1`), `bundle.schema.json` (entities, definitions and views together, `paneweft.bundle/1`), `entity.schema.json`, `definition.schema.json`, `common.schema.json` (shared items, ids, provenance), `src/schemas/components/<component>.schema.json` (the `data` of each component), `src/schemas/tools/<tool>.schema.json` (each tool's arguments, which MCP advertises), and `reply.schema.json` and `error.schema.json` (the JSON reply and error bodies).
+
 ### Use it from an MCP client
 
 `paneweft mcp` serves the same operations as tools over stdio (thirteen tools: `list_components`, `describe_component`, `validate`, `register_view`, `render`, `open_entity`, `navigate`, `inspect_view`, `search`, `notebook_create`, `notebook_get`, `notebook_update`, `example_record`). Register it with any MCP client that launches a stdio server. Use absolute paths; the client does not run from the repository:
@@ -106,4 +120,4 @@ paneweft repo list
 paneweft serve            # prints http://127.0.0.1:PORT/#token=...
 ```
 
-The viewer binds loopback only and every API call needs the per-run token in that URL; the URL is also written to `server.json` in the session directory (mode 0600) so `render` can print a link while a viewer runs. Stop it with Ctrl-C. If the page is blank, run `npm run build:viewer` first.
+The viewer binds loopback only and every API call needs the per-run token in that URL; the URL is also written to `server.json` in the session directory (mode 0600) so `render` can print a link while a viewer runs. Stop it with Ctrl-C. If the page is blank, run `npm run build:viewer` first. The page keeps its token in memory only (it removes it from the address bar as it loads), so **reloading the page drops access**: reopen the URL printed by `serve` or `render`.
