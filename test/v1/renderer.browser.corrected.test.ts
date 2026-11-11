@@ -108,7 +108,10 @@ describe("[IV12] a trusted renderer under production headers (corrected variants
     const frameDocument = s.responses.find((r) => r.url.endsWith("/index.html"));
     expect(frameDocument, "the frame document was requested").toBeDefined();
     for (const [name, value] of Object.entries(rendererResponseHeaders())) expect(frameDocument!.headers[name.toLowerCase()], name).toBe(value);
-    const assets = s.responses.filter((r) => /\/renderer\/.*\.(js|css)$/.test(r.url));
+    const isAsset = (r: { url: string }) => /\/renderer\/.*\.(js|css)$/.test(r.url);
+    // the iframe element exists before its subresources have been fetched; wait for them (the assertion below is unchanged)
+    await expect.poll(() => s.responses.filter(isAsset).length, { timeout: 10_000 }).toBeGreaterThanOrEqual(2);
+    const assets = s.responses.filter(isAsset);
     expect(assets.map((r) => r.url.split("/").pop()).sort()).toEqual(["bundle.js", "style.css"]);
     for (const asset of [frameDocument!, ...assets]) { expect(asset.status).toBe(200); expect(asset.requestHeaders.authorization, "no bearer on frame asset requests").toBeUndefined(); }
     const parent = s.responses.find((r) => r.url.split("#")[0] === `${s.server.origin}/`);
