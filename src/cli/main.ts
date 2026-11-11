@@ -268,7 +268,18 @@ async function runExampleCommand(parsed: Parsed, session: Session | null, io: Cl
   if (session === null) return errorBody("SESSION_REQUIRED", "example run needs a session; pass --session DIR (or set PANEWEFT_SESSION)", io);
   const registry = parsed.values.get("--runners") ?? io.env.PANEWEFT_RUNNERS;
   if (registry === undefined) return errorBody("RUNNER_NOT_FOUND", "no runner registry is configured; pass --runners FILE (or set PANEWEFT_RUNNERS)", io);
-  const result = await runExample(session, { runnerRegistryFile: resolve(io.cwd, registry), runnerId, parameters, key: { viewId: view, snapshotId: snapshot } });
+  // The runner leads its own process group (runner.ts), so the terminal's Ctrl-C does not reach it: stop it ourselves.
+  const abort = new AbortController();
+  const stop = () => abort.abort();
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+  let result: Awaited<ReturnType<typeof runExample>>;
+  try {
+    result = await runExample(session, { runnerRegistryFile: resolve(io.cwd, registry), runnerId, parameters, key: { viewId: view, snapshotId: snapshot }, signal: abort.signal });
+  } finally {
+    process.off("SIGINT", stop);
+    process.off("SIGTERM", stop);
+  }
   if (!result.ok) return printError(result.error, io);
   const run = result.value;
   io.stdout(format === "json" ? JSON.stringify({ schemaVersion: "paneweft.example_run/1", recorded: run }) : `recorded run ${run.runId}: ${run.status}\nview: ${run.viewId}@${run.snapshotId}\n`);
