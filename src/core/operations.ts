@@ -432,7 +432,10 @@ async function navigate(session: Session, args: { pane: Record<string, unknown>;
   } else {
     const instance = (await viewsOfEntity(session, pane.entity, pane.snapshotId)).find((candidate) => candidate.definitionId === pane.viewDefinitionId);
     if (instance === undefined) return unresolved(format, `no stored view of definition "${pane.viewDefinitionId}" for entity ${pane.entity.id} in snapshot "${pane.snapshotId}"`);
-    item = viewItems(instance.envelope).find((candidate) => candidate.id === args.itemId);
+    // the items are those inspect lists: the effective view, which for an example includes its recorded runs (review round 2, S12)
+    const effective = await readEffectiveView(session, { viewId: instance.viewId, snapshotId: pane.snapshotId });
+    if (!effective.ok) return effective.error.code === "NOT_FOUND" ? unresolved(format, `view "${instance.viewId}" does not exist in snapshot "${pane.snapshotId}"`) : failedFrom(format, effective.error);
+    item = viewItems(effective.value.envelope).find((candidate) => candidate.id === args.itemId);
     if (item === undefined) return unresolved(format, `item "${args.itemId}" does not exist in view "${instance.viewId}" of snapshot "${pane.snapshotId}"`);
     viewKey = { viewId: instance.viewId, snapshotId: pane.snapshotId };
   }

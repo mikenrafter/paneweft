@@ -11,6 +11,7 @@ import type { Session, ViewKey } from "./session.ts";
 import type { NumberedLine } from "./anchors.ts";
 import { rankViews } from "./registry.ts";
 import { currentFileHash } from "./freshness.ts";
+import { readEffectiveView } from "./example-runs.ts";
 import { referencedSnapshot, viewItems, type AnyItem } from "./items.ts";
 import { compareCodeUnits, ownValue } from "./canonical.ts";
 
@@ -115,7 +116,7 @@ function storedLines(source: { anchor: { lines: [number, number] }; text: string
  * view's annotation). `currency` compares the recorded file hash with the registered root's bytes.
  */
 export async function resolveItemSource(session: Session, key: ViewKey, itemId: string): Promise<SourceOpening> {
-  const stored = await session.getView(key);
+  const stored = await readEffectiveView(session, key); // the view as inspect shows it: an example's recorded runs included (review round 2, S12)
   if (!stored.ok) return cannotOpen(`view "${key.viewId}" does not exist in snapshot "${key.snapshotId}"`);
   const envelope = stored.value.envelope;
   const item = viewItems(envelope).find((candidate) => candidate.id === itemId);
