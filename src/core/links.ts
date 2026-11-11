@@ -11,7 +11,7 @@ import type { Session, ViewKey } from "./session.ts";
 import type { NumberedLine } from "./anchors.ts";
 import { rankViews } from "./registry.ts";
 import { currentFileHash } from "./freshness.ts";
-import { viewItems, type AnyItem } from "./items.ts";
+import { referencedSnapshot, viewItems, type AnyItem } from "./items.ts";
 import { compareCodeUnits, ownValue } from "./canonical.ts";
 
 export type LinkTarget =
@@ -190,7 +190,7 @@ export async function resolveClaimEvidence(session: Session, key: ViewKey, claim
         });
       } else {
         const { viewId, itemId } = target as { viewId: string; itemId: string };
-        const linkTarget = { snapshotId: key.snapshotId, viewId, itemId };
+        const linkTarget = { snapshotId: referencedSnapshot(envelope, viewId, itemId), viewId, itemId }; // the notebook's links say which snapshot (CLAIM(links-exact))
         steps.push({ relation, target: linkTarget, resolution: await resolveLink(session, linkTarget) });
       }
     }

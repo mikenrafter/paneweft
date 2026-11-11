@@ -2,6 +2,8 @@
 // notebook's `links` name for that view, unlike navigation and embeds (referencedSnapshot). A story page that cites a view of another
 // snapshot therefore showed the wrong evidence whenever the ids collided (they do: ids are per view, not per snapshot).
 // World: list "shared" in snap-1 and snap-2 with the SAME row id "x" but different content (entity e1 vs e2); notebook "story" lives in snap-2.
+// A link to a snapshot that does not exist cannot be stored at all since review S6 (DANGLING_REFERENCE, references.exact-snapshot.test.ts), so
+// the "named unresolved result" case of resolveLink stays covered in links.test.ts and is not repeated here.
 // proves: CLAIM(links-exact)
 import { describe, expect, it } from "vitest";
 import { resolveClaimEvidence } from "./links.ts";
@@ -35,12 +37,6 @@ describe("[S7] resolveClaimEvidence addresses the snapshot the notebook's links 
   it("an item-level link wins over a view-level link (the rule navigation uses)", async () => {
     const [step] = await evidenceOf([link("l1", "snap-2"), link("l2", "snap-1", "x")]);
     expect(step).toMatchObject({ target: { snapshotId: "snap-1" }, resolution: { status: "resolved", snapshotId: "snap-1", entity: { id: "e1" } } });
-  });
-
-  // never substitute: a link to a snapshot that does not exist is a named unresolved result, not a silent fallback to the notebook's snapshot.
-  it("a link to a missing snapshot is an unresolved snapshot, not a fall-back to the notebook's own", async () => {
-    const [step] = await evidenceOf([link("l1", "snap-9")]);
-    expect(step).toMatchObject({ target: { snapshotId: "snap-9" }, resolution: { status: "unresolved", missing: "snapshot" } });
   });
 
   // control: with no link the notebook's own snapshot is meant.
