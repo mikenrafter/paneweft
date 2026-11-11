@@ -3,6 +3,7 @@
 // A capture assigns an object id on publication (registration order, never an identity of an allocation), then computes the object's
 // views and follows the references the views declare. Everything is bounded while it is built: a bound that bites yields a
 // not-captured reference and a named omission, never an error and never silence.
+import { AsyncLocalStorage } from "node:async_hooks";
 import { Budget, DetailsBuilder, TableBuilder, canonicalJson, sha256Hex, type ViewResult } from "./builders.ts";
 import { callerLine } from "./callsite.ts";
 import { applyLimitOverrides, defaultLimits } from "./limits.ts";
@@ -480,18 +481,18 @@ export class Capture {
   }
 }
 
-const ACTIVE: Capture[] = [];
+// The collector of a call chain (S8): an AsyncLocalStorage store, so an async example sees ITS capture whatever else is in flight. A
+// process-wide stack mixed the inspections of concurrent examples and popped the wrong capture.
+const ACTIVE = new AsyncLocalStorage<Capture>();
 
-export function activateCapture(capture: Capture): void {
-  ACTIVE.push(capture);
-}
-export function deactivateCapture(): Capture | undefined {
-  return ACTIVE.pop();
+/** Runs `body` with `capture` as the active collector of this call chain (including every `await` inside it). */
+export function runWithCapture<T>(capture: Capture, body: () => T): T {
+  return ACTIVE.run(capture, body);
 }
 
 /** Publishes at an execution point. With no active collector it returns `inactive` and does no traversal. */
 export function inspect(value: unknown, token?: TypeToken<any>): InspectResult {
-  const capture = ACTIVE[ACTIVE.length - 1];
+  const capture = ACTIVE.getStore();
   if (capture === undefined) return { status: "inactive" };
   return capture.publish(value, token);
 }
@@ -499,11 +500,13 @@ export function inspect(value: unknown, token?: TypeToken<any>): InspectResult {
 /** Runs `body` with a new Capture as the active collector and returns what it published. */
 export function withCapture(options: CaptureOptions, body: () => void): ObjectGraph {
   const capture = new Capture(options);
-  activateCapture(capture);
-  try {
-    body();
-  } finally {
-    deactivateCapture();
-  }
+  runWithCapture(capture, body);
+  return capture.finish();
+}
+
+/** As `withCapture`, for a body that awaits: the collector stays active across its awaits. */
+export async function withCaptureAsync(options: CaptureOptions, body: () => Promise<void>): Promise<ObjectGraph> {
+  const capture = new Capture(options);
+  await runWithCapture(capture, body);
   return capture.finish();
 }

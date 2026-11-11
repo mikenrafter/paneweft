@@ -6,7 +6,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { join } from "node:path";
 import { limitsFromEnv, stagingFromEnv, writeArtifact, type Staging } from "./artifacts.ts";
-import { Capture, activateCapture, deactivateCapture, type TypeToken } from "./capture.ts";
+import { Capture, runWithCapture, type TypeToken } from "./capture.ts";
 import { callerLine } from "./callsite.ts";
 import type { Json } from "./types.ts";
 
@@ -135,7 +135,7 @@ function checkContext(frame: Frame): ExampleContext {
     },
     async use<T>(other: ExampleDefinition<T>): Promise<T> {
       const result = await runExample(other);
-      if (result.error !== undefined) throw new ChildFailed(result.invocation.id, result.error);
+      if (result.failed) throw new ChildFailed(result.invocation.id, result.error);
       return result.value as T;
     },
   };
@@ -153,7 +153,12 @@ interface CaptureSummary {
 }
 
 /** Runs an example: records the invocation, captures the result while it is borrowed, rethrows nothing. */
-export async function runExample<T>(definition: ExampleDefinition<T>, options: { attempt?: number } = {}): Promise<{ value: T | undefined; invocation: InvocationRecord; error?: unknown }> {
+export type ExampleRun<T> =
+  | { failed: false; value: T | undefined; invocation: InvocationRecord; error?: undefined }
+  /** `error` is whatever was thrown, which may itself be `undefined`: `failed` is the discriminant, never `error !== undefined` (S18). */
+  | { failed: true; value: T | undefined; invocation: InvocationRecord; error: unknown };
+
+export async function runExample<T>(definition: ExampleDefinition<T>, options: { attempt?: number } = {}): Promise<ExampleRun<T>> {
   const staging: Staging | null = stagingFromEnv();
   const path = PATH.getStore() ?? [];
   const id = nextId();
@@ -170,25 +175,24 @@ export async function runExample<T>(definition: ExampleDefinition<T>, options: {
     const message = `recursive example call: ${[...path.map((entry) => entry.exampleId), definition.id].join(" -> ")}`;
     invocation.native = { outcome: "error", message };
     if (staging !== null) writeArtifact(join(staging.dir, "invocations", `${id}.json`), completion(invocation, startedAt, { outcome: "none", diagnostics: [] }, undefined));
-    return { value: undefined, invocation, error: new Error(message) };
+    return { failed: true, value: undefined, invocation, error: new Error(message) };
   }
 
   const capture = staging === null ? undefined : new Capture({ captureId: id, runId: staging.runId, invocationId: id, limits: limitsFromEnv() });
-  if (capture !== undefined) activateCapture(capture);
   let value: T | undefined;
   let thrown: unknown;
   let didThrow = false;
+  const execute = (): Promise<T> => PATH.run([...path, frame], async () => definition.run(checkContext(frame)));
   try {
-    value = await PATH.run([...path, frame], async () => definition.run(checkContext(frame)));
+    value = await (capture === undefined ? execute() : runWithCapture(capture, execute));
   } catch (error) {
     didThrow = true;
     thrown = error;
-  } finally {
-    if (capture !== undefined) deactivateCapture();
   }
 
   let native: NativeOutcome;
   let error: unknown;
+  let failed = true;
   if (didThrow && thrown instanceof ChildFailed) {
     native = { outcome: "blocked", blockedBy: thrown.origin };
     error = thrown;
@@ -200,6 +204,7 @@ export async function runExample<T>(definition: ExampleDefinition<T>, options: {
     error = thrown;
   } else {
     native = { outcome: "passed" };
+    failed = false;
   }
 
   const summary: CaptureSummary = { outcome: "none", diagnostics: [] };
@@ -223,7 +228,7 @@ export async function runExample<T>(definition: ExampleDefinition<T>, options: {
   invocation.verified = native.outcome === "passed" && frame.checks.length > 0 && frame.checks.every((check) => check.passed) && (staging === null || summary.outcome === "captured");
   if (summary.root !== undefined && summary.captureId !== undefined) invocation.result = { captureId: summary.captureId, object: summary.root };
   if (staging !== null) writeArtifact(join(staging.dir, "invocations", `${id}.json`), completion(invocation, startedAt, summary, frame));
-  return error === undefined ? { value, invocation } : { value: didThrow ? undefined : value, invocation, error };
+  return failed ? { failed: true, value: didThrow ? undefined : value, invocation, error } : { failed: false, value, invocation };
 }
 
 function completion(invocation: InvocationRecord, startedAt: string, summary: CaptureSummary, frame: Frame | undefined): Record<string, unknown> {

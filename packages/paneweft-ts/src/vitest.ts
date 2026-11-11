@@ -16,9 +16,16 @@ export function exampleTest<T>(definition: ExampleDefinition<T>): void {
   test(`${PREFIX}${definition.id}`, async (context) => {
     const retries = (context.task.result as { retryCount?: number } | undefined)?.retryCount ?? 0;
     const base = stagingFromEnv()?.attempt ?? 1;
-    const { error } = await runExample(definition, { attempt: base + retries });
-    if (error !== undefined) throw error;
+    const thrown = outcomeToThrow(await runExample(definition, { attempt: base + retries }));
+    if (thrown !== undefined) throw thrown;
   });
+}
+
+/** What exampleTest throws for the outcome of an example: nothing for a pass, the original failure otherwise. A failure whose thrown value was
+ * itself `undefined` becomes an Error, because a runner takes a thrown `undefined` for nothing at all (S18). */
+export function outcomeToThrow(run: { failed: boolean; error?: unknown }): unknown {
+  if (!run.failed) return undefined;
+  return run.error === undefined ? new Error("the example threw undefined") : run.error;
 }
 
 interface ReportedError {
