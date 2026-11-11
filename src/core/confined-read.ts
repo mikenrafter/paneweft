@@ -29,6 +29,14 @@ const OPEN_FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBL
 /** A swapped leaf is resolved again this many times before the read fails closed. */
 const MAX_ATTEMPTS = 3;
 
+let platformOverride: string | undefined;
+/** Test seam: judge the platform as `platform` until the returned function restores the real one. Never used outside tests. */
+export function pretendPlatform(platform: string): () => void {
+  platformOverride = platform;
+  return () => { platformOverride = undefined; };
+}
+const currentPlatform = (): string => platformOverride ?? process.platform;
+
 const isInside = (root: string, path: string): boolean => path === root || path.startsWith(root.endsWith(sep) ? root : root + sep);
 
 /** The real, canonical path of `relative` under `root`, or why not. Reads nothing but the link structure. */
@@ -53,7 +61,7 @@ async function handleRealPath(handle: Awaited<ReturnType<typeof open>>, canonica
   try {
     return await realpath(`/proc/self/fd/${handle.fd}`);
   } catch {
-    if (process.platform === "linux") return null; // /proc is expected here; without it nothing can be vouched for
+    if (currentPlatform() === "linux") return null; // /proc is expected here; without it nothing can be vouched for
   }
   try {
     const [opened, again] = [await handle.stat(), await realpath(canonical)];
