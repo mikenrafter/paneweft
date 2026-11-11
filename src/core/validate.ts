@@ -26,17 +26,20 @@ export interface DefinitionMetadata { id: string; component: string; entityKind:
 
 /** What lies outside the submitted document, so cross references can be checked against it. */
 export interface ReferenceContext {
-  views?: Array<{ id: string; snapshotId: string; itemIds: string[] }>;
+  /** `component` is optional so callers that know only ids still work; when present it narrows what an `example` block may name. */
+  views?: Array<{ id: string; snapshotId: string; itemIds: string[]; component?: string }>;
   entities?: Array<EntityRef & { snapshotId: string }>;
   /** S8: replaces the bare `definitionIds`; an instance whose component or entity kind disagrees is DEFINITION_MISMATCH. */
   definitions?: DefinitionMetadata[];
+  /** Extra declared sources a run output's evidence may cite: the sources of the example view the run is recorded on. */
+  evidenceSources?: Array<{ id: string }>;
 }
 
 export interface ValidationNote { pointer: string; message: string }
 
 export type ValidationReport =
-  | { ok: true; kind: "envelope" | "bundle" | "run"; notes: ValidationNote[] }
-  | { ok: false; kind: "envelope" | "bundle" | "run" | "unknown"; errors: ValidationIssue[] };
+  | { ok: true; kind: "envelope" | "bundle" | "run" | "definition"; notes: ValidationNote[] }
+  | { ok: false; kind: "envelope" | "bundle" | "run" | "definition" | "unknown"; errors: ValidationIssue[] };
 
 type Json = any; // the document under validation is unknown JSON until the schema pass has accepted it
 type Obj = Record<string, Json>;
@@ -61,7 +64,7 @@ class IssueSet {
 // ---- schema registry -----------------------------------------------------------------------------------------
 
 interface Registry {
-  validators: { envelope: ValidateFunction; bundle: ValidateFunction; run: ValidateFunction };
+  validators: { envelope: ValidateFunction; bundle: ValidateFunction; run: ValidateFunction; definition: ValidateFunction };
   /** Schema node -> the document it lives in, so a `#/$defs/x` reference can be resolved from any node. */
   baseOf: WeakMap<object, SchemaDocument>;
   byId: Map<string, SchemaDocument>;
@@ -93,6 +96,7 @@ function schemaRegistry(): Registry {
       envelope: validator("urn:paneweft:schema:envelope:1"),
       bundle: validator("urn:paneweft:schema:bundle:1"),
       run: validator("urn:paneweft:schema:run-output:1"),
+      definition: validator("urn:paneweft:schema:definition:1"),
     },
     baseOf,
     byId,
@@ -217,7 +221,8 @@ const ITEM_ARRAYS = ["rows", "nodes", "edges", "fields", "blocks", "annotations"
 const SCOPE_HINT = "Scope the view to fewer facts or partition it into several smaller views, linked from a summary view.";
 
 interface ViewSite { pointer: string; view: Obj }
-function viewSites(root: Obj, kind: DocumentKind): ViewSite[] {
+function viewSites(root: Obj, kind: DocumentKind | "definition"): ViewSite[] {
+  if (kind === "definition") return [];
   if (kind === "envelope") return [{ pointer: "", view: root }];
   const container = kind === "bundle" ? root : root.bundle;
   const prefix = kind === "bundle" ? "" : "/bundle";
@@ -229,7 +234,7 @@ function utf8Length(text: string): number {
   return text.length * 3 <= LIMITS.stringBytes ? text.length : Buffer.byteLength(text, "utf8");
 }
 
-function limitIssues(root: Obj, kind: DocumentKind): IssueSet {
+function limitIssues(root: Obj, kind: DocumentKind | "definition"): IssueSet {
   const issues = new IssueSet();
   // depth and strings in one iterative walk: a hostile document must not be able to overflow the stack
   type Frame = { value: Json; pointer: string; depth: number };
@@ -263,7 +268,7 @@ function limitIssues(root: Obj, kind: DocumentKind): IssueSet {
     if (Array.isArray(data.nodes) && view.component === "graph" && data.nodes.length > LIMITS.graphNodes) issues.add("LIMIT_EXCEEDED", `${pointer}/data/nodes`, `nodes: at most ${LIMITS.graphNodes} graph nodes`, SCOPE_HINT);
     if (Array.isArray(data.edges) && view.component === "graph" && data.edges.length > LIMITS.graphEdges) issues.add("LIMIT_EXCEEDED", `${pointer}/data/edges`, `edges: at most ${LIMITS.graphEdges} graph edges`, SCOPE_HINT);
   }
-  if (!tooDeep) {
+  if (!tooDeep && kind !== "definition") {
     const size = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), "utf8");
     if (kind === "envelope") {
       if (size(root) > LIMITS.viewBytes) issues.add("LIMIT_EXCEEDED", "", `view: at most ${LIMITS.viewBytes} bytes`, SCOPE_HINT);
@@ -613,14 +618,22 @@ function checkBundle(bundle: Obj, prefix: string, context: ReferenceContext | un
     for (const known of context?.views ?? []) if (known.id === viewId) { any = true; for (const id of known.itemIds) found.add(id); }
     return any ? found : null;
   };
+  const exampleExists = (id: string): boolean => {
+    for (const view of views) {
+      if (view.component === "example" && (view.id === id || itemIdsOf(view).has(id))) return true;
+    }
+    return (context?.views ?? []).some((known) => (known.component === undefined || known.component === "example") && (known.id === id || known.itemIds.includes(id)));
+  };
   views.forEach((view, index) => {
     if (view.component !== "notebook" || view.data === undefined) return;
     (view.data.blocks as Obj[]).forEach((block, at) => {
       const blockPointer = `${prefix}/views/${index}/data/blocks/${at}`;
-      for (const key of ["viewId", "exampleId"] as const) {
-        if (typeof block[key] === "string" && itemsOfViewId(block[key]) === null) {
-          issues.add("DANGLING_REFERENCE", `${blockPointer}/${key}`, "a notebook block must name a registered view", `No view "${block[key]}" is in this bundle or the session.`);
-        }
+      if (typeof block.viewId === "string" && itemsOfViewId(block.viewId) === null) {
+        issues.add("DANGLING_REFERENCE", `${blockPointer}/viewId`, "a notebook block must name a registered view", `No view "${block.viewId}" is in this bundle or the session.`);
+      }
+      // A2: an example block names an example view (by its view id) or the scenario of one (by its item id).
+      if (typeof block.exampleId === "string" && !exampleExists(block.exampleId)) {
+        issues.add("DANGLING_REFERENCE", `${blockPointer}/exampleId`, "an example block must name a registered example", `No example view or scenario "${block.exampleId}" is in this bundle or the session.`);
       }
       for (const key of ["supports", "contradicts"] as const) {
         (block[key] ?? []).forEach((target: Json, targetIndex: number) => {
@@ -680,7 +693,7 @@ function classify(root: unknown, expected: DocumentKind | null): { kind: Documen
   return { kind: kindOfVersion as DocumentKind, issue: null };
 }
 
-function reportOf(kind: DocumentKind | "unknown", issues: IssueSet): ValidationReport {
+function reportOf(kind: DocumentKind | "definition" | "unknown", issues: IssueSet): ValidationReport {
   if (issues.size === 0 && kind !== "unknown") return { ok: true, kind, notes: [] };
   return { ok: false, kind, errors: issues.sorted() };
 }
@@ -723,7 +736,7 @@ export function validateRunOutput(input: unknown, context?: ReferenceContext): V
   }
   const bundle = root.bundle as Obj;
   // Run and assertion evidence resolves against the output's own sources plus the sources of its bundle's views (val.md Q4, S4).
-  const sources = sourceIndexOf([...((root.sources as Obj[] | undefined) ?? []), ...(bundle.views as Obj[]).flatMap((view) => view.sources as Obj[])]);
+  const sources = sourceIndexOf([...((root.sources as Obj[] | undefined) ?? []), ...(bundle.views as Obj[]).flatMap((view) => view.sources as Obj[]), ...((context?.evidenceSources as Obj[] | undefined) ?? [])]);
   const run = root.run as Obj;
   const entries: LocatedItem[] = [
     { pointer: "/run", item: run, ownRunId: run.runId },
@@ -742,4 +755,38 @@ export function validateRunOutput(input: unknown, context?: ReferenceContext): V
   (bundle.views as Obj[]).forEach((view, index) => checkView(view, `/bundle/views/${index}`, issues));
   checkBundle(bundle, "/bundle", context, issues);
   return reportOf("run", issues);
+}
+
+/** Validates one view definition on its own (`register_view`, Session.registerView). Pointers are relative to the definition. */
+export function validateDefinition(input: unknown, registered: Array<{ id: string; forward?: { viewDefinitionId: string } }>): ValidationReport {
+  const issues = new IssueSet();
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    issues.add("TYPE", "", "type: object", "Submit a view definition object {id, entityKind, title, component, requires, dataRole}.");
+    return reportOf("definition", issues);
+  }
+  const limits = limitIssues(input as Obj, "definition");
+  if (limits.size > 0) return reportOf("definition", limits);
+  const validate = schemaRegistry().validators.definition;
+  if (!validate(input)) {
+    normaliseAjvErrors(validate.errors ?? [], issues, "");
+    return reportOf("definition", issues);
+  }
+  const definition = input as Obj;
+  if (definition.forward !== undefined) {
+    const chain = new Map<string, string | undefined>(registered.map((entry) => [entry.id, entry.forward?.viewDefinitionId]));
+    chain.set(definition.id, definition.forward.viewDefinitionId); // the submitted definition replaces a registered one of the same id
+    if (!chain.has(definition.forward.viewDefinitionId)) {
+      issues.add("DANGLING_REFERENCE", "/forward/viewDefinitionId", "a forward must name a registered definition", `No definition "${definition.forward.viewDefinitionId}" is registered.`);
+    } else {
+      let cursor: string | undefined = definition.forward.viewDefinitionId;
+      for (let steps = 0; cursor !== undefined && steps <= chain.size; steps++) {
+        if (cursor === definition.id) {
+          issues.add("ALIAS_CYCLE", "/forward", "forward chains are acyclic", "Break the cycle: a definition must not forward, directly or through others, to itself.");
+          break;
+        }
+        cursor = chain.get(cursor);
+      }
+    }
+  }
+  return reportOf("definition", issues);
 }
