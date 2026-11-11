@@ -25,9 +25,11 @@ const addFormats = unwrap<AddFormats>(addFormatsModule);
 
 export type SchemaValidator = InstanceType<Ajv2020Class>;
 
-export function createAjv(): SchemaValidator {
+export function createAjv(options: { verbose?: boolean } = {}): SchemaValidator {
   const ajv = new Ajv2020Constructor({
     strict: true,
+    // verbose keeps `parentSchema` on every error: the validator reads `x-hint` and the declared properties from it.
+    verbose: options.verbose ?? false,
     allErrors: true,
     allowUnionTypes: true,
     strictRequired: false,

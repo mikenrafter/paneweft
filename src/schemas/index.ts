@@ -48,8 +48,8 @@ export function componentSchemaId(component: ComponentId): string {
 }
 
 /** An Ajv instance with every schema document registered. */
-export function createSchemaRegistry(): SchemaValidator {
-  const ajv = createAjv();
-  for (const entry of loadSchemaDocuments()) ajv.addSchema(entry.document);
+export function createSchemaRegistry(options: { verbose?: boolean; documents?: SchemaDocument[] } = {}): SchemaValidator {
+  const ajv = createAjv({ verbose: options.verbose ?? false });
+  for (const entry of options.documents ?? loadSchemaDocuments()) ajv.addSchema(entry.document);
   return ajv;
 }
