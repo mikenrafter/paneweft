@@ -454,3 +454,48 @@ describe("[S3] a collect request can only lower the capture bounds", () => {
     expect(qex.calls()).toEqual([]);
   });
 });
+
+describe("[S6] an intent is published whole or not at all", () => {
+  // why: S6. createIntent opened intent.json with O_EXCL and wrote it afterwards; a concurrent caller that read the new, still empty file
+  // took it for an abandoned partial, unlinked it, and published ITS parameters under the same request id, so two callers both "created"
+  // the job with different parameters. Rejects an implementation that treats an unreadable intent file as abandoned without knowing whether its writer is alive.
+  // Four callers with two parameter sets race on each of 30 request ids: exactly one parameter set owns each id, every other caller is told so.
+  // proves: CLAIM(S6-intent-publication) CLAIM(N1-two-phase)
+  it("lets exactly one parameter set own a request id under concurrent collects", async () => {
+    const { dir, service, qex } = await world();
+    const sets = [{ examples: ["watch.pending"] }, { examples: ["watch.cancelled"] }];
+    const violations: string[] = [];
+    for (let round = 0; round < 30; round += 1) {
+      const id = `race-${round}`;
+      const answers = await Promise.all([0, 1, 0, 1].map((which) => service().collect(request(id, sets[which]!)).then((result) => ({ which, result }))));
+      const created = answers.filter((a) => a.result.ok && a.result.value.created);
+      const intent = JSON.parse(readFileSync(join(dir, "jobs", id, "intent.json"), "utf8"));
+      const owner = sets.findIndex((set) => JSON.stringify(set.examples) === JSON.stringify(intent.params.examples));
+      if (created.length !== 1) violations.push(`${id}: ${created.length} callers created the job`);
+      for (const answer of answers) {
+        const agrees = answer.which === owner;
+        if (agrees !== answer.result.ok) violations.push(`${id}: caller with set ${answer.which} got ${answer.result.ok ? "ok" : `${answer.result.error.code} ${answer.result.error.message}`} but the intent holds set ${owner}`);
+      }
+    }
+    expect(violations).toEqual([]);
+    expect(qex.calls().filter((c) => c[0] === "submit")).toHaveLength(30);
+  }, 120_000);
+
+  // why: S6. A caller that arrives while another caller's intent is still being written must wait for it, not replace it: the intent file
+  // never exists in a partial state for a reader (a reader sees nothing or the whole document).
+  // proves: CLAIM(S6-intent-publication)
+  it("never exposes a partial intent file to a reader", async () => {
+    const { dir, service } = await world();
+    const seen: string[] = [];
+    const watching = (async () => {
+      const path = join(dir, "jobs", "watch-1", "intent.json");
+      for (let i = 0; i < 4000; i += 1) {
+        try { const text = readFileSync(path, "utf8"); JSON.parse(text); seen.push("whole"); } catch (cause) { if ((cause as NodeJS.ErrnoException).code !== "ENOENT") seen.push(`partial:${String(cause).slice(0, 60)}`); }
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+    })();
+    must(await service().collect(request("watch-1")), "collect");
+    await watching;
+    expect(seen.filter((s) => s.startsWith("partial"))).toEqual([]);
+  });
+});

@@ -1,11 +1,12 @@
 // Collection jobs: two-phase submission, durable lifecycle, recovery and cancellation through qex (S2, S3, N1, N2; IV17).
-// Job id == request id. Layout under the session: jobs/<id>/{intent.json, qex.id, state.json, staging/<runId>/, quarantine/}.
+// Job id == request id. Layout under the session: jobs/<id>/{intent.json, qex.id, state.json, staging/<runId>/, quarantine/, .write.lock}.
 //
 // qex is the supervisor that outlives MCP clients: a job record is the only memory this service needs, so a later instance (another
 // MCP session, another process) can status, finish or cancel a job from the files alone.
 import { mkdir, open, readFile, readdir, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { dirname, join, normalize } from "node:path";
 import { canonicalJson } from "../core/canonical.ts";
+import { WriteLockError, withWriteLock } from "../core/write-lock.ts";
 import { err, ok, type Result, type ValidationIssue } from "../core/errors.ts";
 import type { Session } from "../core/session.ts";
 import type { Catalogue } from "../generated/v1/Catalogue.ts";
@@ -211,41 +212,48 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
 
   const adapterFor = (params: Params): AdapterRecord | undefined => deps.adapters.find((candidate) => candidate.id === params.adapter && candidate.repo === params.repo);
 
-  // ---- phase 1: the intent (O_EXCL, fsync) -----------------------------------------------------------------------------------------
+  // ---- phase 1: the intent (one creator at a time, published whole) ----------------------------------------------------------------
 
+  /** The intent is created under the job directory's write lock (a kernel flock: the lock of a dead process is gone with it, so a live
+   * writer is never mistaken for an abandoned one) and published by rename, so a reader finds no intent or a whole one (S6). An
+   * unreadable intent file can only be a leftover of a crash or of a disk fault; it is replaced under the lock. */
   async function createIntent(id: string, params: Params, resolved: Intent["resolved"]): Promise<Result<{ intent: Intent; created: boolean }>> {
-    const path = join(jobDir(id), "intent.json");
-    await mkdir(jobDir(id), { recursive: true });
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      const intent: Intent = { schemaVersion: "paneweft.job-intent/1", requestId: id, dedupeKey: `paneweft:${id}`, params, createdAt: now(), ...(resolved === undefined ? {} : { resolved }) };
-      try {
-        const handle = await open(path, "wx");
-        try {
-          await handle.writeFile(JSON.stringify(intent));
-          await handle.sync();
-        } finally {
-          await handle.close();
+    try {
+      await mkdir(jobDir(id), { recursive: true });
+      return await withWriteLock(jobDir(id), { waitMs: 15_000 }, async (): Promise<Result<{ intent: Intent; created: boolean }>> => {
+        const existing = await readIntent(id);
+        if (existing !== undefined) {
+          if (canonicalJson(existing.params) !== canonicalJson(params)) return err("CONFLICT", `the request id "${id}" already names a collection with different parameters; use a new request id for a deliberate rerun`, { details: { requestId: id } });
+          return ok({ intent: existing, created: false });
         }
+        const intent: Intent = { schemaVersion: "paneweft.job-intent/1", requestId: id, dedupeKey: `paneweft:${id}`, params, createdAt: now(), ...(resolved === undefined ? {} : { resolved }) };
+        await writeDurably(join(jobDir(id), "intent.json"), JSON.stringify(intent));
         return ok({ intent, created: true });
-      } catch (cause) {
-        if ((cause as NodeJS.ErrnoException).code !== "EEXIST") return err("STORAGE_FAILED", `cannot create the job intent: ${(cause as Error).message}`);
-      }
-      const existing = await readIntent(id);
-      if (existing === undefined) {
-        // a partial intent (a failed fsync) is treated as never created
-        await unlink(path).catch(() => undefined);
-        continue;
-      }
-      if (canonicalJson(existing.params) !== canonicalJson(params)) return err("CONFLICT", `the request id "${id}" already names a collection with different parameters; use a new request id for a deliberate rerun`, { details: { requestId: id } });
-      return ok({ intent: existing, created: false });
+      });
+    } catch (cause) {
+      if (cause instanceof WriteLockError) return err(cause.kind === "contended" ? "CONFLICT" : "STORAGE_FAILED", `the job "${id}" is being created by another caller: ${cause.message}`, { retryable: cause.kind === "contended" });
+      return err("STORAGE_FAILED", `cannot create the job intent: ${(cause as Error).message}`);
     }
-    return err("STORAGE_FAILED", `cannot create the job intent for "${id}"`);
   }
 
   // ---- phase 2: submission and recovery -------------------------------------------------------------------------------------------
 
   /** Brings an intent to a submitted job: id file, else qex list by dedupe key (adopt), else submit once when absence is PROVEN. */
   async function ensureSubmitted(id: string, intent: Intent): Promise<Result<State>> {
+    const known = await readState(id);
+    if (known?.qexId) return ok(known);
+    // Submission is one caller's business at a time (the job's write lock): two callers that both found the job unsubmitted would
+    // otherwise both ask qex, and both write the id file and the state (S6).
+    try {
+      await mkdir(jobDir(id), { recursive: true });
+      return await withWriteLock(jobDir(id), { waitMs: 15_000 }, () => submitOnce(id, intent));
+    } catch (cause) {
+      if (cause instanceof WriteLockError) return err(cause.kind === "contended" ? "CONFLICT" : "STORAGE_FAILED", `the job "${id}" is being submitted by another caller: ${cause.message}`, { retryable: cause.kind === "contended" });
+      throw cause;
+    }
+  }
+
+  async function submitOnce(id: string, intent: Intent): Promise<Result<State>> {
     const state = await readState(id);
     if (state?.qexId) return ok(state);
     const idFile = join(jobDir(id), "qex.id");

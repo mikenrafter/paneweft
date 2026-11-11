@@ -24,7 +24,7 @@ appendFileSync(join(DIR, "calls.jsonl"), JSON.stringify(argv) + "\n");
 const control = () => { try { return JSON.parse(readFileSync(join(DIR, "control.json"), "utf8")); } catch { return {}; } };
 const jobFile = (id) => join(DIR, "jobs", `${id}.json`);
 const readJob = (id) => { try { return JSON.parse(readFileSync(jobFile(id), "utf8")); } catch { return null; } };
-const writeJob = (job) => { const tmp = jobFile(job.id) + ".tmp"; writeFileSync(tmp, JSON.stringify(job)); renameSync(tmp, jobFile(job.id)); };
+const writeJob = (job) => { const tmp = `${jobFile(job.id)}.${process.pid}.tmp`; writeFileSync(tmp, JSON.stringify(job)); renameSync(tmp, jobFile(job.id)); };
 const allJobs = () => readdirSync(join(DIR, "jobs")).filter((n) => n.endsWith(".json")).map((n) => readJob(n.slice(0, -5))).filter(Boolean).sort((a, b) => a.sequence - b.sequence);
 const TERMINAL = ["completed", "failed", "killed", "timeout", "cancelled", "expired", "oom", "skipped"];
 const now = () => Math.floor(Date.now() / 1000);
