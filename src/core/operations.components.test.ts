@@ -23,14 +23,18 @@ describe("[MC3] list: reviewed golden of the whole text and JSON reply", () => {
   // `mcp.rs -> code/module:mcp; read; s1` for the committed list fixture. Hand-derived: 1 row, complete, the
   // source file is present with its recorded bytes (the test writes "hello\n", sha256 5891b5b5...be03) so freshness is fresh.
   // proves: CLAIM(MC3) header and body of a bounded list reply; no header line is dropped or reordered.
-  const fresh = (): Json => {
+  // S1: freshness reads only operator-registered roots, so the operator registers the root the view records (setup only; the expected
+  // output is unchanged: the file is present with its recorded bytes, hence `fresh`).
+  const openFresh = async () => {
     const root = tempDir("golden");
     mkdirSync(join(root, "src"), { recursive: true });
     writeFileSync(join(root, "src", "mcp.rs"), "hello\n");
-    return withFreshnessRoot(listView(), root);
+    const env = await open(bundleOf([withFreshnessRoot(listView(), root)]));
+    await env.session.registerRepository({ id: "r", root });
+    return env;
   };
   it("[MC3] text golden", async () => {
-    const env = await open(bundleOf([fresh()]));
+    const env = await openFresh();
     const outcome = await env.call("inspect_view", ARGS("modules"));
     expect(outcome.body.trimEnd().split("\n")).toEqual([
       "paneweft.reply/1 view=modules component=list",
@@ -48,7 +52,7 @@ describe("[MC3] list: reviewed golden of the whole text and JSON reply", () => {
     ]);
   });
   it("[MC3] JSON golden (fields of urn:paneweft:schema:reply:1; item = the stored row)", async () => {
-    const env = await open(bundleOf([fresh()]));
+    const env = await openFresh();
     const reply = okJson(await env.call("inspect_view", { ...ARGS("modules"), format: "json" }));
     expect(reply).toMatchObject({
       schemaVersion: "paneweft.reply/1",
