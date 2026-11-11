@@ -11,6 +11,8 @@
 //     BUDGET_TOO_SMALL (minimumBytes 2048); other argument faults are INVALID_ARGUMENT with a pointer.
 // Mating parts: src/cli/main.ts, src/mcp/server.ts.
 //
+// CLAIM(bounded-exit): every outcome leaves through `enforceReplyBudget` in executeOperation, so no producer (failure serializer, echoed input,
+//   unpaged success) can exceed the request's byte budget [reply-budget.ts; operations.exit-budget.test.ts, review S3].
 // CLAIM(operation-order): unknown tool, then SESSION_REQUIRED, then argument validation, then the target lookup, then the budget check,
 //   so the first thing wrong is the thing reported [operations.discovery.test.ts, MC11].
 import { readFile } from "node:fs/promises";
@@ -33,6 +35,7 @@ import { layoutOf, summariseView, QueryError, type EmbedInfo, type ReplyExtras, 
 import { loadSchemaDocuments, type ComponentId } from "../schemas/index.ts";
 import { compareCodeUnits } from "./canonical.ts";
 import { searchSession } from "./search.ts";
+import { boundError, boundSuccessBody, byteLength, replyBudget } from "./reply-budget.ts";
 
 export type ReplyFormat = "text" | "json";
 
@@ -541,7 +544,23 @@ async function search(session: Session, args: { query: string; scope?: { entity:
 
 // ---- entry point -----------------------------------------------------------------------------------------------------------------
 
+/** The one exit: an outcome within the budget is returned as is; otherwise it is replaced by its bounded form (reply-budget.ts). */
+export function enforceReplyBudget(outcome: OperationOutcome, budget: number, operation: string): OperationOutcome {
+  if (byteLength(outcome.body) <= budget) return outcome;
+  if (!outcome.ok) {
+    const error = boundError(outcome.error, budget);
+    return { ok: false, format: outcome.format, body: JSON.stringify(error), error };
+  }
+  const bounded = boundSuccessBody(outcome.body, outcome.format, operation, budget);
+  return { ok: true, format: outcome.format, body: bounded.body, payload: bounded.payload, cursor: null };
+}
+
 export async function executeOperation(session: Session | null, name: string, args: unknown): Promise<OperationOutcome> {
+  const maxBytes = args !== null && typeof args === "object" && !Array.isArray(args) ? (args as { maxBytes?: unknown }).maxBytes : undefined;
+  return enforceReplyBudget(await dispatchOperation(session, name, args), replyBudget(maxBytes), name);
+}
+
+async function dispatchOperation(session: Session | null, name: string, args: unknown): Promise<OperationOutcome> {
   const requestedFormat: ReplyFormat = args !== null && typeof args === "object" && !Array.isArray(args) && (args as { format?: unknown }).format === "json" ? "json" : "text";
   if (!(TOOL_NAMES as readonly string[]).includes(name)) return failed(requestedFormat, "UNKNOWN_OPERATION", `unknown operation "${name}"; the operations are ${TOOL_NAMES.join(", ")}`);
   if (session === null && !SESSION_FREE.has(name)) return failed(requestedFormat, "SESSION_REQUIRED", `${name} needs a session; pass --session DIR (or set PANEWEFT_SESSION) / start paneweft mcp with --session DIR`);

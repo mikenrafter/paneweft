@@ -12,6 +12,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { executeOperation, type OperationOutcome } from "../core/operations.ts";
+import { boundError, replyBudget } from "../core/reply-budget.ts";
 import { openSession, type Session } from "../core/session.ts";
 import { runExample } from "../core/runner.ts";
 import type { OperationError } from "../core/errors.ts";
@@ -231,10 +232,14 @@ function print(io: CliIo, outcome: OperationOutcome): number {
   return outcome.ok ? 0 : 1;
 }
 
-function errorBody(code: OperationError["code"], message: string, io: CliIo): number {
-  const error: OperationError = { schemaVersion: "paneweft.error/1", code, message, errors: [], retryable: false };
-  io.stdout(JSON.stringify(error));
+/** Prints an error that did not come from an operation, within the default reply budget (these commands take no --max-bytes). */
+function printError(error: OperationError, io: CliIo): number {
+  io.stdout(JSON.stringify(boundError(error, replyBudget(undefined))));
   return 1;
+}
+
+function errorBody(code: OperationError["code"], message: string, io: CliIo): number {
+  return printError({ schemaVersion: "paneweft.error/1", code, message, errors: [], retryable: false }, io);
 }
 
 async function runExampleCommand(parsed: Parsed, session: Session | null, io: CliIo): Promise<number> {
@@ -261,7 +266,7 @@ async function runExampleCommand(parsed: Parsed, session: Session | null, io: Cl
   const registry = parsed.values.get("--runners") ?? io.env.PANEWEFT_RUNNERS;
   if (registry === undefined) return errorBody("RUNNER_NOT_FOUND", "no runner registry is configured; pass --runners FILE (or set PANEWEFT_RUNNERS)", io);
   const result = await runExample(session, { runnerRegistryFile: resolve(io.cwd, registry), runnerId, parameters, key: { viewId: view, snapshotId: snapshot } });
-  if (!result.ok) { io.stdout(JSON.stringify(result.error)); return 1; }
+  if (!result.ok) return printError(result.error, io);
   const run = result.value;
   io.stdout(format === "json" ? JSON.stringify({ schemaVersion: "paneweft.example_run/1", recorded: run }) : `recorded run ${run.runId}: ${run.status}\nview: ${run.viewId}@${run.snapshotId}\n`);
   return 0;
@@ -284,7 +289,7 @@ async function serveCommand(parsed: Parsed, session: Session | null, io: CliIo):
     ...(port === undefined ? {} : { port: Number(port) }),
     ...(parsed.values.has("--assets") ? { assetsDirectory: resolve(io.cwd, parsed.values.get("--assets") as string) } : {}),
   });
-  if (!started.ok) { io.stdout(JSON.stringify(started.error)); return 1; }
+  if (!started.ok) return printError(started.error, io);
   const server = started.value;
   io.stdout(`paneweft viewer: ${server.urlFor()}\n`);
   await new Promise<void>((resolveStop) => {
