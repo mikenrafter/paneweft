@@ -6,7 +6,8 @@
 // repository is `unverified` with a reason and nothing is read, probed or hashed for it.
 // fresh: every repository is registered and every recorded file hashes the same.
 // stale: at least one differs or is gone (changedPaths). unknown: a registered root is inaccessible and
-// nothing is known stale. unverified: some repository is not registered (and nothing is stale or unknown).
+// nothing is known stale. unverified: some repository is not registered, or its files cannot be read on this platform
+// (UNSUPPORTED_PLATFORM, confined reads are Linux-only), and nothing is stale or unknown.
 // Precedence stale > unknown > unverified > fresh; `unverified` lists are attached whenever non-empty.
 //
 // CLAIM(no-read-before-deny): the registration check happens BEFORE any filesystem call for a repository, and a recorded path is
@@ -16,13 +17,13 @@ import { stat } from "node:fs/promises";
 import type { Envelope } from "./wire.ts";
 import type { RepositoryRegistration } from "./session.ts";
 import { normaliseRelativePath } from "./anchors.ts";
-import { readConfinedFile } from "./confined-read.ts";
+import { readConfinedFile, UNSUPPORTED_PLATFORM_MESSAGE } from "./confined-read.ts";
 import { compareCodeUnits } from "./canonical.ts";
 import { sha256Hex } from "./digest.ts";
 
 export interface ChangedPath { repository: string; path: string; recordedSha256: string; currentSha256: string | null }
 /** A repository whose freshness was not checked. `code` is machine readable, `reason` is for people. */
-export interface UnverifiedRepository { repository: string; code: "REPOSITORY_NOT_REGISTERED"; reason: string }
+export interface UnverifiedRepository { repository: string; code: "REPOSITORY_NOT_REGISTERED" | "UNSUPPORTED_PLATFORM"; reason: string }
 export type FreshnessResult =
   | { status: "fresh" }
   | { status: "stale"; changedPaths: ChangedPath[]; inaccessibleRoots: string[]; unverified?: UnverifiedRepository[] }
@@ -30,7 +31,7 @@ export type FreshnessResult =
   | { status: "unverified"; unverified: UnverifiedRepository[] };
 
 /** Where a registered root's file stands now. `sha256: null` means the file is gone, unreadable or unreachable from the root. */
-export type CurrentFile = { state: "unregistered" } | { state: "root-inaccessible"; root: string } | { state: "present"; sha256: string | null };
+export type CurrentFile = { state: "unregistered" } | { state: "unsupported-platform" } | { state: "root-inaccessible"; root: string } | { state: "present"; sha256: string | null };
 
 /** The sha256 of `path` under the operator-registered root of `repository`, judged lexically first and canonically second. */
 export async function currentFileHash(registered: RepositoryRegistration[], repository: string, path: string): Promise<CurrentFile> {
@@ -44,7 +45,10 @@ export async function currentFileHash(registered: RepositoryRegistration[], repo
   const relative = normaliseRelativePath(path);
   if (relative === null) return { state: "present", sha256: null };
   const read = await readConfinedFile(registration.root, relative);
-  if (!read.ok) return read.reason === "root-inaccessible" ? { state: "root-inaccessible", root: registration.root } : { state: "present", sha256: null };
+  if (!read.ok) {
+    if (read.reason === "unsupported-platform") return { state: "unsupported-platform" };
+    return read.reason === "root-inaccessible" ? { state: "root-inaccessible", root: registration.root } : { state: "present", sha256: null };
+  }
   return { state: "present", sha256: sha256Hex(read.bytes) };
 }
 
@@ -64,6 +68,10 @@ export async function checkFreshness(freshness: Envelope["freshness"], registere
     for (const path of Object.keys(record.files).sort(compareCodeUnits)) {
       const recordedSha256 = record.files[path] as string;
       const current = await currentFileHash(registered, record.id, path);
+      if (current.state === "unsupported-platform") {
+        unverified.push({ repository: record.id, code: "UNSUPPORTED_PLATFORM", reason: `repository "${record.id}" was not checked: ${UNSUPPORTED_PLATFORM_MESSAGE}` });
+        break; // no file of this repository can be read here; one report per repository
+      }
       if (current.state === "root-inaccessible") {
         if (!inaccessibleRoots.includes(current.root)) inaccessibleRoots.push(current.root);
         break; // the root cannot be read at all; one report per root, not one per file

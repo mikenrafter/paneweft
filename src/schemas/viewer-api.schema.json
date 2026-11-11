@@ -101,7 +101,7 @@
       "type": "array",
       "items": {
         "type": "object", "additionalProperties": false, "required": ["repository", "code", "reason"],
-        "properties": { "repository": { "type": "string" }, "code": { "const": "REPOSITORY_NOT_REGISTERED" }, "reason": { "type": "string", "minLength": 1 } }
+        "properties": { "repository": { "type": "string" }, "code": { "enum": ["REPOSITORY_NOT_REGISTERED", "UNSUPPORTED_PLATFORM"] }, "reason": { "type": "string", "minLength": 1 } }
       }
     },
     "FreshnessResult": {

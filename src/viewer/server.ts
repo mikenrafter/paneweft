@@ -9,11 +9,12 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { chmod, readFile, rm, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { chmod, open, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { err, ok, type OperationError, type OperationErrorCode, type Result } from "../core/errors.ts";
-import { readConfinedFile } from "../core/confined-read.ts";
+import { confinedReadsSupported, readConfinedFile } from "../core/confined-read.ts";
 import type { Session } from "../core/session.ts";
 import type { EntityRef } from "../core/wire.ts";
 import { createSessionSource } from "./session-source.ts";
@@ -53,7 +54,7 @@ const PAGE_HEADERS = {
 };
 const STATUS_OF: Partial<Record<OperationErrorCode, number>> = {
   NOT_FOUND: 404, UNRESOLVED_TARGET: 404, UNAUTHORIZED: 401, FORBIDDEN_ORIGIN: 403, CONFLICT: 409, SNAPSHOT_CONFLICT: 409,
-  VALIDATION_FAILED: 422, INVALID_ARGUMENT: 400, CURSOR_INVALID: 400, INVALID_PATH: 400, PATH_OUTSIDE_ROOT: 403,
+  VALIDATION_FAILED: 422, INVALID_ARGUMENT: 400, CURSOR_INVALID: 400, INVALID_PATH: 400, PATH_OUTSIDE_ROOT: 403, UNSUPPORTED_PLATFORM: 501,
 };
 
 interface Reply { status: number; type: string; body: string | Buffer; extra?: Record<string, string> }
@@ -82,14 +83,39 @@ async function readBody(request: IncomingMessage): Promise<{ ok: true; text: str
   return { ok: true, text: Buffer.concat(parts).toString("utf8") };
 }
 
-/** A static file strictly inside `root`, read from a verified handle (CLAIM(confined-read)). The path is decoded once; anything that is not a plain relative file name is refused. */
-async function readAsset(root: string, encoded: string): Promise<{ file: string; bytes: Buffer } | { status: 400 | 404 }> {
+/**
+ * Where confined reads are unsupported (not Linux, review round 2 S1) the viewer cannot vouch for a path at request time, so it serves
+ * only its fixed bundle: the regular files that are direct children of the assets directory at start-up (symlinks and subdirectories
+ * excluded, opened with O_NOFOLLOW), held in memory. The assets directory is the product's own build output, trusted at start-up.
+ */
+async function loadBundle(root: string): Promise<Map<string, Buffer>> {
+  const bundle = new Map<string, Buffer>();
+  for (const entry of await readdir(root, { withFileTypes: true }).catch(() => [])) {
+    if (!entry.isFile()) continue;
+    const handle = await open(join(root, entry.name), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK).catch(() => null);
+    if (handle === null) continue;
+    try {
+      if ((await handle.stat()).isFile()) bundle.set(entry.name, await handle.readFile());
+    } catch { /* unreadable: not part of the bundle */ } finally {
+      await handle.close().catch(() => {});
+    }
+  }
+  return bundle;
+}
+
+/** A static file strictly inside `root`, read from a verified handle (CLAIM(confined-read)), or from the fixed `bundle` where that is unsupported. The path is decoded once; anything that is not a plain relative file name is refused. */
+async function readAsset(root: string, encoded: string, bundle: Map<string, Buffer> | null): Promise<{ file: string; bytes: Buffer } | { status: 400 | 404 }> {
   let decoded: string;
   try { decoded = decodeURIComponent(encoded); } catch { return { status: 400 }; }
   if (decoded.includes("\0")) return { status: 400 };
   if (decoded.includes("\\")) return { status: 404 };
   const segments = decoded.split("/");
   if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) return { status: 404 };
+  if (bundle !== null) {
+    const name = segments.length === 1 ? (segments[0] as string) : null;
+    const bytes = name === null ? undefined : bundle.get(name);
+    return name !== null && bytes !== undefined ? { file: name, bytes } : { status: 404 };
+  }
   const read = await readConfinedFile(root, segments.join("/"));
   return read.ok ? { file: read.realPath, bytes: read.bytes } : { status: 404 };
 }
@@ -107,6 +133,7 @@ export async function startViewer(options: ViewerServerOptions): Promise<Result<
   if (!isLoopback(host)) return err("NON_LOOPBACK_HOST", `the viewer binds only 127.0.0.1 or ::1, not "${host}"`);
   const { session } = options;
   const assets = options.assetsDirectory ?? DEFAULT_ASSETS;
+  const bundle = confinedReadsSupported() ? null : await loadBundle(assets);
   const token = randomBytes(32).toString("hex");
   const source = createSessionSource(session);
   let origin = "";
@@ -221,7 +248,7 @@ export async function startViewer(options: ViewerServerOptions): Promise<Result<
     if (method !== "GET" && method !== "HEAD") return fail("NOT_FOUND", `no route ${method} ${rawPath}`);
     const asset = rawPath === "/" ? "index.html" : rawPath.startsWith("/assets/") ? rawPath.slice("/assets/".length) : null;
     if (asset === null) return fail("NOT_FOUND", `no route ${rawPath}`);
-    const found = await readAsset(assets, asset);
+    const found = await readAsset(assets, asset, bundle);
     if (!("file" in found)) return fail(found.status === 400 ? "INVALID_ARGUMENT" : "NOT_FOUND", `no asset ${rawPath}`, found.status);
     return { status: 200, type: CONTENT_TYPES[extname(found.file)] ?? "application/octet-stream", body: found.bytes, extra: PAGE_HEADERS };
   }

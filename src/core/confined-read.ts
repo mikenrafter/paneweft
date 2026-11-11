@@ -13,15 +13,17 @@
 //   3. ask the kernel where the OPEN handle lives (`realpath /proc/self/fd/<fd>`), which also catches a swapped ancestor directory,
 //      something O_NOFOLLOW on the leaf cannot see; refuse if that is outside the root or not a regular file;
 //   4. read from the handle.
-// Platform: step 3 needs Linux's /proc. Elsewhere the handle is compared by device and inode with the canonical path re-resolved after the
-// open, which narrows the window but does not close it; that weaker claim is deliberately not CLAIM(confined-read).
+// Platform: step 3 needs Linux's /proc/self/fd. v0 confined reads are Linux-only (review round 2, S1): anywhere else, or when /proc cannot
+// be used, nothing is opened and the read fails closed with `unsupported-platform`. A weaker fallback (device/inode against a re-resolved
+// pathname) was removed because it leaves the check-to-use window open, which this module exists to close.
 // Errors: returns a reason, never throws and never echoes file content or the outside path:
-//   root-inaccessible (root cannot be resolved), not-found (missing, unreadable, or not a regular file), outside (leaves the root).
+//   root-inaccessible (root cannot be resolved), not-found (missing, unreadable, or not a regular file), outside (leaves the root),
+//   unsupported-platform (no /proc/self/fd: the read is refused rather than weakened).
 import { constants } from "node:fs";
-import { open, realpath, stat } from "node:fs/promises";
+import { open, realpath } from "node:fs/promises";
 import { join, sep } from "node:path";
 
-export type ConfinedReason = "root-inaccessible" | "not-found" | "outside";
+export type ConfinedReason = "root-inaccessible" | "not-found" | "outside" | "unsupported-platform";
 export type CanonicalPath = { ok: true; path: string; root: string } | { ok: false; reason: ConfinedReason };
 export type ConfinedRead = { ok: true; bytes: Buffer; realPath: string } | { ok: false; reason: ConfinedReason };
 
@@ -36,6 +38,11 @@ export function pretendPlatform(platform: string): () => void {
   return () => { platformOverride = undefined; };
 }
 const currentPlatform = (): string => platformOverride ?? process.platform;
+/** Whether confined reads can be vouched for here (Linux: the handle's own path comes from /proc/self/fd). */
+export const confinedReadsSupported = (): boolean => currentPlatform() === "linux";
+
+/** The one wording for "this platform cannot confine a read", shared by the anchor error and the freshness reason. */
+export const UNSUPPORTED_PLATFORM_MESSAGE = "reads confined to a registered root need Linux (/proc/self/fd); on this platform source files are not read, so anchors cannot be shown and freshness cannot be verified";
 
 const isInside = (root: string, path: string): boolean => path === root || path.startsWith(root.endsWith(sep) ? root : root + sep);
 
@@ -56,17 +63,10 @@ export async function canonicalPathInside(root: string, relative: string): Promi
   return isInside(realRoot, real) ? { ok: true, path: real, root: realRoot } : { ok: false, reason: "outside" };
 }
 
-/** Where the open handle really is, or null when that cannot be established (fail closed). */
-async function handleRealPath(handle: Awaited<ReturnType<typeof open>>, canonical: string): Promise<string | null> {
+/** Where the open handle really is, or null when the kernel cannot say (fail closed: nothing is vouched for). */
+async function handleRealPath(handle: Awaited<ReturnType<typeof open>>): Promise<string | null> {
   try {
     return await realpath(`/proc/self/fd/${handle.fd}`);
-  } catch {
-    if (currentPlatform() === "linux") return null; // /proc is expected here; without it nothing can be vouched for
-  }
-  try {
-    const [opened, again] = [await handle.stat(), await realpath(canonical)];
-    const current = await stat(again);
-    return current.dev === opened.dev && current.ino === opened.ino ? again : null;
   } catch {
     return null;
   }
@@ -74,6 +74,7 @@ async function handleRealPath(handle: Awaited<ReturnType<typeof open>>, canonica
 
 /** The bytes of `relative` under `root` (a plain relative path the caller already judged lexically). */
 export async function readConfinedFile(root: string, relative: string): Promise<ConfinedRead> {
+  if (!confinedReadsSupported()) return { ok: false, reason: "unsupported-platform" };
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     const located = await canonicalPathInside(root, relative);
     if (!located.ok) return located;
@@ -85,7 +86,7 @@ export async function readConfinedFile(root: string, relative: string): Promise<
       return { ok: false, reason: (error as NodeJS.ErrnoException).code === "ELOOP" ? "outside" : "not-found" };
     }
     try {
-      const opened = await handleRealPath(handle, located.path);
+      const opened = await handleRealPath(handle);
       if (opened === null) return { ok: false, reason: "not-found" };
       if (!isInside(located.root, opened)) return { ok: false, reason: "outside" };
       if (!(await handle.stat()).isFile()) return { ok: false, reason: "not-found" };

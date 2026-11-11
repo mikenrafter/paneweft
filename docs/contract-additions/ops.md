@@ -101,6 +101,8 @@ so they are NOT validated against `reply.schema.json`; neither are `list_compone
 * **Cursor faults**: CURSOR_INVALID / CURSOR_MISMATCH / CURSOR_STALE carry exactly one issue with pointer `/cursor`. CURSOR_STALE (review S10): the cursor belongs to this query but the listing's entries changed since it was issued (a notebook edit, a recorded run, an import that changes a search); repeat the request without a cursor. Order of checks: INVALID, MISMATCH, STALE, then the position. Non-object tool arguments:
   INVALID_ARGUMENT with one issue `("", TYPE)`.
 
+* **Confined reads are Linux-only in v0** (review round 2, S1). Reading a source anchor, hashing a file for freshness and serving a viewer asset all go through `readConfinedFile`, which vouches for a read with `/proc/self/fd`. Without it nothing is opened and the read fails closed with the reason `unsupported-platform`; there is no weaker fallback (a device/inode comparison against a re-resolved pathname leaves the check-to-use window open). Visible effects: an anchor read is `UNSUPPORTED_PLATFORM` (HTTP 501, not retryable); a repository whose recorded files cannot be read is `unverified` in freshness with `code: "UNSUPPORTED_PLATFORM"`; a source link's currency is `unknown`; the viewer serves only the regular files that were direct children of its assets directory at start-up (held in memory) and answers 404 for any other asset path.
+
 ## 7. Open questions
 1. **Progress at the minimum budget.** `minimumBytes` = smallest budget that fits the mandatory header. At exactly that budget a
    reply may carry zero items and the same position as cursor, so a chain would not advance. Proposal: minimumBytes should
