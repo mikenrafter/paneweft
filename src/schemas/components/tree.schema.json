@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:component:tree:1",
+  "title": "Tree and columned tree",
+  "description": "Explicit parent/child occurrences with optional columns. Node ids identify occurrences; structural cycles are rejected (design section 2.2).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["columns", "roots", "nodes"],
+  "properties": {
+    "columns": { "type": "array", "minItems": 1, "maxItems": 64, "items": { "$ref": "urn:paneweft:schema:common:1#/$defs/Column" } },
+    "roots": { "type": "array", "items": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" } },
+    "nodes": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          { "$ref": "urn:paneweft:schema:common:1#/$defs/Item" },
+          {
+            "type": "object",
+            "required": ["cells", "children", "childrenState"],
+            "properties": {
+              "cells": { "$ref": "urn:paneweft:schema:common:1#/$defs/Cells" },
+              "children": { "type": "array", "items": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" } },
+              "childrenState": { "enum": ["complete", "not_loaded"], "x-hint": "Use 'complete' or 'not_loaded'." }
+            }
+          }
+        ],
+        "type": "object",
+        "unevaluatedProperties": false
+      }
+    }
+  }
+}

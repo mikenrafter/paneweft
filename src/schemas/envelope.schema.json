@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:envelope:1",
+  "title": "paneweft view envelope",
+  "description": "A typed view of one entity at one snapshot (design section 4). 'component' selects the schema of 'data'.",
+  "type": "object",
+  "required": [
+    "schemaVersion", "id", "title", "question", "entity", "snapshotId", "component", "viewDefinitionId",
+    "scope", "sources", "generatedAt", "freshness", "links", "completeness"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "paneweft.view/1", "x-hint": "Use the literal \"paneweft.view/1\"." },
+    "id": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
+    "title": { "$ref": "urn:paneweft:schema:common:1#/$defs/Label" },
+    "question": { "$ref": "urn:paneweft:schema:common:1#/$defs/ShortText" },
+    "entity": { "$ref": "urn:paneweft:schema:common:1#/$defs/EntityRef" },
+    "snapshotId": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
+    "component": {
+      "enum": ["list", "tree", "graph", "source", "shape", "notebook", "example"],
+      "x-hint": "v0 components: list, tree, graph, source, shape, notebook, example."
+    },
+    "viewDefinitionId": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repositories", "roots", "excludes", "limits"],
+      "properties": {
+        "repositories": { "type": "array", "maxItems": 64, "items": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" } },
+        "roots": { "type": "array", "maxItems": 256, "items": { "type": "string", "maxLength": 1024 } },
+        "excludes": { "type": "array", "maxItems": 256, "items": { "type": "string", "maxLength": 1024 } },
+        "relation": { "type": "string", "maxLength": 128 },
+        "limits": { "type": "array", "maxItems": 64, "items": { "$ref": "urn:paneweft:schema:common:1#/$defs/ShortText" } }
+      }
+    },
+    "sources": { "type": "array", "maxItems": 512, "items": { "$ref": "urn:paneweft:schema:common:1#/$defs/Source" } },
+    "generatedAt": { "type": "string", "format": "date-time", "pattern": "Z$", "x-hint": "Use an RFC 3339 UTC timestamp ending in Z." },
+    "freshness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repositories"],
+      "properties": {
+        "repositories": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "root", "gitRev", "dirty", "files"],
+            "properties": {
+              "id": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
+              "root": { "type": "string", "minLength": 1, "maxLength": 1024 },
+              "gitRev": { "type": ["string", "null"], "pattern": "^[0-9a-f]{40}$" },
+              "dirty": { "type": "boolean" },
+              "files": {
+                "type": "object",
+                "propertyNames": { "minLength": 1, "maxLength": 1024 },
+                "additionalProperties": { "$ref": "urn:paneweft:schema:common:1#/$defs/Sha256" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "links": {
+      "type": "array",
+      "maxItems": 1024,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "relation", "snapshotId", "viewId"],
+        "properties": {
+          "id": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
+          "relation": { "$ref": "urn:paneweft:schema:common:1#/$defs/Label" },
+          "snapshotId": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
+          "viewId": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
+          "itemId": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
+          "entity": { "$ref": "urn:paneweft:schema:common:1#/$defs/EntityRef" }
+        }
+      }
+    },
+    "completeness": { "$ref": "urn:paneweft:schema:common:1#/$defs/Completeness" },
+    "data": {}
+  },
+  "allOf": [
+    {
+      "if": { "type": "object", "required": ["completeness"], "properties": { "completeness": { "type": "object", "required": ["status"], "properties": { "status": { "const": "unsupported" } } } } },
+      "then": { "type": "object", "properties": { "data": false }, "x-hint": "An unsupported view carries no 'data' body; remove 'data'." },
+      "else": { "type": "object", "required": ["data"], "x-hint": "A complete or partial view needs a 'data' body matching its component schema." }
+    },
+    { "if": { "type": "object", "required": ["component"], "properties": { "component": { "const": "list" } } }, "then": { "type": "object", "properties": { "data": { "$ref": "urn:paneweft:schema:component:list:1" } } } },
+    { "if": { "type": "object", "required": ["component"], "properties": { "component": { "const": "tree" } } }, "then": { "type": "object", "properties": { "data": { "$ref": "urn:paneweft:schema:component:tree:1" } } } },
+    { "if": { "type": "object", "required": ["component"], "properties": { "component": { "const": "graph" } } }, "then": { "type": "object", "properties": { "data": { "$ref": "urn:paneweft:schema:component:graph:1" } } } },
+    { "if": { "type": "object", "required": ["component"], "properties": { "component": { "const": "source" } } }, "then": { "type": "object", "properties": { "data": { "$ref": "urn:paneweft:schema:component:source:1" } } } },
+    { "if": { "type": "object", "required": ["component"], "properties": { "component": { "const": "shape" } } }, "then": { "type": "object", "properties": { "data": { "$ref": "urn:paneweft:schema:component:shape:1" } } } },
+    { "if": { "type": "object", "required": ["component"], "properties": { "component": { "const": "notebook" } } }, "then": { "type": "object", "properties": { "data": { "$ref": "urn:paneweft:schema:component:notebook:1" } } } },
+    { "if": { "type": "object", "required": ["component"], "properties": { "component": { "const": "example" } } }, "then": { "type": "object", "properties": { "data": { "$ref": "urn:paneweft:schema:component:example:1" } } } }
+  ],
+  "unevaluatedProperties": false
+}

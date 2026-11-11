@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:tool:notebook_update:1",
+  "title": "notebook_update",
+  "description": "Replace the ordered blocks of a notebook page against an expected revision; creates a new revision or reports a conflict.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "pageId",
+    "expectedRevision",
+    "blocks"
+  ],
+  "properties": {
+    "pageId": {
+      "$ref": "urn:paneweft:schema:common:1#/$defs/Id"
+    },
+    "expectedRevision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "blocks": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "format": {
+      "enum": [
+        "text",
+        "json"
+      ],
+      "default": "text",
+      "description": "Reply format."
+    },
+    "maxBytes": {
+      "type": "integer",
+      "minimum": 2048,
+      "maximum": 32768,
+      "default": 8192,
+      "description": "UTF-8 byte budget of the whole serialized reply (design section 4)."
+    }
+  }
+}

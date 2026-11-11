@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:component:source:1",
+  "title": "Annotated source excerpt",
+  "description": "A stored excerpt with file line numbering and annotations that cite claim ids (design section 2.4).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["excerpt", "annotations"],
+  "properties": {
+    "excerpt": {
+      "allOf": [
+        { "$ref": "urn:paneweft:schema:common:1#/$defs/Item" },
+        {
+          "type": "object",
+          "required": ["anchor", "language", "text"],
+          "properties": {
+            "language": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "text": { "$ref": "urn:paneweft:schema:common:1#/$defs/Text" }
+          }
+        }
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    },
+    "annotations": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          { "$ref": "urn:paneweft:schema:common:1#/$defs/Item" },
+          {
+            "type": "object",
+            "required": ["lines", "message", "claimIds"],
+            "properties": {
+              "lines": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "integer", "minimum": 1 } },
+              "message": { "$ref": "urn:paneweft:schema:common:1#/$defs/ShortText" },
+              "claimIds": { "type": "array", "items": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" } }
+            }
+          }
+        ],
+        "type": "object",
+        "unevaluatedProperties": false
+      }
+    }
+  }
+}

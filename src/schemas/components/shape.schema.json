@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:component:shape:1",
+  "title": "Data shape and details",
+  "description": "Declared or observed fields of a value or boundary payload; recursive types use 'ref' (design section 2.5).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["basis", "root", "fields"],
+  "properties": {
+    "basis": { "enum": ["declared", "observed"], "x-hint": "Use 'declared' or 'observed'." },
+    "root": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
+    "fields": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          { "$ref": "urn:paneweft:schema:common:1#/$defs/Item" },
+          {
+            "type": "object",
+            "required": ["path", "type", "presence", "children"],
+            "properties": {
+              "path": { "type": "string", "minLength": 1, "maxLength": 1024 },
+              "type": { "type": "string", "minLength": 1, "maxLength": 256 },
+              "presence": { "enum": ["required", "optional", "unknown"], "x-hint": "Use 'required', 'optional' or 'unknown'." },
+              "example": { "$ref": "urn:paneweft:schema:common:1#/$defs/Scalar" },
+              "children": { "type": "array", "items": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" } },
+              "ref": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" }
+            }
+          }
+        ],
+        "type": "object",
+        "unevaluatedProperties": false
+      }
+    }
+  }
+}

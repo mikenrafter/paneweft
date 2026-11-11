@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:reply:1",
+  "title": "Bounded view reply (format json)",
+  "description": "Body of render/inspect_view/open_entity/notebook_get replies in JSON format. Counts refer to the same filtered snapshot; the header fields are mandatory even when zero items match (design section 4).",
+  "type": "object",
+  "required": ["schemaVersion", "view", "question", "completeness", "freshness", "provenance", "evidence", "filters", "counts", "items", "cursor"],
+  "properties": {
+    "schemaVersion": { "const": "paneweft.reply/1" },
+    "view": {
+      "type": "object",
+      "required": ["id", "title", "component", "snapshotId"],
+      "properties": { "id": { "type": "string" }, "title": { "type": "string" }, "component": { "type": "string" }, "snapshotId": { "type": "string" } }
+    },
+    "question": { "type": "string" },
+    "completeness": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": { "enum": ["complete", "partial", "unsupported"] },
+        "criterion": { "type": "string" },
+        "gapCount": { "type": "integer", "minimum": 0 },
+        "gaps": { "type": "array", "items": { "type": "object", "required": ["id", "question", "reason"] } },
+        "reason": { "type": "string" },
+        "missingCapabilities": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "freshness": {
+      "type": "object",
+      "required": ["status"],
+      "properties": {
+        "status": { "enum": ["fresh", "stale", "unknown"] },
+        "changedPaths": { "type": "array", "items": { "type": "string" } },
+        "inaccessibleRoots": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "required": ["read", "parsed", "compiled", "observed", "inferred"],
+      "properties": {
+        "read": { "type": "integer", "minimum": 0 },
+        "parsed": { "type": "integer", "minimum": 0 },
+        "compiled": { "type": "integer", "minimum": 0 },
+        "observed": { "type": "integer", "minimum": 0 },
+        "inferred": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "evidence": { "type": "object", "required": ["sources"], "properties": { "sources": { "type": "array", "items": { "type": "string" } } } },
+    "filters": { "type": "object" },
+    "order": { "type": ["object", "null"] },
+    "counts": {
+      "type": "object",
+      "required": ["unit", "total", "matched", "returned", "omitted", "truncated"],
+      "properties": {
+        "unit": { "type": "string" },
+        "total": { "type": "integer", "minimum": 0 },
+        "matched": { "type": "integer", "minimum": 0 },
+        "returned": { "type": "integer", "minimum": 0 },
+        "omitted": { "type": "integer", "minimum": 0 },
+        "truncated": { "type": "boolean" }
+      }
+    },
+    "notice": { "type": "string" },
+    "items": { "type": "array" },
+    "cursor": { "type": ["string", "null"] }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:tool:example_record:1",
+  "title": "example_record",
+  "description": "Record one run of an example scenario with its result bundle; validates assertions and result references. Never executes anything.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "viewId",
+    "snapshotId",
+    "output"
+  ],
+  "properties": {
+    "viewId": {
+      "$ref": "urn:paneweft:schema:common:1#/$defs/Id"
+    },
+    "snapshotId": {
+      "$ref": "urn:paneweft:schema:common:1#/$defs/Id"
+    },
+    "output": {
+      "type": "object",
+      "description": "A paneweft.run/1 document."
+    },
+    "format": {
+      "enum": [
+        "text",
+        "json"
+      ],
+      "default": "text",
+      "description": "Reply format."
+    },
+    "maxBytes": {
+      "type": "integer",
+      "minimum": 2048,
+      "maximum": 32768,
+      "default": 8192,
+      "description": "UTF-8 byte budget of the whole serialized reply (design section 4)."
+    }
+  }
+}

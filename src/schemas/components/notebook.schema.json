@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:component:notebook:1",
+  "title": "Notebook and story",
+  "description": "Ordered blocks: prose, claim, view and example. Evidence targets are source ids or {viewId, itemId}, never bare item ids (design section 2.6).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["blocks"],
+  "properties": {
+    "blocks": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          { "$ref": "urn:paneweft:schema:common:1#/$defs/Item" },
+          {
+            "type": "object",
+            "required": ["kind"],
+            "properties": {
+              "kind": { "enum": ["prose", "claim", "view", "example"], "x-hint": "Use 'prose', 'claim', 'view' or 'example'." },
+              "markdown": { "$ref": "urn:paneweft:schema:common:1#/$defs/Text" },
+              "viewId": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
+              "statement": { "$ref": "urn:paneweft:schema:common:1#/$defs/ShortText" },
+              "status": { "enum": ["supported", "disputed", "open"], "x-hint": "Use 'supported', 'disputed' or 'open'." },
+              "supports": { "type": "array", "items": { "$ref": "#/$defs/EvidenceTarget" } },
+              "contradicts": { "type": "array", "items": { "$ref": "#/$defs/EvidenceTarget" } },
+              "exampleId": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" }
+            }
+          },
+          { "if": { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "prose" } } }, "then": { "type": "object", "required": ["markdown"], "properties": { "viewId": false, "statement": false, "status": false, "supports": false, "contradicts": false, "exampleId": false } } },
+          { "if": { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "view" } } }, "then": { "type": "object", "required": ["viewId"], "properties": { "markdown": false, "statement": false, "status": false, "supports": false, "contradicts": false, "exampleId": false } } },
+          { "if": { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "claim" } } }, "then": { "type": "object", "required": ["statement", "status", "supports", "contradicts"], "properties": { "markdown": false, "viewId": false, "exampleId": false } } },
+          { "if": { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "example" } } }, "then": { "type": "object", "required": ["exampleId"], "properties": { "markdown": false, "viewId": false, "statement": false, "status": false, "supports": false, "contradicts": false } } }
+        ],
+        "type": "object",
+        "unevaluatedProperties": false
+      }
+    }
+  },
+  "$defs": {
+    "EvidenceTarget": {
+      "if": { "type": "object" },
+      "then": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["viewId", "itemId"],
+        "properties": { "viewId": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" }, "itemId": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" } }
+      },
+      "else": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" }
+    }
+  }
+}

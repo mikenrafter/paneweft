@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:tool:register_view:1",
+  "title": "register_view",
+  "description": "Register a view definition for an entity kind against an expected registry revision.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "definition",
+    "expectedRevision"
+  ],
+  "properties": {
+    "definition": {
+      "type": "object",
+      "description": "A view definition."
+    },
+    "expectedRevision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "format": {
+      "enum": [
+        "text",
+        "json"
+      ],
+      "default": "text",
+      "description": "Reply format."
+    },
+    "maxBytes": {
+      "type": "integer",
+      "minimum": 2048,
+      "maximum": 32768,
+      "default": 8192,
+      "description": "UTF-8 byte budget of the whole serialized reply (design section 4)."
+    }
+  }
+}

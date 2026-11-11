@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:tool:navigate:1",
+  "title": "navigate",
+  "description": "Follow an item of a pane to its target and return the next pane or a named unresolved target.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "pane",
+    "itemId"
+  ],
+  "properties": {
+    "pane": {
+      "type": "object",
+      "description": "Pane state as returned by open_entity or navigate."
+    },
+    "itemId": {
+      "$ref": "urn:paneweft:schema:common:1#/$defs/Id"
+    },
+    "action": {
+      "enum": [
+        "open-entity",
+        "open-source"
+      ],
+      "default": "open-entity"
+    },
+    "format": {
+      "enum": [
+        "text",
+        "json"
+      ],
+      "default": "text",
+      "description": "Reply format."
+    },
+    "maxBytes": {
+      "type": "integer",
+      "minimum": 2048,
+      "maximum": 32768,
+      "default": 8192,
+      "description": "UTF-8 byte budget of the whole serialized reply (design section 4)."
+    }
+  }
+}

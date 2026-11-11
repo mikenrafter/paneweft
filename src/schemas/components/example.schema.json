@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:component:example:1",
+  "title": "Example",
+  "description": "A named scenario and its recorded runs. A passed run has at least one assertion, all passing, and an inspectable result entity. An empty runs array means 'not run' (design section 2.7).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["scenario", "runs"],
+  "properties": {
+    "scenario": {
+      "allOf": [
+        { "$ref": "urn:paneweft:schema:common:1#/$defs/Item" },
+        {
+          "type": "object",
+          "required": ["runnerId", "parameters"],
+          "properties": {
+            "runnerId": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
+            "parameters": { "$ref": "urn:paneweft:schema:common:1#/$defs/Cells" }
+          }
+        }
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    },
+    "runs": { "type": "array", "items": { "$ref": "#/$defs/Run" } }
+  },
+  "$defs": {
+    "Run": {
+      "allOf": [
+        { "$ref": "urn:paneweft:schema:common:1#/$defs/Item" },
+        {
+          "type": "object",
+          "required": ["runId", "status", "assertions"],
+          "properties": {
+            "runId": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
+            "status": { "enum": ["passed", "failed", "error"], "x-hint": "Use 'passed', 'failed' or 'error'." },
+            "assertions": {
+              "type": "array",
+              "items": {
+                "allOf": [
+                  { "$ref": "urn:paneweft:schema:common:1#/$defs/Item" },
+                  {
+                    "type": "object",
+                    "required": ["statement", "passed"],
+                    "properties": { "statement": { "$ref": "urn:paneweft:schema:common:1#/$defs/ShortText" }, "passed": { "type": "boolean" } }
+                  }
+                ],
+                "type": "object",
+                "unevaluatedProperties": false
+              }
+            },
+            "result": { "$ref": "urn:paneweft:schema:common:1#/$defs/EntityRef" },
+            "error": { "$ref": "urn:paneweft:schema:common:1#/$defs/ShortText" }
+          }
+        },
+        {
+          "if": { "type": "object", "required": ["status"], "properties": { "status": { "const": "passed" } } },
+          "then": {
+            "type": "object",
+            "required": ["result"],
+            "properties": { "assertions": { "type": "array", "minItems": 1, "x-hint": "A passed run needs at least one assertion." }, "error": false },
+            "x-hint": "A passed run needs a 'result' entity in its output bundle."
+          }
+        },
+        {
+          "if": { "type": "object", "required": ["status"], "properties": { "status": { "const": "error" } } },
+          "then": { "type": "object", "required": ["error"], "properties": { "result": false }, "x-hint": "An infrastructure error run explains why no result exists in 'error'." }
+        },
+        {
+          "if": { "type": "object", "required": ["status"], "properties": { "status": { "const": "failed" } } },
+          "then": { "type": "object", "properties": { "error": false } }
+        }
+      ],
+      "type": "object",
+      "unevaluatedProperties": false
+    }
+  }
+}

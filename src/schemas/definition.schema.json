@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:definition:1",
+  "title": "View definition",
+  "description": "Gives an entity kind a titled, prioritised use of a component. Default priority is 50 (design section 3). No executable selector.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "entityKind", "title", "component", "requires", "dataRole"],
+  "properties": {
+    "id": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
+    "entityKind": { "$ref": "urn:paneweft:schema:common:1#/$defs/Kind" },
+    "title": { "$ref": "urn:paneweft:schema:common:1#/$defs/Label" },
+    "priority": { "type": "number", "minimum": -1000000, "maximum": 1000000, "default": 50 },
+    "component": {
+      "enum": ["list", "tree", "graph", "source", "shape", "notebook", "example"],
+      "x-hint": "v0 components: list, tree, graph, source, shape, notebook, example."
+    },
+    "requires": { "type": "array", "maxItems": 64, "items": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" } },
+    "dataRole": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
+    "forward": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entityId", "viewDefinitionId"],
+      "properties": { "entityId": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" }, "viewDefinitionId": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" } }
+    }
+  }
+}

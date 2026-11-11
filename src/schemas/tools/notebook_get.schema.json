@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:tool:notebook_get:1",
+  "title": "notebook_get",
+  "description": "Read a notebook page at a revision (latest when omitted).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "pageId"
+  ],
+  "properties": {
+    "pageId": {
+      "$ref": "urn:paneweft:schema:common:1#/$defs/Id"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "cursor": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "description": "Continuation cursor from a previous reply of the same query."
+    },
+    "format": {
+      "enum": [
+        "text",
+        "json"
+      ],
+      "default": "text",
+      "description": "Reply format."
+    },
+    "maxBytes": {
+      "type": "integer",
+      "minimum": 2048,
+      "maximum": 32768,
+      "default": 8192,
+      "description": "UTF-8 byte budget of the whole serialized reply (design section 4)."
+    }
+  }
+}

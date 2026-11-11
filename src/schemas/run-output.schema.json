@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:run-output:1",
+  "title": "Example run output",
+  "description": "What a runner writes to its output-bundle path, and what example_record accepts: one run plus a bundle holding the inspectable result entities.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "run", "bundle"],
+  "properties": {
+    "schemaVersion": { "const": "paneweft.run/1", "x-hint": "Use the literal \"paneweft.run/1\"." },
+    "run": { "$ref": "urn:paneweft:schema:component:example:1#/$defs/Run" },
+    "bundle": { "$ref": "urn:paneweft:schema:bundle:1" }
+  }
+}

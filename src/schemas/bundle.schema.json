@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:bundle:1",
+  "title": "paneweft bundle",
+  "description": "Entities, view definitions and view envelopes registered together after all references are checked (design section 4).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "entities", "definitions", "views"],
+  "properties": {
+    "schemaVersion": { "const": "paneweft.bundle/1", "x-hint": "Use the literal \"paneweft.bundle/1\"." },
+    "entities": { "type": "array", "items": { "$ref": "urn:paneweft:schema:entity:1" } },
+    "definitions": { "type": "array", "items": { "$ref": "urn:paneweft:schema:definition:1" } },
+    "views": { "type": "array", "items": { "$ref": "urn:paneweft:schema:envelope:1" } }
+  }
+}

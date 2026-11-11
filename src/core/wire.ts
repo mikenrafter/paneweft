@@ -1,0 +1,42 @@
+// Envelope-level wire types, hand-written for the red phase.
+// TODO(green): design section 5 asks for declarations generated from the JSON
+// Schema. Until then the schema files win on any disagreement, and component
+// `data` stays `unknown` so the TypeScript types are not a second authority.
+
+export type Provenance = "read" | "parsed" | "compiled" | "observed" | "inferred";
+export type Scalar = string | number | boolean | null;
+export interface Anchor { repository: string; path: string; lines: [number, number] }
+export interface EntityRef { repository: string; id: string; kind: string }
+export interface Source {
+  id: string; kind: "file" | "command" | "log" | "document"; repository?: string; path?: string; url?: string;
+  sha256: string; capturedAt: string; method: string; runId?: string; argv?: string[]; exitCode?: number;
+}
+export type Completeness =
+  | { status: "complete"; criterion: string }
+  | { status: "partial"; gaps: Array<{ id: string; question: string; reason: string }> }
+  | { status: "unsupported"; reason: string; missingCapabilities: string[] };
+export interface RepositoryFreshness {
+  id: string; root: string; gitRev: string | null; dirty: boolean; files: Record<string, string>;
+}
+export interface ViewLink {
+  id: string; relation: string; snapshotId: string; viewId: string; itemId?: string; entity?: EntityRef;
+}
+export interface Envelope {
+  schemaVersion: "paneweft.view/1";
+  id: string; title: string; question: string; entity: EntityRef; snapshotId: string;
+  component: "list" | "tree" | "graph" | "source" | "shape" | "notebook" | "example";
+  viewDefinitionId: string;
+  scope: { repositories: string[]; roots: string[]; excludes: string[]; relation?: string; limits: string[] };
+  sources: Source[]; generatedAt: string; freshness: { repositories: RepositoryFreshness[] };
+  links: ViewLink[]; completeness: Completeness; data?: unknown;
+}
+export interface Entity extends EntityRef {
+  snapshotId: string; label: string; dataRoles: string[]; relations: Array<{ name: string; target: EntityRef }>;
+}
+export interface ViewDefinition {
+  id: string; entityKind: string; title: string; priority?: number; component: Envelope["component"];
+  requires: string[]; dataRole: string; forward?: { entityId: string; viewDefinitionId: string };
+}
+export interface Bundle {
+  schemaVersion: "paneweft.bundle/1"; entities: Entity[]; definitions: ViewDefinition[]; views: Envelope[];
+}

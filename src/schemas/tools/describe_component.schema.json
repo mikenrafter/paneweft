@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:tool:describe_component:1",
+  "title": "describe_component",
+  "description": "Describe one component: JSON Schema, capabilities, limits and one valid example. Paged when the reply exceeds the budget.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "component"
+  ],
+  "properties": {
+    "component": {
+      "enum": [
+        "list",
+        "tree",
+        "graph",
+        "source",
+        "shape",
+        "notebook",
+        "example"
+      ]
+    },
+    "cursor": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "description": "Continuation cursor from a previous reply of the same query."
+    },
+    "format": {
+      "enum": [
+        "text",
+        "json"
+      ],
+      "default": "text",
+      "description": "Reply format."
+    },
+    "maxBytes": {
+      "type": "integer",
+      "minimum": 2048,
+      "maximum": 32768,
+      "default": 8192,
+      "description": "UTF-8 byte budget of the whole serialized reply (design section 4)."
+    }
+  }
+}

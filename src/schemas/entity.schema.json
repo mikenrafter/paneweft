@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:entity:1",
+  "title": "Entity",
+  "description": "An inspectable domain entity registered for one snapshot (design section 3).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["repository", "id", "kind", "snapshotId", "label", "dataRoles", "relations"],
+  "properties": {
+    "repository": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
+    "id": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
+    "kind": { "$ref": "urn:paneweft:schema:common:1#/$defs/Kind" },
+    "snapshotId": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
+    "label": { "$ref": "urn:paneweft:schema:common:1#/$defs/Label" },
+    "dataRoles": { "type": "array", "maxItems": 256, "items": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" } },
+    "relations": {
+      "type": "array",
+      "maxItems": 1024,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "target"],
+        "properties": { "name": { "$ref": "urn:paneweft:schema:common:1#/$defs/Label" }, "target": { "$ref": "urn:paneweft:schema:common:1#/$defs/EntityRef" } }
+      }
+    }
+  }
+}

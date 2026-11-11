@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:component:graph:1",
+  "title": "Dependency and call/flow graph",
+  "description": "Nodes and typed edges with a fixed layout choice, optional neighborhood focus and named paths. Cycles are legal. Budget: 200 nodes, 500 edges (design section 2.3 and 4).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["nodes", "edges", "layout"],
+  "properties": {
+    "nodes": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          { "$ref": "urn:paneweft:schema:common:1#/$defs/Item" },
+          { "type": "object", "properties": { "group": { "$ref": "urn:paneweft:schema:common:1#/$defs/Label" } } }
+        ],
+        "type": "object",
+        "unevaluatedProperties": false
+      }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "allOf": [
+          { "$ref": "urn:paneweft:schema:common:1#/$defs/Item" },
+          {
+            "type": "object",
+            "required": ["from", "to", "relation"],
+            "properties": {
+              "from": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
+              "to": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
+              "relation": { "$ref": "urn:paneweft:schema:common:1#/$defs/Label" }
+            }
+          }
+        ],
+        "type": "object",
+        "unevaluatedProperties": false
+      }
+    },
+    "layout": { "enum": ["layered", "grid"], "x-hint": "Use 'layered' or 'grid'; v0 has no force layout." },
+    "focus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["node", "direction", "depth"],
+      "properties": {
+        "node": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
+        "direction": { "enum": ["in", "out", "both"], "x-hint": "Use 'in', 'out' or 'both'." },
+        "depth": { "type": "integer", "minimum": 0, "maximum": 64, "x-hint": "Use a non-negative integer neighborhood depth." }
+      }
+    },
+    "paths": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "edgeIds"],
+        "properties": {
+          "id": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
+          "edgeIds": { "type": "array", "minItems": 1, "items": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" } }
+        }
+      }
+    }
+  }
+}

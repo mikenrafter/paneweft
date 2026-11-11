@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:error:1",
+  "title": "Operation error",
+  "description": "Error body returned by every operation (design section 4). 'errors' is empty when a failure has no field location.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "code", "message", "errors", "retryable"],
+  "properties": {
+    "schemaVersion": { "const": "paneweft.error/1" },
+    "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+    "message": { "type": "string", "minLength": 1 },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "pointer", "constraint", "hint"],
+        "properties": {
+          "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+          "pointer": { "type": "string", "pattern": "^(/[^/]*)*$" },
+          "constraint": { "type": "string", "minLength": 1 },
+          "hint": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "retryable": { "type": "boolean" },
+    "details": { "type": "object" }
+  }
+}

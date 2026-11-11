@@ -1,0 +1,133 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:tool:inspect_view:1",
+  "title": "inspect_view",
+  "description": "Return a bounded slice of a stored view without creating a new snapshot.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "viewId",
+    "snapshotId"
+  ],
+  "properties": {
+    "viewId": {
+      "$ref": "urn:paneweft:schema:common:1#/$defs/Id"
+    },
+    "snapshotId": {
+      "$ref": "urn:paneweft:schema:common:1#/$defs/Id"
+    },
+    "filter": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Filter over the primary collection. All given members must hold (AND).",
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Case-insensitive substring of the label or any string cell."
+        },
+        "columns": {
+          "type": "object",
+          "maxProperties": 16,
+          "additionalProperties": {
+            "$ref": "urn:paneweft:schema:common:1#/$defs/Scalar"
+          },
+          "description": "Exact cell values by column key."
+        },
+        "provenance": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "urn:paneweft:schema:common:1#/$defs/Provenance"
+          },
+          "description": "Keep items with one of these provenance labels."
+        },
+        "relation": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Graph only: keep edges with one of these relations."
+        },
+        "status": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": [
+              "supported",
+              "disputed",
+              "open"
+            ]
+          },
+          "description": "Notebook only: keep claims with one of these statuses."
+        }
+      }
+    },
+    "order": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key",
+        "direction"
+      ],
+      "properties": {
+        "key": {
+          "$ref": "urn:paneweft:schema:common:1#/$defs/Id"
+        },
+        "direction": {
+          "enum": [
+            "asc",
+            "desc"
+          ]
+        }
+      }
+    },
+    "focus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "itemId"
+      ],
+      "properties": {
+        "itemId": {
+          "$ref": "urn:paneweft:schema:common:1#/$defs/Id"
+        },
+        "expand": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "embedDepth": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1,
+      "default": 0,
+      "description": "Notebook only: inline expansion of embedded views, at most one level."
+    },
+    "cursor": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "description": "Continuation cursor from a previous reply of the same query."
+    },
+    "format": {
+      "enum": [
+        "text",
+        "json"
+      ],
+      "default": "text",
+      "description": "Reply format."
+    },
+    "maxBytes": {
+      "type": "integer",
+      "minimum": 2048,
+      "maximum": 32768,
+      "default": 8192,
+      "description": "UTF-8 byte budget of the whole serialized reply (design section 4)."
+    }
+  }
+}
