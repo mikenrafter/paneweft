@@ -1,5 +1,6 @@
+// T13: SIGHUP (the terminal or ssh session closing) is handled like SIGINT/SIGTERM; its default action killed the CLI and left the detached runner group alive.
 // T12 (tier-2 review): runners are started detached (their own process group) so a timeout can kill the whole group. A detached runner no longer
-// receives the terminal's Ctrl-C, so `paneweft example run` turns SIGINT/SIGTERM into an abort that kills the runner's group. Without that, interrupting
+// receives the terminal's Ctrl-C, so `paneweft example run` turns SIGINT/SIGTERM/SIGHUP into an abort that kills the runner's group. Without that, interrupting
 // the CLI would leave the runner (and its helpers) running with nobody to time them out.
 // proves: CLAIM(runner-timeout-kills-group)
 import { spawn } from "node:child_process";
@@ -18,7 +19,7 @@ function alive(pid: number): boolean {
 }
 
 describe("cli: example run is interruptible (T12)", () => {
-  it.each(["SIGINT", "SIGTERM"] as const)("%s to the CLI stops the runner and its grandchild; the CLI reports RUNNER_FAILED (aborted), exit 1", async (signal) => {
+  it.each(["SIGINT", "SIGTERM", "SIGHUP"] as const)("%s to the CLI stops the runner and its grandchild; the CLI reports RUNNER_FAILED (aborted), exit 1", async (signal) => {
     const base = tmp("run-signal");
     const workspace = join(base, "ws");
     mkdirSync(workspace);
