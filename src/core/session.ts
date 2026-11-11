@@ -87,6 +87,8 @@ export interface Session {
   notebookUpdate(pageId: string, expectedRevision: number, change: { blocks: unknown[]; sources?: unknown[] }, snapshotId?: string): Promise<Result<NotebookPage>>;
   recordExampleRun(key: ViewKey, output: unknown): Promise<Result<RecordedRun>>;
   listRuns(key: ViewKey): Promise<Result<RecordedRun[]>>;
+  /** The runs recorded on an example view with their stored `paneweft.run/1` outputs, in recording order; each output is read through its verified content hash. */
+  recordedRunOutputs(key: ViewKey): Promise<Result<Array<{ run: RecordedRun; output: unknown }>>>;
   close(): Promise<void>;
 }
 
@@ -300,6 +302,19 @@ class DirectorySession implements Session {
       const manifest = await this.readManifest();
       if (!manifest.views.some((view) => view.viewId === key.viewId && view.snapshotId === key.snapshotId)) return failure("NOT_FOUND", `no view "${key.viewId}" in snapshot "${key.snapshotId}"`);
       return ok(manifest.runs.filter((run) => run.viewId === key.viewId && run.snapshotId === key.snapshotId).map(({ runId, viewId, snapshotId, status, contentHash }) => ({ runId, viewId, snapshotId, status, contentHash })));
+    });
+  }
+
+  async recordedRunOutputs(key: ViewKey): Promise<Result<Array<{ run: RecordedRun; output: unknown }>>> {
+    return this.withReads(async () => {
+      const manifest = await this.readManifest();
+      if (!manifest.views.some((view) => view.viewId === key.viewId && view.snapshotId === key.snapshotId)) return failure("NOT_FOUND", `no view "${key.viewId}" in snapshot "${key.snapshotId}"`);
+      const found: Array<{ run: RecordedRun; output: unknown }> = [];
+      for (const run of manifest.runs.filter((entry) => entry.viewId === key.viewId && entry.snapshotId === key.snapshotId)) {
+        const { runId, viewId, snapshotId, status, contentHash } = run;
+        found.push({ run: { runId, viewId, snapshotId, status, contentHash }, output: await this.readObject(contentHash) });
+      }
+      return ok(found);
     });
   }
 

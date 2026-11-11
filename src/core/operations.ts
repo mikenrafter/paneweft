@@ -28,6 +28,7 @@ import { LIMITS } from "./limits.ts";
 import { checkFreshness } from "./freshness.ts";
 import { rankViews, type RankOutput } from "./registry.ts";
 import { resolveItemSource } from "./links.ts";
+import { readEffectiveView } from "./example-runs.ts";
 import { referencedSnapshot, viewItems, type AnyItem } from "./items.ts";
 import { decodeCursor, encodeCursor, queryDigest } from "./cursor.ts";
 import { fragmentSource, minimumBytes, paginate, type Entry, type Format, type Layout, type PageState } from "./pager.ts";
@@ -272,13 +273,13 @@ interface Loaded { envelope: Envelope; summary: ViewSummary }
 async function loadView(session: Session, key: ViewKey, query: ViewQuery, format: ReplyFormat): Promise<Loaded | OperationOutcome> {
   const snapshot = await session.snapshotInfo(key.snapshotId);
   if (!snapshot.ok) return snapshot.error.code === "NOT_FOUND" ? unresolved(format, `snapshot "${key.snapshotId}" does not exist`) : failedFrom(format, snapshot.error);
-  const stored = await session.getView(key);
+  const stored = await readEffectiveView(session, key);
   if (!stored.ok) return stored.error.code === "NOT_FOUND" ? unresolved(format, `view "${key.viewId}" does not exist in snapshot "${key.snapshotId}"`) : failedFrom(format, stored.error);
   const envelope = stored.value.envelope;
   const freshness = await checkFreshness(envelope.freshness, await session.repositories());
   const embeds = query.embedDepth === 1 && envelope.component === "notebook" ? await embedsOf(session, envelope) : new Map<string, EmbedInfo>();
   try {
-    return { envelope, summary: summariseView(envelope, freshness, query, embeds) };
+    return { envelope, summary: summariseView(envelope, freshness, query, embeds, stored.value.recorded) };
   } catch (error) {
     if (error instanceof QueryError) {
       return failed(format, "INVALID_ARGUMENT", error.message, { errors: [{ code: error.code, pointer: error.pointer, constraint: "a query the view can answer", hint: error.message }] });

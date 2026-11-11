@@ -145,7 +145,17 @@
         "envelope": { "$ref": "urn:paneweft:schema:envelope:1" },
         "freshness": { "$ref": "#/$defs/FreshnessResult" },
         "contentHash": { "$ref": "urn:paneweft:schema:common:1#/$defs/Sha256" },
-        "notebookRevision": { "type": "integer", "minimum": 1 }
+        "notebookRevision": { "type": "integer", "minimum": 1 },
+        "recordedRuns": {
+          "description": "Example views with recorded runs: which run items of 'envelope' were recorded rather than stored in the envelope, and why a recorded run was left out.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["runs", "notice"],
+          "properties": {
+            "runs": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["itemId", "runId", "contentHash"], "properties": { "itemId": { "type": "string" }, "runId": { "type": "string" }, "contentHash": { "$ref": "urn:paneweft:schema:common:1#/$defs/Sha256" } } } },
+            "notice": { "type": ["string", "null"] }
+          }
+        }
       },
       "if": { "type": "object", "required": ["envelope"], "properties": { "envelope": { "type": "object", "required": ["component"], "properties": { "component": { "const": "notebook" } } } } },
       "then": { "type": "object", "required": ["notebookRevision"], "x-hint": "A notebook view read needs 'notebookRevision', the page revision it was read at." },

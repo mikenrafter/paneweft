@@ -424,10 +424,11 @@ function renderExample(ctx: ComponentContext): HTMLElement {
   const scenario = data.scenario;
   const byId = new Map(data.runs.map((run) => [run.id, run]));
   const runs = ctx.summary.entries.map((entry) => byId.get(entry.id)).filter((run): run is (typeof data.runs)[number] => run !== undefined);
+  const originOf = (run: { id: string }): string => ((ctx.summary.entries.find((entry) => entry.id === run.id)?.json as { origin?: string } | undefined)?.origin) ?? "envelope";
   return h(ctx.doc, "div", { "data-pw": "example", role: "region", "aria-label": ctx.envelope.title },
     h(ctx.doc, "div", { "data-pw": "scenario" }, `${typeof scenario.label === "string" ? scenario.label : scenario.id} (${scenario.runnerId})`, ...badge(ctx, scenario, false)),
     data.runs.length === 0 && h(ctx.doc, "div", { "data-pw": "not-run" }, "not run"),
-    ...runs.map((run) => h(ctx.doc, "div", { "data-pw": "run", "data-id": run.id, "data-provenance": run.provenance, "data-run-id": run.runId, "data-status": run.status }, `${run.runId}: ${run.status}`,
+    ...runs.map((run) => h(ctx.doc, "div", { "data-pw": "run", "data-id": run.id, "data-provenance": run.provenance, "data-run-id": run.runId, "data-status": run.status, "data-origin": originOf(run) }, `${run.runId}: ${run.status}`,
       ...run.assertions.map((assertion) => h(ctx.doc, "div", { "data-pw": "assertion", "data-id": assertion.id, "data-passed": String(assertion.passed) }, `${assertion.statement} ${assertion.passed ? "PASS" : "FAIL"}`, ...badge(ctx, assertion, false))),
       run.result !== undefined && ctx.interactive && h(ctx.doc, "button", { type: "button", "data-pw": "result-link", "data-item": run.id }, `${run.result.kind}:${run.result.id}`),
       run.error !== undefined && h(ctx.doc, "span", {}, run.error),

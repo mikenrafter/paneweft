@@ -8,7 +8,11 @@ import type { NotebookPage, ViewKey } from "../core/session.ts";
 import type { RankOutput } from "../core/registry.ts";
 
 /** `notebookRevision` is present exactly on notebook views: the page revision the model was read at (N1). */
-export interface ViewModel { envelope: Envelope; freshness: FreshnessResult; contentHash: string; notebookRevision?: number }
+export interface ViewModel {
+  envelope: Envelope; freshness: FreshnessResult; contentHash: string; notebookRevision?: number;
+  /** Example views only: which run items of `envelope` were recorded (not written into the stored envelope), and why a recorded run was left out. */
+  recordedRuns?: { runs: Array<{ itemId: string; runId: string; contentHash: string }>; notice: string | null };
+}
 export interface SearchHit {
   type: "entity" | "view" | "example" | "claim";
   id: string;

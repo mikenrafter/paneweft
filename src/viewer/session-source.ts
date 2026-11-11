@@ -2,6 +2,7 @@
 import type { Entity, EntityRef } from "../core/wire.ts";
 import { err, ok, type Result } from "../core/errors.ts";
 import { checkFreshness } from "../core/freshness.ts";
+import { readEffectiveView } from "../core/example-runs.ts";
 import { resolveItemSource } from "../core/links.ts";
 import { rankViews, type RankOutput } from "../core/registry.ts";
 import { searchSession } from "../core/search.ts";
@@ -22,10 +23,14 @@ export function createSessionSource(session: Session): ViewerSource {
   };
 
   const getView = async (key: ViewKey): Promise<Result<ViewModel>> => {
-    const stored = await session.getView(key);
-    if (!stored.ok) return stored;
-    const { envelope, contentHash } = stored.value;
+    const read = await readEffectiveView(session, key);
+    if (!read.ok) return read;
+    const { envelope, recorded } = read.value;
+    const { contentHash } = read.value.stored;
     const freshness = await checkFreshness(envelope.freshness, await session.repositories());
+    if (recorded !== undefined) {
+      return ok({ envelope, freshness, contentHash, recordedRuns: { runs: [...recorded.byItemId].map(([itemId, run]) => ({ itemId, ...run })), notice: recorded.notice } });
+    }
     if (envelope.component !== "notebook") return ok({ envelope, freshness, contentHash });
     const page = await session.notebookGet(envelope.id, undefined, envelope.snapshotId);
     return ok({ envelope, freshness, contentHash, notebookRevision: page.ok ? page.value.revision : 1 });

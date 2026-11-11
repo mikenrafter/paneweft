@@ -36,6 +36,12 @@ export class QueryError extends Error {
 
 export interface Gap { id: string; question: string; reason: string }
 
+/**
+ * The runs of an example view that were recorded (session.recordExampleRun) rather than written into the envelope, as example-runs.ts merged them:
+ * run item id -> {runId, contentHash of the stored run output}. `notice` names recorded runs that could not be merged. Absent for every other view.
+ */
+export interface RecordedRuns { byItemId: ReadonlyMap<string, { runId: string; contentHash: string }>; notice: string | null }
+
 export interface ViewSummary {
   view: { id: string; title: string; component: string; snapshotId: string };
   question: string;
@@ -325,7 +331,7 @@ function notebookEntries(data: any, query: ViewQuery, embeds: ReadonlyMap<string
   return { total: data.blocks.length, matched: blocks.length, entries: lines, bodyPrelude: [], jsonExtras: {}, footer: none, order: null };
 }
 
-function exampleEntries(data: any, query: ViewQuery): Built {
+function exampleEntries(data: any, query: ViewQuery, recorded: RecordedRuns | undefined): Built {
   const runs = (data.runs as AnyItem[]).filter((run) => matches(run, query.filter));
   const lines = runs.map((run) => {
     const assertions = (run.assertions ?? []) as Array<AnyItem & { statement: string; passed: boolean }>;
@@ -333,7 +339,9 @@ function exampleEntries(data: any, query: ViewQuery): Built {
     const failed = assertions.filter((assertion) => !assertion.passed).map((assertion) => oneLine(assertion.statement));
     const result = run.result === undefined ? "" : `; result=${entityPart({ ...run, entity: undefined } as AnyItem)}`;
     const detail = `${failed.length > 0 ? `; failed: ${failed.join(" | ")}` : ""}${run.error === undefined ? "" : `; error: ${oneLine(String(run.error))}`}`;
-    return entry(run.id, run, `${run.runId}: ${run.status}; assertions=${passed}/${assertions.length}${result}${detail}; ${trailer(run)}`);
+    const origin = recorded?.byItemId.get(run.id);
+    // an envelope run is printed and serialised exactly as before; a recorded run says so (origin, contentHash of its stored output)
+    return entry(run.id, origin === undefined ? run : { ...run, origin: "recorded", contentHash: origin.contentHash }, `${run.runId}: ${run.status}; assertions=${passed}/${assertions.length}${result}${detail}; ${trailer(run)}${origin === undefined ? "" : "; recorded"}`);
   });
   const runnerId = (data.scenario as { runnerId: string }).runnerId;
   const rerun = `paneweft example run ${runnerId}`;
@@ -341,19 +349,19 @@ function exampleEntries(data: any, query: ViewQuery): Built {
   return { total: data.runs.length, matched: runs.length, entries: lines, bodyPrelude: [], jsonExtras: { rerun, ...(data.runs.length === 0 ? { notRun: true } : {}) }, footer, order: null };
 }
 
-const BUILDERS: Record<Envelope["component"], (data: any, query: ViewQuery, embeds: ReadonlyMap<string, EmbedInfo>) => Built> = {
+const BUILDERS: Record<Envelope["component"], (data: any, query: ViewQuery, embeds: ReadonlyMap<string, EmbedInfo>, recorded: RecordedRuns | undefined) => Built> = {
   list: (data, query) => listEntries(data, query),
   tree: (data, query) => treeEntries(data, query),
   graph: (data, query) => graphEntries(data, query),
   source: (data, query) => sourceEntries(data, query),
   shape: (data, query) => shapeEntries(data, query),
   notebook: (data, query, embeds) => notebookEntries(data, query, embeds),
-  example: (data, query) => exampleEntries(data, query),
+  example: (data, query, _embeds, recorded) => exampleEntries(data, query, recorded),
 };
 
 // ---- the summary ---------------------------------------------------------------------------------------------------
 
-export function summariseView(envelope: Envelope, freshness: FreshnessResult, query: ViewQuery, embeds: ReadonlyMap<string, EmbedInfo> = new Map()): ViewSummary {
+export function summariseView(envelope: Envelope, freshness: FreshnessResult, query: ViewQuery, embeds: ReadonlyMap<string, EmbedInfo> = new Map(), recorded?: RecordedRuns): ViewSummary {
   const unit = UNIT_OF_COMPONENT[envelope.component];
   const items = viewItems(envelope);
   const provenance = { read: 0, parsed: 0, compiled: 0, observed: 0, inferred: 0 };
@@ -365,7 +373,7 @@ export function summariseView(envelope: Envelope, freshness: FreshnessResult, qu
   if (query.order !== undefined && envelope.component !== "list") throw new QueryError("CONSTRAINT", "/order", "order applies to list views only");
   const built: Built = envelope.data === undefined
     ? { total: 0, matched: 0, entries: [], bodyPrelude: [], jsonExtras: {}, footer: none, order: null }
-    : BUILDERS[envelope.component](envelope.data, query, embeds);
+    : BUILDERS[envelope.component](envelope.data, query, embeds, recorded);
   const gaps = envelope.completeness.status === "partial" ? (envelope.completeness.gaps as Gap[]) : [];
   const entries: Entry[] = [...built.entries];
   for (const gap of gaps.slice(1)) entries.push({ id: gap.id, kind: "gap", countable: false, json: gap, text: `gap: ${gap.id}: ${oneLine(gap.question)}` });
@@ -381,7 +389,7 @@ export function summariseView(envelope: Envelope, freshness: FreshnessResult, qu
     unit,
     total: built.total,
     matched: built.matched,
-    notice: noticeFor(envelope.completeness, built.total, built.matched),
+    notice: [noticeFor(envelope.completeness, built.total, built.matched), recorded?.notice ?? null].filter((part): part is string => part !== null).join("; ") || null,
     bodyPrelude: built.bodyPrelude,
     jsonExtras: built.jsonExtras,
     footer: built.footer,

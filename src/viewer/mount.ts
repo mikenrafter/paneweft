@@ -11,7 +11,7 @@ import { referencedSnapshot, viewItems, type AnyItem } from "../core/items.ts";
 import { initialInspectorState, reduceInspector, type InspectorAction, type InspectorState, type InspectorWorld, type PaneState } from "../core/inspector.ts";
 import { LAYOUT_VERSION } from "../core/layout.ts";
 import type { RankOutput, RankedView } from "../core/registry.ts";
-import { completenessLine, freshnessLine, summariseView, type ViewFilter, type ViewSummary } from "../core/summaries.ts";
+import { completenessLine, freshnessLine, summariseView, type RecordedRuns, type ViewFilter, type ViewSummary } from "../core/summaries.ts";
 import { compareCodeUnits } from "../core/canonical.ts";
 import { HAS_EMPTY_STATE, newPaneUi, renderComponent, renderOpenedSource, type ComponentContext, type PaneUi } from "./components.ts";
 import { append, h, type Child } from "./dom.ts";
@@ -198,7 +198,9 @@ export async function mountViewer(container: HTMLElement, options: MountOptions)
     if (model.envelope.component === "notebook" && ui.claimStatus !== "all") filter.status = [ui.claimStatus];
     return filter;
   }
-  const summarise = (model: ViewModel, filter: ViewFilter = {}): ViewSummary => summariseView(model.envelope, model.freshness, { filter, embedDepth: 0 });
+  const recordedOf = (model: ViewModel): RecordedRuns | undefined => model.recordedRuns === undefined ? undefined
+    : { byItemId: new Map(model.recordedRuns.runs.map((run) => [run.itemId, { runId: run.runId, contentHash: run.contentHash }])), notice: model.recordedRuns.notice };
+  const summarise = (model: ViewModel, filter: ViewFilter = {}): ViewSummary => summariseView(model.envelope, model.freshness, { filter, embedDepth: 0 }, undefined, recordedOf(model));
 
   // ---- rendering ----------------------------------------------------------------------------------------------------------------
   function emptyMessage(summary: ViewSummary, filtered: boolean): string | null {
