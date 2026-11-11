@@ -99,3 +99,8 @@ export async function readConfinedFile(root: string, relative: string): Promise<
   }
   return { ok: false, reason: "outside" }; // unreachable: the last attempt returns above
 }
+
+/** T4 red stub: replaced by the real streaming hash in the fix commit. */
+export async function hashConfinedFile(_root: string, _relative: string): Promise<{ ok: true; sha256: string; size: number } | { ok: false; reason: ConfinedReason }> {
+  throw new Error("NOT_IMPLEMENTED");
+}
