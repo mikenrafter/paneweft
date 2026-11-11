@@ -309,9 +309,13 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
     const dir = parsed.session ?? io.env.PANEWEFT_SESSION;
     const needsSession = command.tool === undefined || !["list_components", "describe_component", "validate"].includes(command.tool);
     const args = command.tool === undefined ? {} : await buildArguments(parsed, io);
-    const session: Session | null = dir !== undefined && dir !== "" && needsSession
-      ? await (async () => { const opened = await openSession(resolve(io.cwd, dir)); return opened.ok ? opened.value : null; })()
-      : null;
+    let session: Session | null = null;
+    if (dir !== undefined && dir !== "" && needsSession) {
+      const opened = await openSession(resolve(io.cwd, dir));
+      // the directory WAS given; saying SESSION_REQUIRED would hide why it cannot be used
+      if (!opened.ok) return printError(opened.error, io);
+      session = opened.value;
+    }
     try {
       const word = command.words.join(" ");
       if (word === "example run") return await runExampleCommand(parsed, session, io);
