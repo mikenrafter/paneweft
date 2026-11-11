@@ -2,7 +2,7 @@
 // exhaustion gives partial output, never a failed view. Lowering follows docs/v1-red-contract.md section 3.
 import { createHash } from "node:crypto";
 import { ViewError, type Bounded, type Direction, type Json, type Limits, type ObjectRef } from "./types.ts";
-import { scalarOf, typeName, type CapturedValue, type EncodeStats } from "./values.ts";
+import { RESERVE, newStats, scalarOf, typeName, type ByteMeter, type CapturedValue, type EncodeStats } from "./values.ts";
 
 export interface BuiltPage {
   pageId: string;
@@ -72,10 +72,14 @@ function omissions(rows: number, strings: number): Record<string, number> | unde
   return Object.keys(omitted).length === 0 ? undefined : omitted;
 }
 
+const jsonBytes = (json: Json): number => Buffer.byteLength(JSON.stringify(json), "utf8");
+/** A view that cannot even hold its frame in the byte budget says so instead of failing. */
+const NO_ROOM = "the byte budget of this capture is used up: the view could not be built";
+
 export class DetailsBuilder {
   private readonly fields: Array<[string, CapturedValue]> = [];
   private omitted = 0;
-  constructor(private readonly limits: Limits, private readonly budget: Budget) {}
+  constructor(private readonly limits: Limits, private readonly budget: Budget, private readonly meter?: ByteMeter) {}
 
   /** Fluent. When the builder is full the field is refused and counted; the omission shows in the view's completeness. */
   field(name: string, value: CapturedValue): this {
@@ -85,18 +89,33 @@ export class DetailsBuilder {
   }
 
   done(): ViewResult {
-    const stats: EncodeStats = { strings: 0 };
+    const stats: EncodeStats = newStats();
     const seen = new Set<string>();
     const leaves: Json[] = [];
     const children: string[] = [];
+    // the frame of the shape (root field, basis, root) is charged first; each field is then charged as it is built (S2)
+    const frame = 200;
+    if (this.meter !== undefined) {
+      if (this.meter.room() < frame + RESERVE) return { kind: "unsupported", reason: NO_ROOM };
+      this.meter.spend(frame);
+    }
+    let kept = 0;
     for (const [name, value] of this.fields) {
       validId("field name", name);
       if (seen.has(name)) throw new ViewError("output-schema", `duplicate field name ${JSON.stringify(name)}: field names are the leaf ids of one shape`);
       seen.add(name);
       const id = `details.${name}`;
+      const leaf: Json = { id, path: `$.${name}`, type: typeName(value), presence: "required", example: scalarOf(value, this.limits, stats), children: [], provenance: "observed", evidence: evidence() };
+      if (this.meter !== undefined) {
+        const cost = jsonBytes(leaf) + jsonBytes(id) + 2;
+        if (cost > this.meter.room() - RESERVE) break;
+        this.meter.spend(cost);
+      }
       children.push(id);
-      leaves.push({ id, path: `$.${name}`, type: typeName(value), presence: "required", example: scalarOf(value, this.limits, stats), children: [], provenance: "observed", evidence: evidence() });
+      leaves.push(leaf);
+      kept += 1;
     }
+    this.omitted += this.fields.length - kept;
     const fields: Json[] = [{ id: "details", path: "$", type: "object", presence: "required", children, provenance: "observed", evidence: evidence() }, ...leaves];
     const omitted = omissions(this.omitted, stats.strings);
     const over = this.budget.over();
@@ -128,7 +147,7 @@ export class TableBuilder {
   private order: { key: string; direction: Direction } | undefined;
   private readonly rows: RowSpec[] = [];
   private omitted = 0;
-  constructor(private readonly limits: Limits, private readonly budget: Budget) {}
+  constructor(private readonly limits: Limits, private readonly budget: Budget, private readonly meter?: ByteMeter) {}
 
   textColumn(key: string, title: string): this {
     this.columns.push({ key, title, format: "text" });
@@ -169,9 +188,18 @@ export class TableBuilder {
     // Without orderBy the table is ordered by its first column ascending, and says so: the recorded order is always true.
     const order = this.order ?? { key: (this.columns[0] as { key: string }).key, direction: "asc" as Direction };
     if (!keys.has(order.key)) throw new ViewError("output-schema", `orderBy names ${JSON.stringify(order.key)}, which is not a declared column`);
-    const stats: EncodeStats = { strings: 0 };
+    const stats: EncodeStats = newStats();
     const ids = new Set<string>();
     const rendered: Array<{ sort: Json; row: Json }> = [];
+    // The frame (columns, order, the list record) is charged first. Rows are then charged in insertion order as they are rendered, page
+    // overhead included, and the rows that no longer fit are dropped and counted (S2): stored page bodies count like first-page rows.
+    const pageRows = Math.max(1, this.limits.pageRows);
+    const pageOverhead = 300;
+    if (this.meter !== undefined) {
+      const frame = 160 + jsonBytes(this.columns.map((column) => ({ key: column.key, title: column.title, format: column.format }))) + jsonBytes(order);
+      if (this.meter.room() < frame + RESERVE) return { kind: "unsupported", reason: NO_ROOM };
+      this.meter.spend(frame);
+    }
     for (const spec of this.rows) {
       validId("row id", spec.id);
       if (ids.has(spec.id)) throw new ViewError("output-schema", `duplicate row id ${JSON.stringify(spec.id)}: row ids are occurrence ids and must be unique`);
@@ -183,13 +211,21 @@ export class TableBuilder {
       }
       const row: { [key: string]: Json } = { id: spec.id, cells, provenance: "observed", evidence: evidence() };
       if (spec.target !== undefined) row.target = spec.target as Json;
+      if (this.meter !== undefined) {
+        const startsPage = rendered.length >= pageRows && (rendered.length - pageRows) % pageRows === 0;
+        const cost = jsonBytes(row) + 1 + (startsPage ? pageOverhead : 0);
+        if (cost > this.meter.room() - RESERVE) {
+          this.omitted += this.rows.length - rendered.length;
+          break;
+        }
+        this.meter.spend(cost);
+      }
       rendered.push({ sort: cells[order.key] ?? null, row });
     }
     const sign = order.direction === "desc" ? -1 : 1;
     // Array.prototype.sort is stable (ES2019), so equal keys keep insertion order in both directions.
     rendered.sort((a, b) => sign * compareCells(a.sort, b.sort));
     const rows = rendered.map((entry) => entry.row);
-    const pageRows = Math.max(1, this.limits.pageRows);
     const pages: BuiltPage[] = [];
     for (let at = pageRows; at < rows.length; at += pageRows) {
       // Stored page rows are canonical (keys sorted at every level) so the content address is the hash of exactly the stored text.

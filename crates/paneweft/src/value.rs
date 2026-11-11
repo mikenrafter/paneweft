@@ -1,5 +1,6 @@
 //! Values with explicit tagged states for everything JSON cannot carry (spec section 4, decision 9; docs/v1-red-contract.md
 //! section 2). Display cells format a value; object records keep the tag.
+use crate::meter::{json_bytes, Meter, RESERVE};
 use serde_json::{json, Map, Number, Value as Json};
 
 /// 2^53 - 1: the largest integer a JavaScript number holds exactly.
@@ -31,7 +32,38 @@ pub enum Value {
 pub(crate) struct EncodeStats {
     /// Strings cut at the string limit.
     pub strings: u64,
+    /// List elements and map entries left out because the byte budget ran out.
+    pub values: u64,
 }
+
+/// Nesting deeper than this is `unsupported`, so a hostile value cannot exhaust the stack.
+const MAX_NESTING: u32 = 64;
+/// The member name that ends a map cut short by the budget; its value is a `not-captured` marker.
+const CUT_KEY: &str = "\u{2026}";
+
+fn marker(meter: Option<&Meter>) -> Json {
+    let tag = json!({"$paneweft": "not-captured", "reason": meter.map_or("budget", Meter::reason)});
+    if let Some(meter) = meter {
+        meter.spend(json_bytes(&tag));
+    }
+    tag
+}
+
+/// Emits `leaf` if it fits in what is left after the reserve, otherwise the marker.
+fn emit(leaf: Json, meter: Option<&Meter>, stats: &mut EncodeStats) -> Json {
+    let Some(meter) = meter else { return leaf };
+    let size = json_bytes(&leaf);
+    if size > meter.room().saturating_sub(RESERVE) {
+        stats.values += 1;
+        return marker(Some(meter));
+    }
+    meter.spend(size);
+    leaf
+}
+
+fn exhausted(meter: Option<&Meter>) -> bool { meter.is_some_and(|meter| meter.room() < RESERVE + 2) }
+
+fn is_marker(json: &Json) -> bool { json.get("$paneweft").and_then(Json::as_str) == Some("not-captured") }
 
 impl Value {
     pub fn bytes(data: impl Into<Vec<u8>>) -> Value { Value::Bytes(data.into()) }
@@ -45,30 +77,108 @@ impl Value {
     }
 
     pub(crate) fn encode(&self, limits: &crate::Limits, stats: &mut EncodeStats) -> Json {
+        self.encode_with(limits, stats, None, 0)
+    }
+
+    /// As `encode`, charged against `meter` while it builds (S2): a string is cut to the room left, and a list or map that runs out of room
+    /// stops and ends with a `not-captured` marker (a list element, or a map member named `…`); the dropped elements are counted in
+    /// `stats.values`. Without a meter nothing is bounded but strings, bytes and nesting.
+    pub(crate) fn encode_with(&self, limits: &crate::Limits, stats: &mut EncodeStats, meter: Option<&Meter>, depth: u32) -> Json {
+        if depth > MAX_NESTING {
+            return emit(json!({"$paneweft": "unsupported", "reason": "nesting"}), meter, stats);
+        }
         match self {
-            Value::Null => Json::Null,
-            Value::Bool(flag) => Json::Bool(*flag),
-            Value::Int(number) => encode_int(*number),
-            Value::Float(number) => encode_float(*number),
-            Value::Str(text) => encode_str(text, limits.string_bytes, stats),
-            Value::Bytes(data) => encode_bytes(data, limits.string_bytes),
-            Value::List(items) => Json::Array(items.iter().map(|item| item.encode(limits, stats)).collect()),
+            Value::Null => emit(Json::Null, meter, stats),
+            Value::Bool(flag) => emit(Json::Bool(*flag), meter, stats),
+            Value::Int(number) => emit(encode_int(*number), meter, stats),
+            Value::Float(number) => emit(encode_float(*number), meter, stats),
+            Value::Str(text) => encode_str_metered(text, limits.string_bytes, stats, meter),
+            Value::Bytes(data) => {
+                // base64 is 4 bytes per 3; leave 120 bytes for the tag
+                let by_room = meter.map_or(u64::MAX, |meter| meter.room().saturating_sub(RESERVE + 120) / 4 * 3);
+                emit(encode_bytes(data, limits.string_bytes.min(by_room)), meter, stats)
+            }
+            Value::List(items) => {
+                if exhausted(meter) {
+                    stats.values += 1;
+                    return marker(meter);
+                }
+                if let Some(meter) = meter {
+                    meter.spend(2);
+                }
+                let mut out = Vec::new();
+                for (index, item) in items.iter().enumerate() {
+                    if exhausted(meter) {
+                        stats.values += (items.len() - index) as u64;
+                        out.push(marker(meter));
+                        break;
+                    }
+                    if let (Some(meter), true) = (meter, index > 0) {
+                        meter.spend(1);
+                    }
+                    let encoded = item.encode_with(limits, stats, meter, depth + 1);
+                    let cut = meter.is_some() && is_marker(&encoded);
+                    out.push(encoded);
+                    if cut {
+                        stats.values += (items.len() - index - 1) as u64;
+                        break;
+                    }
+                }
+                Json::Array(out)
+            }
             Value::Map(entries) => {
-                if entries.iter().any(|(key, _)| key == "$paneweft") {
-                    let pairs: Vec<Json> = entries.iter().map(|(key, value)| json!([key, value.encode(limits, stats)])).collect();
-                    json!({"$paneweft": "map", "entries": pairs})
+                if exhausted(meter) {
+                    stats.values += 1;
+                    return marker(meter);
+                }
+                if let Some(meter) = meter {
+                    meter.spend(2);
+                }
+                let mut pairs: Vec<(String, Json)> = Vec::new();
+                let mut stopped = false;
+                for (index, (key, value)) in entries.iter().enumerate() {
+                    if exhausted(meter) {
+                        break;
+                    }
+                    if let Some(meter) = meter {
+                        meter.spend(u64::from(index > 0) + json_bytes(&Json::String(key.clone())) + 1);
+                    }
+                    let encoded = value.encode_with(limits, stats, meter, depth + 1);
+                    let cut = meter.is_some() && is_marker(&encoded);
+                    pairs.push((key.clone(), encoded));
+                    if cut {
+                        stopped = true;
+                        break;
+                    }
+                }
+                if stopped {
+                    stats.values += (entries.len() - pairs.len()) as u64;
+                } else if pairs.len() < entries.len() {
+                    stats.values += (entries.len() - pairs.len()) as u64;
+                    let mut cut_key = CUT_KEY.to_string();
+                    while pairs.iter().any(|(key, _)| *key == cut_key) {
+                        cut_key.push_str(CUT_KEY);
+                    }
+                    if let Some(meter) = meter {
+                        meter.spend(u64::from(!pairs.is_empty()) + json_bytes(&Json::String(cut_key.clone())) + 1);
+                    }
+                    pairs.push((cut_key, marker(meter)));
+                }
+                if pairs.iter().any(|(key, _)| key == "$paneweft") {
+                    let entries: Vec<Json> = pairs.iter().map(|(key, value)| json!([key, value])).collect();
+                    json!({"$paneweft": "map", "entries": entries})
                 } else {
                     let mut map = Map::new();
-                    for (key, value) in entries {
-                        map.insert(key.clone(), value.encode(limits, stats));
+                    for (key, value) in pairs {
+                        map.insert(key, value);
                     }
                     Json::Object(map)
                 }
             }
-            Value::Absent => json!({"$paneweft": "absent"}),
-            Value::Redacted(None) => json!({"$paneweft": "redacted"}),
-            Value::Redacted(Some(reason)) => json!({"$paneweft": "redacted", "reason": reason}),
-            Value::Unsupported(reason) => json!({"$paneweft": "unsupported", "reason": reason}),
+            Value::Absent => emit(json!({"$paneweft": "absent"}), meter, stats),
+            Value::Redacted(None) => emit(json!({"$paneweft": "redacted"}), meter, stats),
+            Value::Redacted(Some(reason)) => emit(json!({"$paneweft": "redacted", "reason": reason}), meter, stats),
+            Value::Unsupported(reason) => emit(json!({"$paneweft": "unsupported", "reason": reason}), meter, stats),
         }
     }
 
@@ -81,7 +191,11 @@ impl Value {
             Value::Float(number) => display_float(*number),
             Value::Str(text) => text.clone(),
             Value::Bytes(data) => format!("<{} bytes>", data.len()),
-            Value::List(_) | Value::Map(_) => serde_json::to_string(&self.to_json(&crate::Limits::default())).unwrap_or_default(),
+            Value::List(_) | Value::Map(_) => {
+                // a display cell never needs more text than one string may hold, so a huge container is cut here too
+                let meter = Meter::new(16 * 1024, 16 * 1024);
+                serde_json::to_string(&self.encode_with(&crate::Limits::default(), &mut EncodeStats::default(), Some(&meter), 0)).unwrap_or_default()
+            }
             Value::Absent => "<absent>".to_string(),
             Value::Redacted(None) => "<redacted>".to_string(),
             Value::Redacted(Some(reason)) => format!("<redacted: {reason}>"),
@@ -180,13 +294,37 @@ pub(crate) fn cut_str(text: &str, limit: u64) -> (&str, u64) {
     (&text[..end], (text.len() - end) as u64)
 }
 
-fn encode_str(text: &str, limit: u64, stats: &mut EncodeStats) -> Json {
+/// A string cut at the string limit and then, when a meter has less room than that, cut again to the room.
+fn encode_str_metered(text: &str, limit: u64, stats: &mut EncodeStats, meter: Option<&Meter>) -> Json {
     let (kept, omitted) = cut_str(text, limit);
-    if omitted == 0 {
-        return Json::String(text.to_string());
+    let mut leaf = if omitted == 0 { Json::String(text.to_string()) } else { json!({"$paneweft": "truncated", "text": kept, "keptBytes": kept.len(), "omittedBytes": omitted}) };
+    let strings_before = stats.strings;
+    if omitted > 0 {
+        stats.strings += 1;
     }
-    stats.strings += 1;
-    json!({"$paneweft": "truncated", "text": kept, "keptBytes": kept.len(), "omittedBytes": omitted})
+    let Some(meter) = meter else { return leaf };
+    let allowed = meter.room().saturating_sub(RESERVE);
+    if json_bytes(&leaf) > allowed {
+        let mut cut = allowed.saturating_sub(90) / 2;
+        loop {
+            if cut == 0 {
+                stats.strings = strings_before;
+                stats.values += 1;
+                return marker(Some(meter));
+            }
+            let (text_kept, _) = cut_str(text, limit.min(cut));
+            leaf = json!({"$paneweft": "truncated", "text": text_kept, "keptBytes": text_kept.len(), "omittedBytes": text.len() - text_kept.len()});
+            if json_bytes(&leaf) <= allowed {
+                break;
+            }
+            cut /= 2;
+        }
+        if omitted == 0 {
+            stats.strings += 1;
+        }
+    }
+    meter.spend(json_bytes(&leaf));
+    leaf
 }
 
 fn encode_bytes(data: &[u8], limit: u64) -> Json {

@@ -7,7 +7,7 @@ import { Budget, DetailsBuilder, TableBuilder, canonicalJson, sha256Hex, type Vi
 import { callerLine } from "./callsite.ts";
 import { applyLimitOverrides, defaultLimits } from "./limits.ts";
 import { ViewError, type Component, type DiagnosticRecord, type Json, type Limits, type ObjectRef } from "./types.ts";
-import { cutString, encodeValue, type CapturedValue, type EncodeStats } from "./values.ts";
+import { RESERVE, cutString, encodeValue, newStats, type ByteMeter, type CapturedValue } from "./values.ts";
 
 /** The symbol a class implements to be inspectable without a token. */
 export const paneweftViews: unique symbol = Symbol.for("paneweft.views");
@@ -105,11 +105,15 @@ interface ObjectRec {
   edges: Json[];
   views: string[];
   depth: number;
+  /** The label text the byte budget was charged for. */
+  chargedLabel: string;
 }
 
 type Bound = "depth" | "objects" | "references" | "rootBytes" | "collectionBytes" | "roots";
 const BOUND_REASON: Record<Bound, string> = { depth: "depth-limit", objects: "object-limit", references: "reference-limit", rootBytes: "root-bytes-limit", collectionBytes: "collection-limit", roots: "collection-limit" };
 
+const FAULT_CATEGORIES: ReadonlyArray<DiagnosticRecord["category"]> = ["view-exception", "output-schema", "reference", "registration"];
+const jsonBytes = (json: Json): number => Buffer.byteLength(JSON.stringify(json), "utf8");
 const DIAGNOSTIC_CATEGORIES: ReadonlyArray<DiagnosticRecord["category"]> = ["compiler", "typecheck", "assertion", "view-exception", "output-schema", "reference", "limit", "registration", "renderer", "runner"];
 const NEXT_ACTION: Record<string, string> = {
   "view-exception": "Fix the exception in the named view function, then recollect the example.",
@@ -130,10 +134,10 @@ class ObjectContext implements ViewBuilders {
   anyBestEffort = false;
   constructor(private readonly capture: Capture, readonly index: number) {}
   details(): DetailsBuilder {
-    return new DetailsBuilder(this.capture.limits, new Budget(this.capture.nested, this.capture.limits.viewBudgetMs));
+    return new DetailsBuilder(this.capture.limits, new Budget(this.capture.nested, this.capture.limits.viewBudgetMs), this.capture.meter);
   }
   table(): TableBuilder {
-    return new TableBuilder(this.capture.limits, new Budget(this.capture.nested, this.capture.limits.viewBudgetMs));
+    return new TableBuilder(this.capture.limits, new Budget(this.capture.nested, this.capture.limits.viewBudgetMs), this.capture.meter);
   }
   reference(value: unknown, token?: TypeToken<any>, options: { name?: string; key?: string } = {}): ObjectRef {
     const name = options.name ?? this.currentView ?? "reference";
@@ -145,13 +149,10 @@ class ObjectContext implements ViewBuilders {
     return outcome;
   }
   field(name: string, value: CapturedValue): void {
-    const stats: EncodeStats = { strings: 0 };
-    const encoded = encodeValue(value, this.capture.limits, stats);
-    this.capture.count("strings", stats.strings);
-    (this.capture.objectAt(this.index).fields)[name] = encoded;
+    this.capture.setField(this.index, name, value);
   }
   label(text: string): void {
-    this.capture.objectAt(this.index).label = text;
+    this.capture.setLabel(this.index, text);
   }
   unsupported(reason: string): ViewResult {
     return { kind: "unsupported", reason };
@@ -182,8 +183,18 @@ export class Capture {
   private readonly path: number[] = [];
   private references = 0;
   private readonly omitted = new Map<string, number>();
-  private bytesRoot = 0;
-  private bytesTotal = 0;
+  /** Bytes of JSON text charged to the current root and to the whole collection (S2). */
+  private rootUsed = 0;
+  private totalUsed = 0;
+  private faulted = false;
+
+  /** The byte budget every part of the graph is charged to AS IT IS BUILT: object records, field values, edges, view records and their data,
+   * stored page bodies and diagnostics. Nothing is measured after the fact. */
+  readonly meter: ByteMeter = {
+    room: () => Math.max(0, Math.min(this.limits.rootBytes - this.rootUsed, this.limits.collectionBytes - this.totalUsed)),
+    spend: (bytes) => { this.rootUsed += bytes; this.totalUsed += bytes; },
+    reason: () => (this.limits.rootBytes - this.rootUsed <= this.limits.collectionBytes - this.totalUsed ? "root-bytes-limit" : "collection-limit"),
+  };
 
   constructor(options: CaptureOptions = {}) {
     this.limits = applyLimitOverrides(defaultLimits(), options.limits);
@@ -214,13 +225,60 @@ export class Capture {
   addDiagnostic(category: string, message: string, extra: { viewId?: string; exampleId?: string; id?: string } = {}): string {
     const known = (DIAGNOSTIC_CATEGORIES as ReadonlyArray<string>).includes(category) ? (category as DiagnosticRecord["category"]) : "view-exception";
     const id = extra.id ?? `diag-${this.options.captureId}-${this.diagnosticRecords.length + 1}`;
-    this.diagnosticRecords.push({ id, category: known, message: cutString(message, 2000)[0], ...(extra.viewId === undefined ? {} : { viewId: extra.viewId }), ...(extra.exampleId === undefined ? {} : { exampleId: extra.exampleId }), nextAction: NEXT_ACTION[known] ?? "Read the message, fix the named source, then recollect the example." });
+    const entry: DiagnosticRecord = { id, category: known, message: cutString(message, 2000)[0], ...(extra.viewId === undefined ? {} : { viewId: extra.viewId }), ...(extra.exampleId === undefined ? {} : { exampleId: extra.exampleId }), nextAction: NEXT_ACTION[known] ?? "Read the message, fix the named source, then recollect the example." };
+    if (FAULT_CATEGORIES.includes(known)) this.faulted = true;
+    // a diagnostic is charged like everything else; when even it does not fit it is counted, and a fault still fails the capture
+    const cost = jsonBytes(entry as unknown as Json) + 1;
+    if (cost > this.meter.room()) this.count("diagnostics", 1);
+    else {
+      this.meter.spend(cost);
+      this.diagnosticRecords.push(entry);
+    }
     return id;
   }
 
   /** True when a diagnostic makes the capture failed (a view fault; bounds and notes do not). */
   hasFault(): boolean {
-    return this.diagnosticRecords.some((d) => ["view-exception", "output-schema", "reference", "registration"].includes(d.category));
+    return this.faulted;
+  }
+
+  /** Charges and stores a declared field. The value is encoded against the byte budget; what does not fit is cut and counted. */
+  setField(index: number, name: string, value: CapturedValue): void {
+    const object = this.objectAt(index);
+    const known = Object.hasOwn(object.fields, name);
+    const keyCost = jsonBytes(name) + 2;
+    if (!known && keyCost > this.meter.room() - RESERVE) {
+      this.count("fields", 1);
+      return;
+    }
+    if (!known) this.meter.spend(keyCost);
+    const stats = newStats();
+    const encoded = encodeValue(value, this.limits, stats, 0, this.meter);
+    this.count("strings", stats.strings);
+    this.count("values", stats.values);
+    object.fields[name] = encoded;
+  }
+
+  setLabel(index: number, text: string): void {
+    const object = this.objectAt(index);
+    const label = cutString(text, 256)[0];
+    const delta = jsonBytes(label) - jsonBytes(object.chargedLabel);
+    if (delta > 0 && delta > this.meter.room() - RESERVE) {
+      this.count("labels", 1);
+      return;
+    }
+    this.meter.spend(delta);
+    object.label = text;
+    object.chargedLabel = label;
+  }
+
+  /** Records an edge if the budget has room for it; reports whether it did. */
+  private addEdge(index: number, edge: Json): boolean {
+    const cost = jsonBytes(edge) + 1;
+    if (cost > this.meter.room() - RESERVE) return false;
+    this.meter.spend(cost);
+    this.objectAt(index).edges.push(edge);
+    return true;
   }
 
   private refusal(parentDepth: number | undefined): Bound | undefined {
@@ -229,14 +287,18 @@ export class Capture {
     if (parentDepth !== undefined && parentDepth + 1 > limits.depth) return "depth";
     if (this.objects.length >= limits.objects) return "objects";
     if (parentDepth === undefined && this.rootIds.length >= limits.roots) return "roots";
-    if (parentDepth !== undefined && this.bytesRoot >= limits.rootBytes) return "rootBytes";
-    if (this.bytesTotal >= limits.collectionBytes) return "collectionBytes";
     return undefined;
+  }
+
+  /** The byte bound that refuses a new object whose record and edge need `need` bytes, if any. A root starts a fresh root budget. */
+  private byteRefusal(need: number, isRoot: boolean): Bound | undefined {
+    if (need <= this.meter.room() - RESERVE) return undefined;
+    return !isRoot && this.meter.reason() === "root-bytes-limit" ? "rootBytes" : "collectionBytes";
   }
 
   private refuse(parent: { index: number; name: string } | undefined, bound: Bound): ObjectRef {
     this.count(bound, 1);
-    if (parent !== undefined) this.objectAt(parent.index).edges.push({ name: parent.name, kind: "not-captured", reason: BOUND_REASON[bound] });
+    if (parent !== undefined) this.addEdge(parent.index, { name: parent.name, kind: "not-captured", reason: BOUND_REASON[bound] });
     return { notCaptured: { reason: BOUND_REASON[bound] } };
   }
 
@@ -249,28 +311,37 @@ export class Capture {
       const id = this.objectAt(existing).id;
       if (parent !== undefined) {
         if (this.references >= this.limits.references) return this.refuse(parent, "references");
+        const edge: Json = { name: parent.name, kind: this.path.includes(existing) ? "cycle" : "alias", target: id };
+        if (!this.addEdge(parent.index, edge)) return this.refuse(parent, this.byteRefusal(Infinity, false) ?? "collectionBytes");
         this.references += 1;
-        this.objectAt(parent.index).edges.push({ name: parent.name, kind: this.path.includes(existing) ? "cycle" : "alias", target: id });
       }
       return { object: id };
     }
     const parentDepth = parent === undefined ? undefined : this.objectAt(parent.index).depth;
     const bound = this.refusal(parentDepth);
     if (bound !== undefined) return this.refuse(parent, bound);
+    if (parent === undefined) this.rootUsed = 0; // a root starts a fresh root budget
 
     const index = this.objects.length;
     const id = `o${index + 1}`;
     const context = new ObjectContext(this, index);
     const selection = this.select(value, token, context);
-    this.objects.push({ id, typeId: selection.type.id, domainKey: key ?? null, label: undefined, fields: {}, edges: [], views: [], depth: parentDepth === undefined ? 0 : parentDepth + 1 });
+    const typeId = selection.type.id;
+    // the record of the object (and the edge that reaches it) is charged before the object exists: no room, no object
+    const label = cutString(key ?? typeId.split("::").pop() ?? typeId, 256)[0];
+    const childEdge: Json | undefined = parent === undefined ? undefined : { name: parent.name, kind: "child", target: id };
+    const skeleton = 170 + jsonBytes(id) + jsonBytes(typeId) + jsonBytes(key ?? null) + jsonBytes(label) + (childEdge === undefined ? 0 : jsonBytes(childEdge) + 1);
+    const byteBound = this.byteRefusal(skeleton, parent === undefined);
+    if (byteBound !== undefined) return this.refuse(parent, byteBound);
+    this.meter.spend(skeleton - (childEdge === undefined ? 0 : jsonBytes(childEdge) + 1));
+    this.objects.push({ id, typeId, domainKey: key ?? null, label: undefined, fields: {}, edges: [], views: [], depth: parentDepth === undefined ? 0 : parentDepth + 1, chargedLabel: label });
     if (trackable) this.byObject.set(value, index);
     if (identity !== undefined) this.byToken.set(identity, index);
     if (parent === undefined) {
       this.rootIds.push(id);
-      this.bytesRoot = 0;
     } else {
       this.references += 1;
-      this.objectAt(parent.index).edges.push({ name: parent.name, kind: "child", target: id });
+      this.addEdge(parent.index, childEdge as Json);
     }
     this.path.push(index);
     try {
@@ -278,9 +349,6 @@ export class Capture {
     } finally {
       this.path.pop();
     }
-    const size = JSON.stringify(this.objectJson(index)).length;
-    this.bytesRoot += size;
-    this.bytesTotal += size;
     return { object: id };
   }
 
@@ -295,6 +363,15 @@ export class Capture {
       this.addDiagnostic("registration", `object ${object.id} computed two views with the id ${definition.id}`, { viewId: definition.id });
       return;
     }
+    // The frame of the view record is paid for BEFORE the view runs, so a field or table that takes all the room cannot leave its own view
+    // without one; recordView settles the difference. No room for the frame: the view is not run, and the omission is named.
+    const prepaid = jsonBytes({ viewId: definition.id, objectId: object.id, title: definition.title, question: definition.question, component: definition.component, priority: definition.priority, evidence: { provenance: "observed", runId: this.options.runId }, completeness: { status: "partial", reason: "row-limit", omitted: { rows: { known: true, count: 1_000_000_000 }, strings: { known: true, count: 1_000_000_000 } } }, pages: [] }) + jsonBytes(definition.id) + 2 + 160;
+    if (prepaid > this.meter.room() - RESERVE) {
+      this.count("views", 1);
+      this.addDiagnostic("limit", `view ${definition.id} of object ${object.id} was not run: the byte budget of this capture is used up`, { viewId: definition.id });
+      return;
+    }
+    this.meter.spend(prepaid);
     context.currentView = definition.id;
     context.viewBestEffort = false;
     let result: ViewResult;
@@ -308,17 +385,24 @@ export class Capture {
     } catch (error) {
       const category = error instanceof ViewError ? error.category : "view-exception";
       const message = error instanceof ViewError ? error.message : `view ${definition.id} threw: ${error instanceof Error ? error.message : String(error)}`;
+      this.refund(prepaid);
       this.addDiagnostic(category, message, { viewId: definition.id });
       return;
     } finally {
       context.currentView = undefined;
     }
-    this.recordView(index, definition, result, context.viewBestEffort || context.anyBestEffort);
+    this.recordView(index, definition, result, context.viewBestEffort || context.anyBestEffort, prepaid);
   }
 
-  private recordView(index: number, definition: ViewDefinition<any>, result: ViewResult, bestEffort: boolean): void {
+  private refund(bytes: number): void {
+    this.rootUsed = Math.max(0, this.rootUsed - bytes);
+    this.totalUsed = Math.max(0, this.totalUsed - bytes);
+  }
+
+  private recordView(index: number, definition: ViewDefinition<any>, result: ViewResult, bestEffort: boolean, prepaid: number): void {
     const object = this.objectAt(index);
     if (result === null || typeof result !== "object" || (result.kind !== "built" && result.kind !== "unsupported")) {
+      this.refund(prepaid);
       this.addDiagnostic("output-schema", `view ${definition.id} did not return a built or unsupported result: finish the builder with done() or return view.unsupported(reason)`, { viewId: definition.id });
       return;
     }
@@ -338,6 +422,7 @@ export class Capture {
       record.pages = [];
     } else {
       if (result.component !== definition.component) {
+        this.refund(prepaid);
         this.addDiagnostic("output-schema", `view ${definition.id} declares component ${JSON.stringify(definition.component)} but built a ${JSON.stringify(result.component)}`, { viewId: definition.id });
         return;
       }
@@ -353,9 +438,18 @@ export class Capture {
       for (const [offset, page] of (result.pages ?? []).entries()) this.pageRecords.push({ pageId: page.pageId, viewId: definition.id, objectId: object.id, index: offset + 1, rows: page.rows });
       if (result.rowsTotal !== undefined) record.rowsTotal = result.rowsTotal;
     }
-    const size = JSON.stringify(record).length;
-    this.bytesRoot += size;
-    this.bytesTotal += size;
+    // the view's data and pages were charged while the builders produced them; the record around them and its entry in the object are charged here
+    // (the page references were paid for with their pages)
+    const { data: _data, pages: _pages, ...frame } = record;
+    const cost = jsonBytes(frame as Json) + jsonBytes(definition.id) + 2;
+    if (cost > prepaid && cost - prepaid > this.meter.room()) {
+      this.refund(prepaid);
+      this.count("views", 1);
+      this.addDiagnostic("limit", `view ${definition.id} of object ${object.id} was dropped: the byte budget of this capture is used up`, { viewId: definition.id });
+      return;
+    }
+    if (cost > prepaid) this.meter.spend(cost - prepaid);
+    else this.refund(prepaid - cost);
     object.views.push(definition.id);
     this.viewRecords.push(record);
   }

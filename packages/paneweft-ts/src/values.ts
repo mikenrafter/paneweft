@@ -18,8 +18,27 @@ export function redacted(reason?: string): Redacted {
 
 /** What encoding gave up, so builders can name the omission instead of hiding it. */
 export interface EncodeStats {
+  /** Strings cut at the string limit. */
   strings: number;
+  /** Array elements, map entries and object members left out because the byte budget ran out. */
+  values: number;
 }
+export const newStats = (): EncodeStats => ({ strings: 0, values: 0 });
+
+/** The byte budget an encoding is charged against WHILE it builds its output (S2): `room()` is what is left of the smaller of the root and
+ * collection budgets, `spend` charges bytes of JSON text, `reason()` names the budget that is closer to empty. */
+export interface ByteMeter {
+  room(): number;
+  spend(bytes: number): void;
+  reason(): "root-bytes-limit" | "collection-limit";
+}
+
+/** Bytes kept back so that a container which runs out of budget can always end with a marker. */
+export const RESERVE = 64;
+const jsonBytes = (json: Json): number => Buffer.byteLength(JSON.stringify(json), "utf8");
+const isMarker = (json: Json): boolean => json !== null && typeof json === "object" && !Array.isArray(json) && json.$paneweft === "not-captured";
+/** The member name that ends an object cut short by the budget; its value is a `not-captured` marker. */
+const CUT_KEY = "\u2026";
 
 const MAX_NESTING = 64;
 
@@ -52,63 +71,156 @@ function isRecordLike(value: object): value is Record<string, CapturedValue> {
   return !(value instanceof Map) && !(value instanceof Uint8Array) && !(value instanceof Redacted) && !(value instanceof Unsupported);
 }
 
-/** The `paneweft.object-graph/1` encoding of `value` under `limits`. Getters are never evaluated. */
-export function encodeValue(value: CapturedValue, limits: Limits, stats: EncodeStats = { strings: 0 }, depth = 0): Json {
-  if (depth > MAX_NESTING) return { $paneweft: "unsupported", reason: "nesting" };
+/** The `paneweft.object-graph/1` encoding of `value` under `limits`. Getters are never evaluated, on records or on array indexes.
+ *
+ * With a `meter` the output is charged WHILE it is built (S2): a string is cut to the room left, and a container that runs out of room
+ * stops and ends with `{ "$paneweft": "not-captured", "reason": ... }` (an array element, or an object member named `…`); the dropped
+ * elements are counted in `stats.values`. Work is proportional to the output, not to the size of a huge container (sparse arrays
+ * included). Without a meter nothing is bounded but strings, bytes and nesting. */
+export function encodeValue(value: CapturedValue, limits: Limits, stats: EncodeStats = newStats(), depth = 0, meter?: ByteMeter): Json {
+  const marker = (): Json => {
+    const tag: Json = { $paneweft: "not-captured", reason: meter === undefined ? "budget" : meter.reason() };
+    meter?.spend(jsonBytes(tag));
+    return tag;
+  };
+  /** Emits `leaf` if it fits in what is left after the reserve, otherwise the marker. */
+  const emit = (leaf: Json): Json => {
+    if (meter === undefined) return leaf;
+    const size = jsonBytes(leaf);
+    if (size > meter.room() - RESERVE) {
+      stats.values += 1;
+      return marker();
+    }
+    meter.spend(size);
+    return leaf;
+  };
+  const exhausted = (): boolean => meter !== undefined && meter.room() < RESERVE + 2;
+  if (depth > MAX_NESTING) return emit({ $paneweft: "unsupported", reason: "nesting" });
   switch (typeof value) {
     case "undefined":
-      return { $paneweft: "absent" };
+      return emit({ $paneweft: "absent" });
     case "boolean":
-      return value;
+      return emit(value);
     case "string": {
       const [kept, omitted] = cutString(value, limits.stringBytes);
-      if (omitted === 0) return value;
-      stats.strings += 1;
-      return { $paneweft: "truncated", text: kept, keptBytes: Buffer.byteLength(kept, "utf8"), omittedBytes: omitted };
+      let leaf: Json = omitted === 0 ? value : { $paneweft: "truncated", text: kept, keptBytes: Buffer.byteLength(kept, "utf8"), omittedBytes: omitted };
+      if (omitted > 0) stats.strings += 1;
+      if (meter !== undefined && jsonBytes(leaf) > meter.room() - RESERVE) {
+        // cut again to what the budget still allows (the tag itself costs about 90 bytes)
+        let allowed = Math.floor((meter.room() - RESERVE - 90) / 2);
+        for (; allowed > 0; allowed = Math.floor(allowed / 2)) {
+          const [text, rest] = cutString(value, Math.min(allowed, limits.stringBytes));
+          leaf = { $paneweft: "truncated", text, keptBytes: Buffer.byteLength(text, "utf8"), omittedBytes: Buffer.byteLength(value, "utf8") - Buffer.byteLength(text, "utf8") };
+          if (rest >= 0 && jsonBytes(leaf) <= meter.room() - RESERVE) break;
+        }
+        if (allowed <= 0) {
+          stats.values += 1;
+          return marker();
+        }
+        if (omitted === 0) stats.strings += 1;
+      }
+      return emit(leaf);
     }
     case "number":
-      if (Number.isNaN(value)) return { $paneweft: "float", value: "NaN" };
-      if (value === Number.POSITIVE_INFINITY) return { $paneweft: "float", value: "Infinity" };
-      if (value === Number.NEGATIVE_INFINITY) return { $paneweft: "float", value: "-Infinity" };
-      if (Object.is(value, -0)) return { $paneweft: "float", value: "-0" };
+      if (Number.isNaN(value)) return emit({ $paneweft: "float", value: "NaN" });
+      if (value === Number.POSITIVE_INFINITY) return emit({ $paneweft: "float", value: "Infinity" });
+      if (value === Number.NEGATIVE_INFINITY) return emit({ $paneweft: "float", value: "-Infinity" });
+      if (Object.is(value, -0)) return emit({ $paneweft: "float", value: "-0" });
       // An integer-valued number beyond the safe range is ALREADY lossy: refuse to guess (decision 9); a bigint is the exact form.
-      if (Number.isInteger(value) && !Number.isSafeInteger(value)) return { $paneweft: "unsupported", reason: "lossy-number" };
-      return value;
+      if (Number.isInteger(value) && !Number.isSafeInteger(value)) return emit({ $paneweft: "unsupported", reason: "lossy-number" });
+      return emit(value);
     case "bigint":
-      return value >= BigInt(Number.MIN_SAFE_INTEGER) && value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : { $paneweft: "bigint", decimal: value.toString() };
+      return emit(value >= BigInt(Number.MIN_SAFE_INTEGER) && value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : { $paneweft: "bigint", decimal: value.toString() });
     case "symbol":
-      return value === absent ? { $paneweft: "absent" } : { $paneweft: "unsupported", reason: "symbol" };
+      return emit(value === absent ? { $paneweft: "absent" } : { $paneweft: "unsupported", reason: "symbol" });
     case "function":
-      return { $paneweft: "unsupported", reason: "function" };
+      return emit({ $paneweft: "unsupported", reason: "function" });
     default:
       break;
   }
-  if (value === null) return null;
-  if (value instanceof Redacted) return value.reason === undefined ? { $paneweft: "redacted" } : { $paneweft: "redacted", reason: value.reason };
-  if (value instanceof Unsupported) return { $paneweft: "unsupported", reason: value.reason };
+  if (value === null) return emit(null);
+  if (value instanceof Redacted) return emit(value.reason === undefined ? { $paneweft: "redacted" } : { $paneweft: "redacted", reason: value.reason });
+  if (value instanceof Unsupported) return emit({ $paneweft: "unsupported", reason: value.reason });
   if (value instanceof Uint8Array) {
-    const kept = value.subarray(0, limits.stringBytes);
+    // base64 is 4 bytes per 3; leave 120 bytes for the tag
+    const byRoom = meter === undefined ? Infinity : Math.max(0, Math.floor(((meter.room() - RESERVE - 120) * 3) / 4));
+    const kept = value.subarray(0, Math.min(limits.stringBytes, byRoom));
     const tag: { [key: string]: Json } = { $paneweft: "bytes", base64: Buffer.from(kept).toString("base64"), length: value.length };
     if (kept.length < value.length) tag.truncated = true;
-    return tag;
+    return emit(tag);
   }
-  if (Array.isArray(value)) return value.map((item) => encodeValue(item, limits, stats, depth + 1));
+  if (value instanceof Date) return emit(Number.isNaN(value.getTime()) ? { $paneweft: "unsupported", reason: "invalid-date" } : value.toISOString());
+  if (!Array.isArray(value) && !(value instanceof Map) && !isRecordLike(value)) return emit({ $paneweft: "unsupported", reason: "object" });
+  if (exhausted()) {
+    stats.values += 1;
+    return marker();
+  }
+  meter?.spend(2);
+  if (Array.isArray(value)) {
+    const out: Json[] = [];
+    for (let index = 0; index < value.length; index += 1) {
+      if (exhausted()) {
+        stats.values += value.length - index;
+        out.push(marker());
+        break;
+      }
+      if (index > 0) meter?.spend(1);
+      // an index that holds an accessor is not read (S10): reading it would run the getter
+      const descriptor = Object.getOwnPropertyDescriptor(value, index);
+      const item = descriptor !== undefined && (descriptor.get !== undefined || descriptor.set !== undefined) ? emit({ $paneweft: "unsupported", reason: "getter" }) : encodeValue(descriptor?.value as CapturedValue, limits, stats, depth + 1, meter);
+      out.push(item);
+      if (isMarker(item) && meter !== undefined) {
+        // the budget ran out inside this element: its marker is the cut, nothing more is added
+        stats.values += value.length - index - 1;
+        break;
+      }
+    }
+    return out;
+  }
+  const pairs: Array<[string, Json]> = [];
+  let total: number;
+  let stopped = false;
   if (value instanceof Map) {
-    const entries = [...value.entries()];
-    if (entries.some(([key]) => key === "$paneweft")) return { $paneweft: "map", entries: entries.map(([key, item]) => [key, encodeValue(item, limits, stats, depth + 1)]) };
-    return Object.fromEntries(entries.map(([key, item]) => [key, encodeValue(item, limits, stats, depth + 1)]));
+    total = value.size;
+    let index = 0;
+    for (const [key, item] of value) {
+      if (exhausted()) break;
+      const name = String(key);
+      meter?.spend((index > 0 ? 1 : 0) + jsonBytes(name) + 1);
+      const encoded = encodeValue(item, limits, stats, depth + 1, meter);
+      pairs.push([name, encoded]);
+      index += 1;
+      if (isMarker(encoded) && meter !== undefined) {
+        stopped = true;
+        break;
+      }
+    }
+  } else {
+    const keys = Object.keys(value);
+    total = keys.length;
+    for (const [index, key] of keys.entries()) {
+      if (exhausted()) break;
+      meter?.spend((index > 0 ? 1 : 0) + jsonBytes(key) + 1);
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      const accessor = descriptor === undefined ? undefined : descriptor.get !== undefined || descriptor.set !== undefined ? ({ $paneweft: "unsupported", reason: "getter" } as Json) : undefined;
+      const encoded = accessor === undefined ? encodeValue(descriptor?.value as CapturedValue, limits, stats, depth + 1, meter) : emit(accessor);
+      pairs.push([key, encoded]);
+      if (isMarker(encoded) && meter !== undefined) {
+        stopped = true;
+        break;
+      }
+    }
   }
-  if (value instanceof Date) return Number.isNaN(value.getTime()) ? { $paneweft: "unsupported", reason: "invalid-date" } : value.toISOString();
-  if (!isRecordLike(value)) return { $paneweft: "unsupported", reason: "object" };
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  const entries: Array<[string, Json]> = [];
-  for (const [key, descriptor] of Object.entries(descriptors)) {
-    if (!descriptor.enumerable) continue;
-    if (descriptor.get !== undefined || descriptor.set !== undefined) entries.push([key, { $paneweft: "unsupported", reason: "getter" }]);
-    else entries.push([key, encodeValue(descriptor.value as CapturedValue, limits, stats, depth + 1)]);
+  if (stopped) stats.values += total - pairs.length;
+  else if (pairs.length < total) {
+    stats.values += total - pairs.length;
+    let cutKey = CUT_KEY;
+    while (pairs.some(([key]) => key === cutKey)) cutKey += CUT_KEY;
+    meter?.spend((pairs.length > 0 ? 1 : 0) + jsonBytes(cutKey) + 1);
+    pairs.push([cutKey, marker()]);
   }
-  if (entries.some(([key]) => key === "$paneweft")) return { $paneweft: "map", entries: entries.map(([key, item]) => [key, item]) };
-  return Object.fromEntries(entries);
+  if (pairs.some(([key]) => key === "$paneweft")) return { $paneweft: "map", entries: pairs.map(([key, item]) => [key, item]) };
+  return Object.fromEntries(pairs);
 }
 
 /** The display form used in shape examples and list cells. */
@@ -128,7 +240,10 @@ export function displayValue(value: CapturedValue): string {
   if (value instanceof Uint8Array) return `<${value.length} bytes>`;
   if (value instanceof Redacted) return value.reason === undefined ? "<redacted>" : `<redacted: ${value.reason}>`;
   if (value instanceof Unsupported) return `<unsupported: ${value.reason}>`;
-  return JSON.stringify(encodeValue(value, { depth: 4, objects: 1, references: 0, rootBytes: 1, stringBytes: 16 * 1024, pageRows: 1, collectionBytes: 1, roots: 1, viewRows: 1, viewBudgetMs: 1 }));
+  // a display cell never needs more text than one string may hold, so a huge container is cut here too
+  let left = 16 * 1024;
+  const meter: ByteMeter = { room: () => left, spend: (bytes) => { left -= bytes; }, reason: () => "collection-limit" };
+  return JSON.stringify(encodeValue(value, { depth: 4, objects: 1, references: 0, rootBytes: 1, stringBytes: 16 * 1024, pageRows: 1, collectionBytes: 1, roots: 1, viewRows: 1, viewBudgetMs: 1 }, newStats(), 0, meter));
 }
 
 /** The shape `type` of a leaf. */

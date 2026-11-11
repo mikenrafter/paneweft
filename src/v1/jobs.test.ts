@@ -415,3 +415,42 @@ describe("[S4] a job qex stopped with a signal still imports", () => {
     expect(run.run.collection).toMatchObject({ status: "timed-out", timedOut: true, exitCode: null, signal: "SIGTERM" });
   });
 });
+
+describe("[S3] a collect request can only lower the capture bounds", () => {
+  const limitsEnv = (qex: Awaited<ReturnType<typeof world>>["qex"]): Record<string, number> | undefined => {
+    const submit = qex.calls().find((c) => c[0] === "submit")!;
+    const entry = submit.filter((_, i) => submit[i - 1] === "--env").find((pair) => pair.startsWith("PANEWEFT_LIMITS="));
+    return entry === undefined ? undefined : JSON.parse(entry.slice("PANEWEFT_LIMITS=".length));
+  };
+
+  // why: S3. The `limits` of a collect request went to the worker's environment as given: a payload could ask for 2^40 bytes. Rejects the
+  // implementation that forwards the request's numbers. Lower numbers still pass through; higher ones become the SDK default.
+  // proves: CLAIM(S3-clamp)
+  it("clamps a bound above the SDK default and keeps a lower one", async () => {
+    const { qex, service } = await world();
+    must(await service().collect(request("job-l1", { limits: { collectionBytes: 2 ** 40, objects: 5, depth: 99 } })), "collect");
+    expect(limitsEnv(qex)).toEqual({ collectionBytes: 33_554_432, depth: 4, objects: 5 });
+  });
+
+  // why: S3. The operator's ceiling (the adapter's limitCeilings) is below the SDK default: it wins over the request.
+  // proves: CLAIM(S3-clamp)
+  it("clamps to the adapter's operator ceiling", async () => {
+    const { session, dir } = await open();
+    const qex = fake();
+    const adapter = fakeCargoAdapter({ limitCeilings: { objects: 3 } });
+    const service = createJobService({ session, sessionDir: dir, qex: qex.client, adapters: [adapter], catalogueFor: async () => catalogue, cancelWaitMs: 3000 });
+    must(await service.collect(request("job-l2", { limits: { objects: 500, rootBytes: 1024 } })), "collect");
+    expect(limitsEnv(qex)).toEqual({ objects: 3, rootBytes: 1024 });
+  });
+
+  // why: S3. Names and values that are not bounds are refused before anything is written: unknown names, floats, negatives, strings,
+  // unsafe integers and a non-object.
+  // proves: CLAIM(S3-clamp)
+  it.each([{ bogus: 1 }, { objects: 1.5 }, { objects: -1 }, { objects: "5" }, { rootBytes: 2 ** 60 }, { objects: 0 }, [5], "many"])("refuses limits %j", async (limits) => {
+    const { dir, service, qex } = await world();
+    const error = mustFail(await service().collect(request("job-l3", { limits })), "limits");
+    expect(error.code).toBe("INVALID_ARGUMENT");
+    expect(existsSync(join(dir, "jobs", "job-l3"))).toBe(false);
+    expect(qex.calls()).toEqual([]);
+  });
+});

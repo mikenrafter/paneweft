@@ -31,6 +31,21 @@ export interface Adapter {
     timeoutMs: number;
     logBytes: number;
   };
+  /**
+   * Operator ceilings for the capture bounds a collect request may ask for (S3). A request can only lower a bound; it is clamped to the smaller of these and the SDK defaults. Absent: the SDK defaults are the ceiling.
+   */
+  limitCeilings?: {
+    depth?: number;
+    objects?: number;
+    references?: number;
+    rootBytes?: number;
+    stringBytes?: number;
+    pageRows?: number;
+    collectionBytes?: number;
+    roots?: number;
+    viewRows?: number;
+    viewBudgetMs?: number;
+  };
   queue: {
     wrapper: "qex";
     cpu: string;

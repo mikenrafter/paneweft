@@ -16,6 +16,7 @@ import { validateObjectGraph } from "./capture.ts";
 import { mergeCatalogue, type CataloguePart } from "./catalogue.ts";
 import { compareFingerprints, computeFingerprint, sampleConsistency, type Fingerprint } from "./fingerprint.ts";
 import { importCollection } from "./import.ts";
+import { resolveRequestedLimits } from "./limits.ts";
 import { QEX_TERMINAL_STATES, type QexClient, type QexJob } from "./qex.ts";
 import { snapshotOfRun } from "./read.ts";
 
@@ -555,7 +556,10 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
   async function begin(mode: "run" | "catalogue", request: CollectRequest | { requestId: string; repo: string; adapter: string }, raw: Record<string, unknown>): Promise<Result<JobView>> {
     if (!REQUEST_ID.test(request.requestId)) return err("INVALID_ARGUMENT", `"${request.requestId}" is not a request id (letters, digits, dot, dash, underscore; at most 64)`, { errors: [{ code: "PATTERN", pointer: "/requestId", constraint: `pattern: ${REQUEST_ID.source}`, hint: "Use a fresh short id; the same id with the same parameters returns the same job." }] });
     const examples = "examples" in request ? request.examples : [];
-    const params = normalizeParams({ repo: request.repo, adapter: request.adapter, examples, ...("views" in request ? { views: request.views } : {}), ...("limits" in request ? { limits: request.limits } : {}) }, mode);
+    // S3: the requested bounds are validated and clamped to the adapter's ceilings BEFORE they are recorded or handed to the worker
+    const limits = resolveRequestedLimits("limits" in request ? request.limits : undefined, adapterFor({ repo: request.repo, adapter: request.adapter, examples: [] })?.limitCeilings);
+    if (!limits.ok) return limits;
+    const params = normalizeParams({ repo: request.repo, adapter: request.adapter, examples, ...("views" in request ? { views: request.views } : {}), ...(limits.value === undefined ? {} : { limits: limits.value }) }, mode);
     const id = request.requestId;
     const existing = await readIntent(id);
     if (existing !== undefined) {

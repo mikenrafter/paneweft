@@ -18,6 +18,7 @@ pub mod catalogue;
 pub mod example;
 mod json;
 pub mod limits;
+mod meter;
 pub mod trail;
 pub mod value;
 

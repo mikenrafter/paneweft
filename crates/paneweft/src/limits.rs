@@ -52,26 +52,39 @@ impl Limits {
         })
     }
 
-    /// Applies owner overrides (the camelCase names of the wire `LimitOverrides`); unknown or non-integer members are ignored
-    /// because an override can only ever lower a bound, never invent one.
-    pub fn with_overrides(mut self, overrides: &serde_json::Value) -> Limits {
+    /// The smallest value each bound can take (the object-graph schema's `minimum`).
+    const MINIMUMS: Limits = Limits { depth: 0, objects: 1, references: 0, root_bytes: 1, string_bytes: 1, page_rows: 1, collection_bytes: 1, roots: 1, view_rows: 1, view_budget_ms: 1 };
+
+    /// Applies overrides (the camelCase names of the wire `LimitOverrides`). An override can only LOWER a bound (S3): a value is taken when
+    /// it is a non-negative integer, raised to the schema minimum, and clamped to `self` and to `ceiling`, so a payload that asks for more
+    /// than the operator allows gets the operator's number. Unknown names, non-integers and negatives are ignored; an integer that does not
+    /// fit the bound's type is a request for more than any ceiling and is clamped, never narrowed.
+    pub fn with_overrides_under(mut self, overrides: &serde_json::Value, ceiling: &Limits) -> Limits {
         let Some(map) = overrides.as_object() else { return self };
+        let narrow = |n: u64| u32::try_from(n).unwrap_or(u32::MAX);
+        let (base, min) = (self, Limits::MINIMUMS);
         for (key, value) in map {
             let Some(n) = value.as_u64() else { continue };
             match key.as_str() {
-                "depth" => self.depth = n as u32,
-                "objects" => self.objects = (n as u32).max(1),
-                "references" => self.references = n as u32,
-                "rootBytes" => self.root_bytes = n.max(1),
-                "stringBytes" => self.string_bytes = n.max(1),
-                "pageRows" => self.page_rows = (n as u32).max(1),
-                "collectionBytes" => self.collection_bytes = n.max(1),
-                "roots" => self.roots = (n as u32).max(1),
-                "viewRows" => self.view_rows = (n as u32).max(1),
-                "viewBudgetMs" => self.view_budget_ms = n.max(1),
+                "depth" => self.depth = narrow(n).max(min.depth).min(ceiling.depth).min(base.depth),
+                "objects" => self.objects = narrow(n).max(min.objects).min(ceiling.objects).min(base.objects),
+                "references" => self.references = narrow(n).max(min.references).min(ceiling.references).min(base.references),
+                "rootBytes" => self.root_bytes = n.max(min.root_bytes).min(ceiling.root_bytes).min(base.root_bytes),
+                "stringBytes" => self.string_bytes = n.max(min.string_bytes).min(ceiling.string_bytes).min(base.string_bytes),
+                "pageRows" => self.page_rows = narrow(n).max(min.page_rows).min(ceiling.page_rows).min(base.page_rows),
+                "collectionBytes" => self.collection_bytes = n.max(min.collection_bytes).min(ceiling.collection_bytes).min(base.collection_bytes),
+                "roots" => self.roots = narrow(n).max(min.roots).min(ceiling.roots).min(base.roots),
+                "viewRows" => self.view_rows = narrow(n).max(min.view_rows).min(ceiling.view_rows).min(base.view_rows),
+                "viewBudgetMs" => self.view_budget_ms = n.max(min.view_budget_ms).min(ceiling.view_budget_ms).min(base.view_budget_ms),
                 _ => {}
             }
         }
         self
+    }
+
+    /// Applies overrides under the ceiling of the numbers `self` already holds (the operator's).
+    pub fn with_overrides(self, overrides: &serde_json::Value) -> Limits {
+        let ceiling = self;
+        self.with_overrides_under(overrides, &ceiling)
     }
 }

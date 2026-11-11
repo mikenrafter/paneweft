@@ -19,6 +19,23 @@
     "features": { "type": "array", "items": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" } },
     "supportedVersions": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
     "limits": { "type": "object", "additionalProperties": false, "required": ["timeoutMs", "logBytes"], "properties": { "timeoutMs": { "type": "integer", "minimum": 1 }, "logBytes": { "type": "integer", "minimum": 1024 } } },
+    "limitCeilings": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Operator ceilings for the capture bounds a collect request may ask for (S3). A request can only lower a bound; it is clamped to the smaller of these and the SDK defaults. Absent: the SDK defaults are the ceiling.",
+      "properties": {
+        "depth": { "type": "integer", "minimum": 0 },
+        "objects": { "type": "integer", "minimum": 1 },
+        "references": { "type": "integer", "minimum": 0 },
+        "rootBytes": { "type": "integer", "minimum": 1 },
+        "stringBytes": { "type": "integer", "minimum": 1 },
+        "pageRows": { "type": "integer", "minimum": 1 },
+        "collectionBytes": { "type": "integer", "minimum": 1 },
+        "roots": { "type": "integer", "minimum": 1 },
+        "viewRows": { "type": "integer", "minimum": 1 },
+        "viewBudgetMs": { "type": "integer", "minimum": 1 }
+      }
+    },
     "queue": { "type": "object", "additionalProperties": false, "required": ["wrapper", "cpu", "mem"], "properties": { "wrapper": { "const": "qex" }, "cpu": { "type": "string" }, "mem": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } } } }
   }
 }
