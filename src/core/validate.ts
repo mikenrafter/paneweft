@@ -65,6 +65,7 @@ class IssueSet {
 // ---- schema registry -----------------------------------------------------------------------------------------
 
 interface Registry {
+  ajv: ReturnType<typeof createSchemaRegistry>;
   validators: { envelope: ValidateFunction; bundle: ValidateFunction; run: ValidateFunction; definition: ValidateFunction };
   /** Schema node -> the document it lives in, so a `#/$defs/x` reference can be resolved from any node. */
   baseOf: WeakMap<object, SchemaDocument>;
@@ -93,6 +94,7 @@ function schemaRegistry(): Registry {
     return found;
   };
   registry = {
+    ajv,
     validators: {
       envelope: validator("urn:paneweft:schema:envelope:1"),
       bundle: validator("urn:paneweft:schema:bundle:1"),
@@ -144,7 +146,7 @@ function describeAllowed(values: unknown): string {
   return Array.isArray(values) ? values.map((value) => JSON.stringify(value)).join(", ") : String(values);
 }
 
-function normaliseAjvErrors(errors: ErrorObject[], issues: IssueSet, prefix: string): void {
+function normaliseAjvErrors(errors: ErrorObject[], issues: IssueSet, prefix: string, componentFields = true): void {
   for (const error of errors) {
     if (error.keyword === "if") continue; // the wrapper Ajv adds when a then/else branch fails; the branch's own errors are the fault
     const parent = (error.parentSchema ?? {}) as Obj;
@@ -165,7 +167,7 @@ function normaliseAjvErrors(errors: ErrorObject[], issues: IssueSet, prefix: str
       }
       case "enum": {
         const allowed = describeAllowed(params.allowedValues);
-        const code: IssueCode = error.instancePath.endsWith("/component") ? "UNKNOWN_COMPONENT" : "ENUM";
+        const code: IssueCode = componentFields && error.instancePath.endsWith("/component") ? "UNKNOWN_COMPONENT" : "ENUM";
         issues.add(code, here, `enum: ${allowed}`, own ?? `Use one of: ${allowed}.`);
         break;
       }
@@ -814,5 +816,17 @@ export function validateAgainstOwnerSchema(schema: Record<string, unknown>, valu
   if (validate(value)) return [];
   const issues = new IssueSet();
   normaliseAjvErrors(validate.errors ?? [], issues, prefix);
+  return issues.sorted();
+}
+
+// ---- tool arguments ----------------------------------------------------------------------------------------------------------
+
+/** Validates a tool's arguments against its canonical schema (src/schemas/tools/<tool>.schema.json); pointers are argument pointers. */
+export function validateToolArguments(tool: string, args: unknown): ValidationIssue[] {
+  const validate = schemaRegistry().ajv.getSchema(`urn:paneweft:schema:tool:${tool}:1`);
+  if (validate === undefined) return [{ code: "CONSTRAINT", pointer: "", constraint: "tool schema", hint: `No schema is registered for tool "${tool}".` }];
+  if (validate(args)) return [];
+  const issues = new IssueSet();
+  normaliseAjvErrors(validate.errors ?? [], issues, "", false); // a tool argument named "component" is an ordinary enum, not a view component
   return issues.sorted();
 }
