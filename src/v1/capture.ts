@@ -129,7 +129,7 @@ function limitsSummary(graph: ObjectGraph): string {
 
 /** The v0 completeness of a view record. A complete capture names its criterion; every omission is a named gap; rows kept in stored
  * pages are a gap too, because the envelope holds only the first page. */
-function lowerCompleteness(view: ViewRecord): Envelope["completeness"] {
+export function lowerCompleteness(view: ViewRecord): Envelope["completeness"] {
   const completeness = view.completeness;
   if (completeness.status === "unsupported") return { status: "unsupported", reason: completeness.reason ?? "unsupported", missingCapabilities: [] };
   const gaps: Array<{ id: string; question: string; reason: string }> = [];
@@ -141,6 +141,14 @@ function lowerCompleteness(view: ViewRecord): Envelope["completeness"] {
   if (gaps.length > 0) return { status: "partial", gaps: gaps as [(typeof gaps)[number], ...typeof gaps] };
   const total = view.rowsTotal;
   return { status: "complete", criterion: total === undefined || total === null ? "every value the view selected at capture time" : `all ${total} rows the view selected at capture time` };
+}
+
+/** List rows of a capture as v0 rows: a row `target` becomes the row's `entity`. Shared by the stored first page and by stored pages read later. */
+export function lowerListRows(graph: Pick<ObjectGraph, "captureId" | "objects">, repo: string, rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  return rows.map((row) => {
+    const { target, ...rest } = row as { target?: { object?: string } } & Record<string, unknown>;
+    return target?.object === undefined ? rest : { ...rest, entity: { repository: repo, id: entityId(graph, target.object), kind: entityKindOf(recordOf(graph as ObjectGraph, target.object).typeId) } };
+  });
 }
 
 /** A view record becomes an ordinary paneweft.view/1 envelope with a run source and `observed` items; a row `target` becomes the
@@ -181,13 +189,7 @@ export function lowerViewRecord(graph: ObjectGraph, view: ViewRecord, context: L
   }
   if (view.component === "list" && view.data !== undefined) {
     const list = view.data as { rows: Array<Record<string, unknown>> } & Record<string, unknown>;
-    data = {
-      ...list,
-      rows: list.rows.map((row) => {
-        const { target, ...rest } = row as { target?: { object?: string } } & Record<string, unknown>;
-        return target?.object === undefined ? rest : { ...rest, entity: { repository: context.repo, id: entityId(graph, target.object), kind: kindOfObject(target.object) } };
-      }),
-    };
+    data = { ...list, rows: lowerListRows(graph, context.repo, list.rows) };
   }
   const envelope = {
     schemaVersion: "paneweft.view/1",

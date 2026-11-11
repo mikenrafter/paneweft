@@ -5,7 +5,7 @@
 // adapter the owner registered. Every reply fits its byte budget and continues through content-bound cursors.
 import { existsSync, readFileSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join, relative as relativePath, resolve as resolvePath } from "node:path";
 import { canonicalJson, compareCodeUnits } from "../core/canonical.ts";
 import { sha256Hex } from "../core/digest.ts";
 import { decodeCursor, encodeCursor, queryDigest } from "../core/cursor.ts";
@@ -20,6 +20,7 @@ import type { TestRun } from "../generated/v1/TestRun.ts";
 import { loadAdapters, type AdapterRecord } from "./adapters.ts";
 import { compareFingerprints, computeFingerprint, type Fingerprint } from "./fingerprint.ts";
 import type { JobService } from "./jobs.ts";
+import { withStoredPages } from "./pages.ts";
 import { captureFile, committedImport, openV1Reader, readJsonFile } from "./read.ts";
 import { V1_READ_ONLY_TOOLS, V1_TOOL_NAMES, createV1SchemaRegistry, loadV1SchemaDocuments, validateAgainstV1, type V1ToolName } from "./schemas.ts";
 
@@ -75,6 +76,8 @@ interface ReplySpec {
   items: Item[];
   notices?: string[];
   details?: Json;
+  /** Text-format only: lines printed after the header for facts that the JSON form carries in `details` (a scaffold's patch, for one). */
+  textLines?: string[];
   /** What defines the listing a cursor continues (tool and its filters, never the budget). */
   query: Json;
 }
@@ -98,6 +101,7 @@ function renderReply(spec: ReplySpec, format: ReplyFormat, start: number, count:
   const lines = [`paneweft.reply/2 tool=${spec.tool}`, `completeness: ${spec.completeness.status}${spec.completeness.reason === undefined ? "" : ` (${spec.completeness.reason})`}`, `freshness: ${freshnessLine(spec.freshness)}`, `counts: unit=${counts.unit} total=${counts.total} matched=${counts.matched} returned=${counts.returned} omitted=${counts.omitted} truncated=${counts.truncated}`];
   for (const notice of spec.notices ?? []) lines.push(`notice: ${notice}`);
   if (spec.details?.text !== undefined) lines.push(...(spec.details.text as string[]));
+  if (spec.textLines !== undefined) lines.push(...spec.textLines);
   for (const item of page) lines.push(item.text);
   if (cursor !== null) lines.push(`cursor: ${cursor}`);
   return lines.join("\n");
@@ -271,9 +275,33 @@ async function listExamples(call: Call): Promise<OperationOutcome> {
 // ---- scaffolds (read-only generation) ------------------------------------------------------------------------------------------------
 
 interface Patch { path: string; text: string }
-interface ScaffoldPlan { patches: Patch[]; outputTest: Patch; registration: string; template: string }
+interface ScaffoldPlan { patches: Patch[]; outputTest: Patch; registration: string; template: string; /** TypeScript: the token a new example uses, and where it is declared (`declared` false: the scaffold's own module). */ token?: { symbol: string; module: string; declared: boolean } }
 
-function scaffoldView(kind: "cargo" | "vitest", args: { typeId: string; source: { path: string; symbol: string }; question: string; component: "shape" | "list"; claim: string }): ScaffoldPlan {
+/** The module specifier that imports `target` (a repository-relative path) from a file in the directory `from`. */
+const importFrom = (from: string, target: string): string => {
+  const path = relativePath(from, target);
+  return path.startsWith(".") ? path : `./${path}`;
+};
+
+/** The token the repository declares for `typeId`: the `export const X = defineType(... id: "<typeId>" ...)` of the module that holds the
+ * type's catalogued views. Read from the owner's checked-out source (this tool executes nothing); undefined when no module declares one. */
+async function declaredToken(adapter: AdapterRecord | undefined, catalogue: Catalogue, typeId: string): Promise<{ symbol: string; module: string } | undefined> {
+  if (adapter === undefined) return undefined;
+  const root = resolvePath(join(adapter.workspaceRoot, adapter.entry));
+  const modules = [...new Set(catalogue.views.filter((view) => view.typeId === typeId).map((view) => view.module ?? view.source.path))];
+  const escaped = typeId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`export\\s+const\\s+([A-Za-z_$][\\w$]*)\\s*=\\s*defineType\\s*(?:<[^()]*>)?\\s*\\(\\s*\\{[^}]*?\\bid\\s*:\\s*["'\`]${escaped}["'\`]`);
+  for (const module of modules) {
+    const path = resolvePath(root, module);
+    if (path !== root && !path.startsWith(`${root}/`)) continue;
+    const text = await readFile(path, "utf8").catch(() => undefined);
+    const match = text === undefined ? null : pattern.exec(text);
+    if (match !== null) return { symbol: match[1] as string, module };
+  }
+  return undefined;
+}
+
+function scaffoldView(kind: "cargo" | "vitest", args: { typeId: string; source: { path: string; symbol: string }; question: string; component: "shape" | "list"; claim: string; token?: { symbol: string; module: string } }): ScaffoldPlan {
   const name = slug(args.question);
   const title = args.question.replace(/\?$/, "").slice(0, 60);
   if (kind === "cargo") {
@@ -308,36 +336,61 @@ function scaffoldView(kind: "cargo" | "vitest", args: { typeId: string; source: 
       registration: "Rust: nothing to import; `#[paneweft::views]` registers the descriptor with linkme. Make sure the test binary calls `paneweft::test_adapter!();` once, then refresh the catalogue.",
     };
   }
+  const view = (token: string): string[] => [
+    `export const ${name} = ${token}.view({`,
+    `  id: ${JSON.stringify(`${slug(args.source.symbol)}.${name}`)},`,
+    `  title: ${JSON.stringify(title)},`,
+    `  question: ${JSON.stringify(args.question)},`,
+    "  priority: 50,",
+    `  component: "${args.component}",`,
+    "  render(value, view) {",
+    "    // TODO: select the fields that answer the question; read the type's definition, do not guess property names.",
+    `    return view.unsupported(${JSON.stringify(`TODO: implement the projection for: ${args.question}`)});`,
+    "  },",
+    "});",
+    "",
+  ];
+  const outputTest: Patch = { path: "tests/views.paneweft.test.ts", text: [
+    "import { assert, it } from \"vitest\";",
+    "",
+    "// WHY: the view must answer the question with independently expected values; this fails until it is implemented.",
+    `// CLAIM: ${args.claim}`,
+    `it(${JSON.stringify(`${name} answers the question`)}, () => {`,
+    `  assert.fail(${JSON.stringify(`TODO: write the expected fields for: ${args.question}, then implement the view`)});`,
+    "});",
+    "",
+  ].join("\n") };
+  if (args.token !== undefined) {
+    // the repository already declares the token for this type: extend the module that holds it
+    return {
+      template: "ts-token-view-v1",
+      patches: [{ path: args.token.module, text: [`// ${args.token.module}: append to the existing module; \`${args.token.symbol}\` is the token it already declares for ${args.typeId}.`, ...view(args.token.symbol)].join("\n") }],
+      token: { ...args.token, declared: true },
+      outputTest,
+      registration: `TypeScript: add \`${name}\` to the \`views\` of the entry for "${args.token.module}" in paneweft.views.ts (the module is already part of the manifest), then refresh the catalogue.`,
+    };
+  }
+  // no module declares a token for the type: the patch is a whole module that declares its own and imports only what exists
+  const modulePath = join(dirname(args.source.path), `${args.source.symbol}.paneweft.ts`);
+  const relative = relativePath(dirname(modulePath), args.source.path);
+  const tokenName = `${args.source.symbol}Token`;
   return {
     template: "ts-token-view-v1",
-    patches: [{ path: args.source.path.replace(/\.ts$/, ".paneweft.ts"), text: [
+    patches: [{ path: modulePath, text: [
       `// Development-only instrumentation of ${args.source.symbol}; never import it from a production entry point.`,
-      `import { ${args.source.symbol}Token } from "./${args.source.symbol}.paneweft.ts"; // the type token that declares ${args.typeId}`,
+      "import { defineType } from \"@paneweft/sdk\";",
+      `import type { ${args.source.symbol} } from ${JSON.stringify(relative.startsWith(".") ? relative : `./${relative}`)};`,
       "",
-      `export const ${name} = ${args.source.symbol}Token.view({`,
-      `  id: ${JSON.stringify(`${slug(args.source.symbol)}.${name}`)},`,
-      `  title: ${JSON.stringify(title)},`,
-      `  question: ${JSON.stringify(args.question)},`,
-      "  priority: 50,",
-      `  component: "${args.component}",`,
-      "  render(value, view) {",
-      "    // TODO: select the fields that answer the question; read the type's definition, do not guess property names.",
-      `    return view.unsupported(${JSON.stringify(`TODO: implement the projection for: ${args.question}`)});`,
-      "  },",
+      `export const ${tokenName} = defineType<${args.source.symbol}>({`,
+      `  id: ${JSON.stringify(args.typeId)},`,
+      `  source: { path: ${JSON.stringify(args.source.path)}, symbol: ${JSON.stringify(args.source.symbol)} },`,
       "});",
       "",
+      ...view(tokenName),
     ].join("\n") }],
-    outputTest: { path: "tests/views.paneweft.test.ts", text: [
-      "import { assert, it } from \"vitest\";",
-      "",
-      "// WHY: the view must answer the question with independently expected values; this fails until it is implemented.",
-      `// CLAIM: ${args.claim}`,
-      `it(${JSON.stringify(`${name} answers the question`)}, () => {`,
-      `  assert.fail(${JSON.stringify(`TODO: write the expected fields for: ${args.question}, then implement the view`)});`,
-      "});",
-      "",
-    ].join("\n") },
-    registration: `TypeScript: add \`${name}\` to the views of the module in paneweft.views.ts (and list the module path), then refresh the catalogue.`,
+    token: { symbol: tokenName, module: modulePath, declared: false },
+    outputTest,
+    registration: `TypeScript: add an entry for "${modulePath}" to paneweft.views.ts with \`types: [${tokenName}]\` and \`views: [${name}]\`, then refresh the catalogue.`,
   };
 }
 
@@ -353,7 +406,19 @@ function servePatches(call: Call, spec: Omit<ReplySpec, "items"> & { details: Js
   const { format, budget } = call;
   const query = queryDigest(spec.query);
   const content = queryDigest(patches).slice(0, 8);
-  const whole = { ...spec, items: [] as Item[], details: { ...spec.details, patches } };
+  /** What the text form shows beyond the header (S12): every patch, the output test, the registration step and the collect recipe. */
+  const textOf = (shown: Array<{ path: string; text: string; note?: string }>, withTail: boolean): string[] => {
+    const lines: string[] = [];
+    for (const patch of shown) lines.push(`patch ${patch.path}${patch.note ?? ""}:`, patch.text.replace(/\n$/, ""));
+    if (withTail) {
+      const details = spec.details as { outputTest?: Patch; registration?: string; recipe?: { command: string } };
+      if (details.outputTest !== undefined) lines.push(`output test ${details.outputTest.path}:`, details.outputTest.text.replace(/\n$/, ""));
+      if (details.registration !== undefined) lines.push(`registration: ${details.registration}`);
+      if (details.recipe !== undefined) lines.push(`recipe: ${details.recipe.command}`);
+    }
+    return lines;
+  };
+  const whole = { ...spec, items: [] as Item[], details: { ...spec.details, patches }, textLines: textOf(patches, true) };
   const wholeBody = renderReply(whole, format, 0, 0, null);
   let position = { index: 0, offset: 0 };
   if (call.cursor !== undefined) {
@@ -380,7 +445,7 @@ function servePatches(call: Call, spec: Omit<ReplySpec, "items"> & { details: Js
     const ofParts = Math.max(2, Math.ceil(total / sliceSize));
     const part = Math.min(ofParts, Math.floor((patches.slice(0, position.index).reduce((sum, patch) => sum + bytes(patch.text), 0) + position.offset) / sliceSize) + 1);
     const details = { ...spec.details, patches: [{ path: file.path, text: slice, part, ofParts }] };
-    const reply = { ...spec, items: [] as Item[], details };
+    const reply = { ...spec, items: [] as Item[], details, textLines: textOf([{ path: file.path, text: slice, note: ` (part ${part} of ${ofParts})` }], position.index === 0 && position.offset === 0) };
     return { body: renderReply(reply, format, 0, 0, cursor), payload: JSON.parse(renderReply(reply, "json", 0, 0, cursor)), cursor };
   };
   let size = Math.max(64, budget - 1500);
@@ -417,12 +482,14 @@ async function scaffold(call: Call, tool: "scaffold_view" | "scaffold_example"):
   const kind = adapter?.kind ?? record.catalogue.target.runner;
   const question = tool === "scaffold_view" ? (call.args.question as string) : `Example of ${typeId}`;
   const claim = `${slug(source.symbol).toUpperCase().slice(0, 12)}-1`;
-  const plan = scaffoldView(kind, { typeId, source, question, component: (call.args.component as "shape" | "list" | undefined) ?? "shape", claim });
+  const token = kind === "vitest" ? await declaredToken(adapter, record.catalogue, typeId) : undefined;
+  const plan = scaffoldView(kind, { typeId, source, question, component: (call.args.component as "shape" | "list" | undefined) ?? "shape", claim, ...(token === undefined ? {} : { token }) });
   if (tool === "scaffold_example") {
+    const token = plan.token as NonNullable<ScaffoldPlan["token"]>;
     const example = (call.args.example as string | undefined) ?? `${slug(source.symbol)}.new`;
     plan.patches = [{ path: plan.outputTest.path, text: kind === "cargo"
       ? `#[cfg(all(test, feature = "paneweft"))]\nmod examples {\n    #[paneweft::example(id = ${JSON.stringify(example)}, claims = [${JSON.stringify(claim)}])]\n    fn ${slug(example)}() -> ${source.symbol} {\n        // TODO: build the value with the real constructor; do not invent fields.\n        unimplemented!("TODO: construct ${source.symbol}")\n    }\n}\n`
-      : `export const ${slug(example)} = example({ id: ${JSON.stringify(example)}, type: ${source.symbol}Token, claims: [${JSON.stringify(claim)}], run(cx) {\n  // TODO: build the value with the real code, then record a check\n  cx.check(${JSON.stringify(claim)}, () => { throw new Error("TODO: write the expected assertion"); });\n  throw new Error("TODO: construct ${source.symbol}");\n} });\n` }];
+      : `import { example } from "@paneweft/sdk";\nimport { ${token.symbol} } from ${JSON.stringify(importFrom("tests", token.module))};${token.declared ? "" : " // declared by the module scaffold_view proposes for this type"}\n\nexport const ${slug(example)} = example({ id: ${JSON.stringify(example)}, type: ${token.symbol}, claims: [${JSON.stringify(claim)}], run(cx) {\n  // TODO: build the value with the real code, then record a check\n  cx.check(${JSON.stringify(claim)}, () => { throw new Error("TODO: write the expected assertion"); });\n  throw new Error("TODO: construct ${source.symbol}");\n} });\n` }];
   }
   const recipe = { command: `paneweft collect --request-id <id> --repo ${record.repo} --adapter ${record.adapter} --example <example-id>`, adapter: record.adapter };
   return servePatches(call, { tool, completeness: { status: "complete" }, freshness: await scopeFreshness(call, record), unit: "patches", total: plan.patches.length, notices, query: { tool, repo: call.args.repo, type: requested, question: call.args.question ?? null, component: call.args.component ?? null, example: call.args.example ?? null }, details: { typeId, source, template: plan.template, outputTest: plan.outputTest, registration: plan.registration, recipe } }, plan.patches);
@@ -517,7 +584,8 @@ async function viewResult(call: Call): Promise<OperationOutcome> {
   const entry = matches[0] as (typeof index)[number];
   const loaded = await session.getView({ viewId: entry.viewId, snapshotId });
   if (!loaded.ok) return fromError(call.format, loaded.error);
-  const envelope: Envelope = loaded.value.envelope;
+  // the stored envelope holds the first page of a list; the rows of its stored pages are read back so that the continuation reaches all of them
+  const envelope: Envelope = await withStoredPages(session, loaded.value.envelope);
   const data = envelope.data as Json;
   const items: Item[] = [];
   if (envelope.component === "list") {

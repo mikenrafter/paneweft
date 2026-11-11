@@ -7,6 +7,7 @@ import { resolveItemSource } from "../core/links.ts";
 import { rankViews, type RankOutput } from "../core/registry.ts";
 import { viewItems } from "../core/items.ts";
 import { searchSession } from "../core/search.ts";
+import { withStoredPages } from "../v1/pages.ts";
 import type { Session, SessionReader, ViewKey } from "../core/session.ts";
 import type { SearchHit, ViewerSource, ViewModel } from "./source.ts";
 
@@ -21,7 +22,9 @@ export function createSessionSource(session: Session): ViewerSource {
   const getView = async (key: ViewKey): Promise<Result<ViewModel>> => {
     const read = await readEffectiveView(session, key);
     if (!read.ok) return read;
-    const { envelope, recorded } = read.value;
+    const { recorded } = read.value;
+    // a v1 list keeps its rows beyond the first page in stored pages; the viewer shows them all (S11)
+    const envelope = await withStoredPages(session, read.value.envelope);
     const { contentHash } = read.value.stored;
     const freshness = await checkFreshness(envelope.freshness, await session.repositories());
     if (recorded !== undefined) {

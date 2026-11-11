@@ -368,3 +368,61 @@ describe("[IV19] budgets and cursors", () => {
     expect(bad.ok ? "" : bad.error.code).toBe("INVALID_ARGUMENT");
   });
 });
+
+describe("[S12] scaffolds can be used from the text reply", () => {
+  // why: S12. The default (text) reply of scaffold_view/scaffold_example carried only a header: the patch, the failing output test, the
+  // registration step and the collect recipe were in the JSON `details` alone, so an agent reading text could not apply the scaffold.
+  // Rejects a renderer that prints `details.text` only. Expected strings are written out from the scaffold's own contract.
+  // proves: CLAIM(S12-scaffold)
+  it.each(["scaffold_view", "scaffold_example"] as const)("%s prints the patch, the output test, the registration step and the recipe", async (tool) => {
+    const { text } = await toolWorld();
+    const outcome = await text(tool, { repo: "vg", type: "vigil::watch::WatchFile", ...(tool === "scaffold_view" ? { question: "Which events survive a cancel?" } : { example: "watch.new" }), maxBytes: 32768 });
+    expect(outcome.ok, outcome.body.slice(0, 300)).toBe(true);
+    expect(outcome.body).toContain("src/watch.rs");
+    expect(outcome.body).toContain(tool === "scaffold_view" ? "#[paneweft::views(type_id = \"vigil::watch::WatchFile\")]" : "#[paneweft::example(id = ");
+    expect(outcome.body).toContain("output test");
+    expect(outcome.body).toContain("assert!(false");
+    expect(outcome.body).toContain("registration:");
+    expect(outcome.body).toContain("test_adapter!()");
+    expect(outcome.body).toContain("paneweft collect --request-id <id> --repo vg --adapter cargo --example <example-id>");
+  });
+
+  // why: S12. A TypeScript scaffold imported `<Symbol>Token` from `./<Symbol>.paneweft.ts`, a name and a module that exist in no catalogue and in
+  // no shipped fixture. The token is the one the repository declares for the type (here `Mapping`, in the module that holds the type's views),
+  // and the patch extends that module in place.
+  // proves: CLAIM(S12-scaffold)
+  it("a TypeScript scaffold uses the token the repository declares and invents no import", async () => {
+    const { session, dir } = await open();
+    const root = tmp("cmrepo");
+    cpSync(join(FIXTURES, "packages/containmarks-lite"), root, { recursive: true });
+    mkdirSync(join(dir, "catalogues", "cm"), { recursive: true });
+    const cm = loadFixture<any>("v1/catalogues/containmarks.catalogue.json");
+    writeFileSync(join(dir, "catalogues", "cm", "vitest.json"), JSON.stringify({ schemaVersion: "paneweft.catalogue-record/1", repo: "cm", adapter: "vitest", catalogue: cm, fingerprint: { digest: "0".repeat(64), members: [], declaredExtras: [], exclusions: [] }, collectedAt: "2026-11-11T12:00:00Z" }));
+    writeFileSync(join(dir, "adapters.json"), JSON.stringify({ adapters: [fakeCargoAdapter({ id: "vitest", kind: "vitest", grammar: "vitest-run/1", repo: "cm", workspaceRoot: root, entry: "." })] }));
+    const context: V1Context = { session, sessionDir: dir, jobs: null };
+    const outcome = await executeV1Operation(context, "scaffold_view", { format: "json", repo: "cm", type: "containmarks::ContainerMappingRecord", question: "Which backup name does this mapping keep?", maxBytes: 32768 });
+    expect(outcome.ok, outcome.body.slice(0, 300)).toBe(true);
+    const payload = JSON.parse(outcome.body);
+    const [patch] = payload.details.patches;
+    expect(patch.path).toBe("src/mappings/containerMappings.paneweft.ts");
+    expect(patch.text).toContain("Mapping.view({");
+    expect(patch.text).not.toContain("Token");
+    expect(patch.text).not.toMatch(/from "\.\/ContainerMappingRecord/);
+    expect(payload.details.registration).toContain("paneweft.views.ts");
+    const example = JSON.parse((await executeV1Operation(context, "scaffold_example", { format: "json", repo: "cm", type: "containmarks::ContainerMappingRecord", example: "mapping.new", maxBytes: 32768 })).body);
+    expect(example.details.patches[0].text).toContain('import { Mapping } from "../src/mappings/containerMappings.paneweft.ts";');
+    expect(example.details.patches[0].text).toContain("type: Mapping,");
+
+    // a type with no view yet: the patch is a whole module that declares its own token and imports only what exists
+    const bare = structuredClone(cm);
+    bare.types.push({ typeId: "containmarks::Backup", source: { path: "src/models.ts", symbol: "Backup" } });
+    writeFileSync(join(dir, "catalogues", "cm", "vitest.json"), JSON.stringify({ schemaVersion: "paneweft.catalogue-record/1", repo: "cm", adapter: "vitest", catalogue: bare, fingerprint: { digest: "0".repeat(64), members: [], declaredExtras: [], exclusions: [] }, collectedAt: "2026-11-11T12:00:00Z" }));
+    const fresh = JSON.parse((await executeV1Operation(context, "scaffold_view", { format: "json", repo: "cm", type: "containmarks::Backup", question: "What is in the backup?", maxBytes: 32768 })).body);
+    const module = fresh.details.patches[0];
+    expect(module.path).toBe("src/Backup.paneweft.ts");
+    expect(module.text).toContain('import { defineType } from "@paneweft/sdk";');
+    expect(module.text).toContain('import type { Backup } from "./models.ts";');
+    expect(module.text).toMatch(/export const BackupToken = defineType<Backup>\(\{/);
+    expect(module.text).not.toContain('from "./Backup.paneweft.ts"');
+  });
+});
