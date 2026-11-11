@@ -175,6 +175,7 @@ describe("[S2/r2] the recovery mutex is reaped only when its holder is dead", ()
     expect(ownerOf(lock).token, "and the dead lock is still waiting for Y").toBe("dead-owner");
 
     first.release("mutex-held");
+    autoRelease(first, ["mutex-held"]); // Y takes the mutex again for the recovery proper after its start-up sweep
     expect((await first.waitFor("done")).result).toMatchObject({ ok: true });
     expect(await viewIds(dir)).toEqual(["layout"]);
     expect(lockEntries(dir)).toEqual([]);
@@ -220,6 +221,36 @@ describe("[S2/r2] a crash between renaming the lock and deleting its tombstone l
     autoRelease(writer, ROUTINE);
     expect((await writer.waitFor("done")).result).toMatchObject({ ok: true });
     expect(lockEntries(dir)).toEqual([".lock.stale.1.abcdef"]);
+  }, TEST_TIMEOUT);
+});
+
+describe("[S2/r2] what a holder records, and the staging leftovers of a crash", () => {
+  // why: recovery trusts this record to decide life or death, so it must be the writer's true identity, complete from the first moment the lock exists.
+  it("a held lock records the holder's own boot id, pid and process start time", async () => {
+    const dir = tmp("lock-record");
+    const holder = spawnWriter(dir, job("layout"), children);
+    autoRelease(holder, ["before-lock"]);
+    await holder.waitFor("read"); // inside the critical section
+    const expected = await identityOf(holder.child.pid as number);
+    expect(ownerOf(join(dir, ".lock"))).toMatchObject({ bootId: expected.bootId, pid: expected.pid, startTime: expected.startTime });
+    expect(expected.startTime, "the oracle itself must have a start time").not.toBeNull();
+    holder.release("read");
+    expect((await holder.waitFor("done")).result).toMatchObject({ ok: true });
+    expect(lockEntries(dir)).toEqual([]);
+  }, TEST_TIMEOUT);
+
+  // why: a writer that dies while building its lock leaves a staging directory named after its identity; the name alone says whether to keep it.
+  it("a staging directory of a dead identity is removed, one of a live identity is kept", async () => {
+    const dir = tmp("staging");
+    const dead = await deadIdentity();
+    const live = (await idleProcess()).identity;
+    const staging = (identity: ProcessIdentity, suffix: string) => `.lock.new.${identity.bootId}.${identity.pid}.${identity.startTime}.${suffix}`;
+    plant(dir, staging(dead, "aaaaaa"), { ...dead, token: "dead-staging" });
+    plant(dir, staging(live, "bbbbbb"), { ...live, token: "live-staging" });
+    const writer = spawnWriter(dir, job("layout"), children);
+    autoRelease(writer, ROUTINE);
+    expect((await writer.waitFor("done")).result).toMatchObject({ ok: true });
+    expect(lockEntries(dir)).toEqual([staging(live, "bbbbbb")]);
   }, TEST_TIMEOUT);
 });
 

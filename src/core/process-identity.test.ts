@@ -95,12 +95,14 @@ describe("[S2] isAlive is false only when the recorded process cannot be the sam
 
   // why: a zombie still has a /proc entry with its old start time, but its owner is gone.
   it("an exited child that nobody has reaped (zombie) is dead", async () => {
-    const holder = spawn("bash", ["-c", "sh -c 'exit 0' & echo $!; exec sleep 60"], { stdio: ["ignore", "pipe", "ignore"] });
+    const holder = spawn("bash", ["-c", "sh -c 'sleep 0.4' & echo $!; exec sleep 60"], { stdio: ["ignore", "pipe", "ignore"] });
     children.push(holder);
     const [chunk] = (await once(holder.stdout!, "data")) as [Buffer];
     const zombie = Number(chunk.toString().trim());
-    for (let attempt = 0; attempt < 400 && !/^\d+ \(.*\) Z /.test(readFileSync(`/proc/${zombie}/stat`, "utf8")); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
-    expect(readFileSync(`/proc/${zombie}/stat`, "utf8"), "precondition: the child is a zombie").toMatch(/^\d+ \(.*\) Z /);
+    // the child outlives bash's exec into `sleep` (which never waits for children), so it ends as a zombie of that process instead of being reaped by bash
+    const stat = () => { try { return readFileSync(`/proc/${zombie}/stat`, "utf8"); } catch { return ""; } };
+    for (let attempt = 0; attempt < 400 && !/^\d+ \(.*\) Z /.test(stat()); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(stat(), "precondition: the child is a zombie").toMatch(/^\d+ \(.*\) Z /);
     expect(await isAlive(await identityOf(zombie))).toBe(false);
   });
 });

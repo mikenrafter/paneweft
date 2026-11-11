@@ -4,8 +4,10 @@
 // Layout of a session directory:
 //   manifest.json          the ONLY mutable file: registry, entities, snapshot table, view/page/run index. Replaced atomically.
 //   objects/<sha256>.json  immutable canonical JSON of one stored view, notebook revision or run output, named by its content hash.
-//   .lock/                 exists only while a process mutates the session (mkdir is the atomic acquire).
-//   .lock.recovery/        exists only while a contender removes a dead owner's lock (see breakStaleLock); .lock.stale.* are its tombstones.
+//   .lock/                 exists only while a process mutates the session; its `owner` file records who holds it (boot id, pid, start time, token).
+//   .lock.recovery/        exists only while a contender removes a dead owner's lock (see breakStaleLock); same record. .lock.stale.* and
+//                          .lock.recovery.stale.* are tombstones, .lock.new.* staging directories; a crash can leave them, and they are removed once their
+//                          recorded process is dead.
 //   server.json            written and removed by the viewer server; not part of the session state.
 //
 // CLAIM(atomic-manifest): the manifest is replaced atomically (write a temp file, fsync, rename), so a crash or injected failure
@@ -19,7 +21,7 @@
 //   [session.atomic.test.ts, MC20].
 // Errors: methods return Result<T>; they never throw for domain failures. Readers that return plain arrays throw a
 //   `SessionStorageError` only when the manifest itself is unreadable.
-import { mkdir, open, readFile, rename, rm, rmdir, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, open, readdir, readFile, rename, rm, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import type { Bundle, Entity, EntityRef, Envelope, ViewDefinition } from "./wire.ts";
@@ -27,6 +29,7 @@ import type { OperationError, Result, ValidationIssue } from "./errors.ts";
 import { canonicalJson, compareCodeUnits, ownValue } from "./canonical.ts";
 import { canonicalSha256, sha256Hex } from "./digest.ts";
 import { viewItems } from "./items.ts";
+import { identityOf, isAlive, type ProcessIdentity } from "./process-identity.ts";
 import { validateDefinition, validateRunOutput, validateSubmission, type DefinitionMetadata, type ReferenceContext } from "./validate.ts";
 
 export interface ViewKey { viewId: string; snapshotId: string }
@@ -58,7 +61,7 @@ export interface SessionTestHooks {
   afterStaleResolved?: (info: { operation: string; broke: boolean }) => void | Promise<void>;
   /** S2 round 2: this contender holds the recovery mutex, before it re-reads the main lock. */
   afterRecoveryMutexTaken?: (info: { operation: string }) => void | Promise<void>;
-  /** S2 round 2: a contender found the recovery mutex abandoned (its holder is dead), before it takes the mutex away. */
+  /** S2 round 2: a contender found the recovery mutex's holder dead, before it takes the mutex away. */
   afterMutexStaleObserved?: (info: { operation: string }) => void | Promise<void>;
   /** S2 round 2: `target` (the main lock or the recovery mutex) was just renamed to a tombstone and has not been verified yet. */
   afterDisplaced?: (info: { operation: string; target: "lock" | "recovery" }) => void | Promise<void>;
@@ -197,6 +200,8 @@ class DirectorySession implements Session {
   private readonly hooks: SessionTestHooks;
   private closed = false;
   private readonly lockWaitMs: number;
+  /** Whether the start-up sweep of crashed processes' leftovers has run for this handle. */
+  private swept = false;
 
   constructor(dir: string, options: SessionOptions) {
     this.dir = dir;
@@ -359,24 +364,15 @@ class DirectorySession implements Session {
   private async acquireLock(operation: string): Promise<() => Promise<void>> {
     await mkdir(this.dir, { recursive: true });
     const lock = join(this.dir, LOCK);
-    const token = `${process.pid}-${randomBytes(8).toString("hex")}`;
+    const doc = await newLockDoc();
+    if (!this.swept) {
+      this.swept = true;
+      await this.sweepOrphans(operation); // start-up: whatever a crashed process left behind
+    }
     const deadline = Date.now() + this.lockWaitMs;
     let contended = false;
     for (;;) {
-      try {
-        await mkdir(lock);
-        await writeFile(join(lock, "owner"), JSON.stringify({ pid: process.pid, token }));
-        return async () => {
-          try {
-            const owner = JSON.parse(await readFile(join(lock, "owner"), "utf8")) as { token?: string };
-            if (owner.token !== token) return; // somebody broke our lock as stale; it is not ours to remove any more
-            await unlink(join(lock, "owner"));
-            await rmdir(lock);
-          } catch { /* already gone */ }
-        };
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      }
+      if (await publishLock(this.dir, lock, doc)) return () => releaseLock(lock, doc.token);
       if (!contended) {
         contended = true;
         await this.hooks.onLockContended?.({ operation });
@@ -388,24 +384,109 @@ class DirectorySession implements Session {
   }
 
   /**
-   * Stale-lock recovery (review S2). A lock whose owner process is gone (and that is not brand new) is removed, by exactly one contender,
-   * and never a lock that is not the one that was judged dead.
-   * CLAIM(stale-lock-recovery): a contender removes a lock only (1) inside the recovery mutex `.lock.recovery`, (2) after re-reading the lock there and
-   *   finding the SAME dead identity it first judged stale, (3) by renaming it to a unique tombstone (atomic, so the lock never half exists), and
-   *   (4) after verifying the tombstone still holds that dead identity; otherwise the tombstone is put back and nothing is reported broken
-   *   [session.stale-lock.test.ts S2].
-   * Why a mutex and a tombstone: a rename is by NAME, so two contenders that judged the same dead owner would otherwise let the late one take
-   *   the live replacement the early one just created. Re-judging inside the mutex stops that; the tombstone check detects a violated mutex.
+   * Stale-lock recovery (review S2, round 2). A lock is stale ONLY when the process identity it records is dead (process-identity.ts);
+   * its age proves nothing. It is removed by exactly one contender at a time, and never a lock that is not the one that was judged dead.
+   * CLAIM(stale-lock-recovery): a contender removes a lock only (1) inside the recovery mutex `.lock.recovery`, which is itself a lock with a
+   *   recorded identity and is reaped only when that identity is dead (and then by the same move-aside-and-verify step), (2) after re-reading the
+   *   lock there and finding the SAME dead identity (same token) it first judged stale, (3) by renaming it to a unique tombstone (atomic, so the
+   *   lock never half exists), and (4) after verifying the tombstone still holds that dead identity; otherwise the tombstone is put back (a
+   *   rename that fails while the path is retaken) and, if it cannot be put back, the displacement is reported as STORAGE_FAILED. Tombstones and
+   *   staging directories of dead identities left by a crash are removed at start-up and before each recovery
+   *   [session.stale-lock.test.ts, session.lock-recovery.test.ts].
+   * Why a mutex and a tombstone: a rename is by NAME, so a contender that judged an old lock dead could otherwise take the live replacement
+   *   another contender just created. Re-judging inside the mutex stops that; the tombstone check detects a violated mutex.
    * Returns true when the lock this contender judged stale is gone and the acquire should be retried at once.
    */
   private async breakStaleLock(lock: string, operation: string): Promise<boolean> {
     const observed = await inspectLock(lock);
     if (observed.kind === "gone") return true; // released or already recovered: just try to acquire
-    if (observed.kind === "live") return false;
+    if (observed.kind === "held") return false;
     await this.hooks.afterStaleObserved?.({ operation });
-    const broke = await removeObservedLock(lock, observed, this.hooks, operation);
+    const broke = await this.withRecoveryMutex(operation, false, async () => {
+      await this.removeOrphans();
+      const current = await inspectLock(lock);
+      if (current.kind !== "dead" || current.doc.token !== observed.doc.token) return false; // gone, replaced or revived since it was judged
+      return this.displaceDead(lock, observed.doc, "lock", operation);
+    });
     await this.hooks.afterStaleResolved?.({ operation, broke });
     return broke;
+  }
+
+  /**
+   * Runs `work` holding the recovery mutex, or answers `busy` without running it: the mutex is held by a live process (never reaped, however
+   * old) or could not be made. A mutex whose holder is dead is taken away here, and the caller polls and tries again.
+   */
+  private async withRecoveryMutex<T>(operation: string, busy: T, work: () => Promise<T>): Promise<T> {
+    const mutex = join(this.dir, RECOVERY);
+    const mine = await newLockDoc();
+    if (!(await publishLock(this.dir, mutex, mine))) {
+      const holder = await inspectLock(mutex);
+      if (holder.kind === "dead") {
+        await this.hooks.afterMutexStaleObserved?.({ operation });
+        await this.displaceDead(mutex, holder.doc, "recovery", operation);
+      }
+      return busy;
+    }
+    try {
+      await this.hooks.afterRecoveryMutexTaken?.({ operation });
+      return await work();
+    } finally {
+      await releaseLock(mutex, mine.token);
+    }
+  }
+
+  /**
+   * Moves the dead lock `observed` at `path` aside and discards it, but only if what was moved really is that dead lock. Anything else
+   * (a live owner took the path after `observed` was read) is put back; if the path has been retaken meanwhile it cannot be, and that is reported.
+   * Returns true when the dead lock is gone.
+   */
+  private async displaceDead(path: string, observed: LockDoc, target: "lock" | "recovery", operation: string): Promise<boolean> {
+    const tombstone = `${path}.stale.${randomBytes(8).toString("hex")}`;
+    try {
+      await rename(path, tombstone);
+    } catch {
+      return false; // gone already, or not movable: judge again
+    }
+    await this.hooks.afterDisplaced?.({ operation, target });
+    const held = await readOwner(tombstone);
+    if (held === "gone") return true; // a sweeper removed it first, and sweepers remove only dead identities
+    if (held !== "unreadable" && held.token === observed.token && !(await isAlive(held))) {
+      await rm(tombstone, { recursive: true, force: true });
+      return true;
+    }
+    try {
+      await rename(tombstone, path);
+      return false;
+    } catch {
+      if (held !== "unreadable" && !(await isAlive(held))) {
+        await rm(tombstone, { recursive: true, force: true }); // a dead lock of somebody else: nothing alive was displaced
+        return false;
+      }
+      throw new SessionStorageError("STORAGE_FAILED", `a session ${target === "lock" ? "lock" : "recovery lock"} that may belong to a running process was displaced during recovery and could not be restored because its path was taken again; it is kept at "${tombstone}"`);
+    }
+  }
+
+  /** Start-up sweep: removes the leftovers of crashed processes if there are any, taking a dead recovery mutex away on the way. */
+  private async sweepOrphans(operation: string): Promise<void> {
+    if (!(await readdir(this.dir)).some((name) => name.startsWith(`${LOCK}.`))) return;
+    for (let attempt = 0; attempt < 2; attempt += 1) { // the second attempt follows the reaping of a dead mutex on the first
+      if (await this.withRecoveryMutex(operation, false, async () => { await this.removeOrphans(); return true; })) return;
+    }
+  }
+
+  /** Removes staging directories and tombstones whose recorded identity is dead. A live or unattributable one is never touched. Needs the mutex. */
+  private async removeOrphans(): Promise<void> {
+    for (const name of await readdir(this.dir)) {
+      const path = join(this.dir, name);
+      const staging = STAGING_NAME.exec(name);
+      if (staging !== null) {
+        const [, bootId, pid, startTime] = staging as unknown as [string, string, string, string];
+        if (!(await isAlive({ bootId: bootId === "-" ? null : bootId, pid: Number(pid), startTime: startTime === "-" ? null : Number(startTime) }))) await rm(path, { recursive: true, force: true });
+      } else if (TOMBSTONE_NAME.test(name)) {
+        const held = await readOwner(path);
+        if (held !== "gone" && held !== "unreadable" && !(await isAlive(held))) await rm(path, { recursive: true, force: true });
+      }
+    }
   }
 
   /**
@@ -662,78 +743,74 @@ class DirectorySession implements Session {
 
 class LockTimeout extends Error {}
 
-/** What a lock directory shows right now. `token` is the owner's token, or null for a lock whose owner never wrote one (a crash between mkdir and write). */
-type LockState = { kind: "gone" } | { kind: "live" } | { kind: "dead"; token: string | null };
-const OWNERLESS_GRACE_MS = 5_000;
-const ABANDONED_RECOVERY_MS = 10_000;
+// ---- the process lock: records, publication, inspection ----------------------------------------------------------------
+// A lock (`.lock`) and the recovery mutex (`.lock.recovery`) are directories holding one file, `owner`, with the holder's identity and a
+// token unique to this acquisition. A lock is PUBLISHED by building the directory under a staging name and renaming it into place, so it
+// exists with its owner record or not at all; rename onto an existing lock fails (ENOTEMPTY), which is the exclusion.
 
-async function inspectLock(lock: string): Promise<LockState> {
-  let info: Awaited<ReturnType<typeof stat>>;
-  try {
-    info = await stat(lock);
-  } catch {
-    return { kind: "gone" };
-  }
-  let owner: { pid?: unknown; token?: unknown } | null = null;
-  try {
-    owner = JSON.parse(await readFile(join(lock, "owner"), "utf8")) as { pid?: unknown; token?: unknown };
-  } catch { /* no owner file yet, or unreadable: judged by age below */ }
-  const token = typeof owner?.token === "string" ? owner.token : null;
-  if (typeof owner?.pid !== "number") return Date.now() - info.mtimeMs < OWNERLESS_GRACE_MS ? { kind: "live" } : { kind: "dead", token };
-  return processIsAlive(owner.pid) ? { kind: "live" } : { kind: "dead", token };
+/** What a lock records: who holds it (process-identity.ts) and which acquisition it is. Records from older code may lack boot id and start time. */
+interface LockDoc extends ProcessIdentity { token: string }
+/** `held` is a live holder, or a lock nobody can be attributed to (never judged stale: its age proves nothing). */
+type LockState = { kind: "gone" } | { kind: "held" } | { kind: "dead"; doc: LockDoc };
+
+const RECOVERY = `${LOCK}.recovery`;
+const STAGING_NAME = /^\.lock\.new\.([0-9a-f-]+|-)\.(\d+)\.(\d+|-)\.[0-9a-f]+$/;
+const TOMBSTONE_NAME = /^\.lock(?:\.recovery)?\.stale\./;
+
+async function newLockDoc(): Promise<LockDoc> {
+  return { ...(await identityOf(process.pid)), token: `${process.pid}-${randomBytes(8).toString("hex")}` };
 }
 
-/** Removes `lock` iff it is still the dead lock `observed`; true only when this call removed it. See CLAIM(stale-lock-recovery). */
-async function removeObservedLock(lock: string, observed: { kind: "dead"; token: string | null }, hooks: SessionTestHooks, operation: string): Promise<boolean> {
-  const mutex = `${lock}.recovery`;
+/** Creates `target` holding `doc`, atomically; false when it already exists. */
+async function publishLock(dir: string, target: string, doc: LockDoc): Promise<boolean> {
+  const staging = join(dir, `${LOCK}.new.${doc.bootId ?? "-"}.${doc.pid}.${doc.startTime ?? "-"}.${randomBytes(6).toString("hex")}`);
+  await mkdir(staging);
   try {
-    await mkdir(mutex);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") await reapAbandonedRecovery(mutex, hooks, operation);
-    return false; // somebody else is recovering (or the mutex could not be made): poll and judge again
-  }
-  try {
-    await hooks.afterRecoveryMutexTaken?.({ operation });
-    const current = await inspectLock(lock);
-    if (current.kind !== "dead" || current.token !== observed.token) return false; // gone, replaced or revived since it was judged
-    const tombstone = `${lock}.stale.${process.pid}.${randomBytes(6).toString("hex")}`;
-    try {
-      await rename(lock, tombstone);
-    } catch {
-      return false;
-    }
-    await hooks.afterDisplaced?.({ operation, target: "lock" });
-    const held = await inspectLock(tombstone);
-    if (held.kind === "dead" && held.token === observed.token) {
-      await rm(tombstone, { recursive: true, force: true });
-      return true;
-    }
-    await rename(tombstone, lock).catch(() => {}); // not the dead lock: give it back; this succeeds only while the slot is still free
-    return false;
-  } finally {
-    await rmdir(mutex).catch(() => {});
-  }
-}
-
-/** A recovery mutex left by a contender that died inside its few-millisecond section is removed once it is clearly abandoned. */
-async function reapAbandonedRecovery(mutex: string, hooks: SessionTestHooks, operation: string): Promise<void> {
-  try {
-    if (Date.now() - (await stat(mutex)).mtimeMs < ABANDONED_RECOVERY_MS) return;
-    await hooks.afterMutexStaleObserved?.({ operation });
-    const tombstone = `${mutex}.abandoned.${process.pid}.${randomBytes(6).toString("hex")}`;
-    await rename(mutex, tombstone);
-    await hooks.afterDisplaced?.({ operation, target: "recovery" });
-    await rm(tombstone, { recursive: true, force: true });
-  } catch { /* another contender reaped it first */ }
-}
-
-function processIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
+    await writeFile(join(staging, "owner"), JSON.stringify(doc));
+    await rename(staging, target);
     return true;
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM";
+    await rm(staging, { recursive: true, force: true });
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOTEMPTY" || code === "EEXIST") return false;
+    throw error;
   }
+}
+
+/** Removes the lock at `path` if it is still this acquisition's. A lock somebody else holds now is not ours to remove. */
+async function releaseLock(path: string, token: string): Promise<void> {
+  try {
+    const held = await readOwner(path);
+    if (held === "gone" || held === "unreadable" || held.token !== token) return;
+    await unlink(join(path, "owner"));
+    await rmdir(path);
+  } catch { /* already gone, or replaced between the two steps */ }
+}
+
+async function readOwner(path: string): Promise<LockDoc | "gone" | "unreadable"> {
+  let text: string;
+  try {
+    text = await readFile(join(path, "owner"), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT" && (error as NodeJS.ErrnoException).code !== "ENOTDIR") return "unreadable";
+    return (await stat(path).then(() => true, () => false)) ? "unreadable" : "gone";
+  }
+  try {
+    const doc = JSON.parse(text) as Partial<Record<keyof LockDoc, unknown>>;
+    const { pid, token, bootId, startTime } = doc;
+    if (!Number.isInteger(pid) || (pid as number) < 1 || typeof token !== "string") return "unreadable";
+    if ((bootId !== undefined && bootId !== null && typeof bootId !== "string") || (startTime !== undefined && startTime !== null && typeof startTime !== "number")) return "unreadable";
+    return { pid: pid as number, token, bootId: (bootId as string | null | undefined) ?? null, startTime: (startTime as number | null | undefined) ?? null };
+  } catch {
+    return "unreadable";
+  }
+}
+
+async function inspectLock(path: string): Promise<LockState> {
+  const doc = await readOwner(path);
+  if (doc === "gone") return { kind: "gone" };
+  if (doc === "unreadable") return { kind: "held" };
+  return (await isAlive(doc)) ? { kind: "held" } : { kind: "dead", doc };
 }
 
 /** Creates the directory if needed and opens a handle. Opening reads and writes nothing; every call re-reads the manifest. */
