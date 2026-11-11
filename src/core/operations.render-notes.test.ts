@@ -80,19 +80,34 @@ describe("render reports the validator's notes (T6)", () => {
     expect(text).not.toMatch(/^note:/m);
   });
 
-  // why: bounded exit. Many notes cannot push the reply over its budget: at most 20 are listed, the rest are counted, and the JSON still parses.
-  it("[T6] 50 notes are capped at 20 listed plus a count, within a 2048-byte budget", async () => {
+  // why: bounded exit. The notes share a 512-byte JSON budget (each note clipped first), so many notes cannot push the mandatory part of the reply past
+  //   a 2048-byte budget. 13 of these 50 notes fit (python: cumulative json.dumps length 510 <= 512, the 14th would make 550); the rest are counted.
+  it("[T6] 50 notes: 13 listed, 37 counted, in a 2048-byte budget, JSON and text", async () => {
     withNotes(Array.from({ length: 50 }, (_, index) => ({ pointer: `/views/0/n${index}`, message: "m" })));
     const { call } = await open();
     const json = await call("render", { input: allBundle(), format: "json", maxBytes: 2048 });
     expect(json.ok).toBe(true);
     expect(Buffer.byteLength(json.body)).toBeLessThanOrEqual(2048);
     const validation = JSON.parse(json.body).validation;
-    expect(validation.notes).toHaveLength(20);
-    expect(validation.omitted).toBe(30);
-    const text = await call("render", { input: allBundle(), maxBytes: 4096 });
-    expect(Buffer.byteLength(text.body)).toBeLessThanOrEqual(4096);
-    expect(text.body.split("\n").filter((line) => line.startsWith("note: "))).toHaveLength(20);
-    expect(text.body).toContain("(+30 more notes)");
+    expect(validation.notes).toHaveLength(13);
+    expect(validation.notes[12]).toEqual({ pointer: "/views/0/n12", message: "m" });
+    expect(validation.omitted).toBe(37);
+    const text = await call("render", { input: allBundle(), maxBytes: 2048 });
+    expect(text.ok).toBe(true);
+    expect(Buffer.byteLength(text.body)).toBeLessThanOrEqual(2048);
+    expect(text.body.split("\n").filter((line) => line.startsWith("note: "))).toHaveLength(13);
+    expect(text.body).toContain("(+37 more notes)");
+  });
+
+  // why: one huge note is clipped, not allowed to blow the budget: pointer to 120 and message to 160 code points, ending in an ellipsis.
+  it("[T6] an oversized note is clipped to 120 + 160 code points", async () => {
+    withNotes([{ pointer: `/${"p".repeat(500)}`, message: "é".repeat(500) }]);
+    const { call } = await open();
+    const json = await call("render", { input: allBundle(), format: "json", maxBytes: 2048 });
+    expect(json.ok).toBe(true);
+    const [note] = JSON.parse(json.body).validation.notes;
+    expect(Array.from(note.pointer)).toHaveLength(120);
+    expect(Array.from(note.message)).toHaveLength(160);
+    expect(note.message.endsWith("…")).toBe(true);
   });
 });

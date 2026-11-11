@@ -21,7 +21,7 @@ import type { Entity, EntityRef, Envelope } from "./wire.ts";
 import type { OperationError, ValidationIssue } from "./errors.ts";
 import type { Session, ViewKey } from "./session.ts";
 import { TOOL_NAMES } from "../schemas/index.ts";
-import { validateAgainstOwnerSchema, validateSubmission, validateToolArguments } from "./validate.ts";
+import { validateAgainstOwnerSchema, validateSubmission, validateToolArguments, type ValidationNote } from "./validate.ts";
 import { COMPONENT_CATALOGUE } from "./catalogue.ts";
 import { COMPONENT_EXAMPLES } from "./examples.ts";
 import { LIMITS } from "./limits.ts";
@@ -477,6 +477,22 @@ async function viewerUrl(session: Session, key: ViewKey | undefined): Promise<st
   }
 }
 
+const NOTES_BYTE_BUDGET = 512;
+const clipText = (text: string, points: number): string => { const all = Array.from(text); return all.length <= points ? text : `${all.slice(0, points - 1).join("")}…`; };
+/** The notes that fit NOTES_BYTE_BUDGET bytes of JSON (each clipped to a 120-point pointer and a 160-point message), in order, and how many were left out. */
+function boundedNotes(all: ValidationNote[]): { listed: ValidationNote[]; omitted: number } {
+  const listed: ValidationNote[] = [];
+  let used = 0;
+  for (const note of all) {
+    const bounded = { pointer: clipText(note.pointer, 120), message: clipText(note.message, 160) };
+    const size = byteLength(JSON.stringify(bounded));
+    if (used + size > NOTES_BYTE_BUDGET) break;
+    listed.push(bounded);
+    used += size;
+  }
+  return { listed, omitted: all.length - listed.length };
+}
+
 async function render(session: Session, args: { input: Record<string, unknown> }, context: Context): Promise<OperationOutcome> {
   const { format } = context;
   const isBundle = args.input.schemaVersion === "paneweft.bundle/1";
@@ -487,15 +503,18 @@ async function render(session: Session, args: { input: Record<string, unknown> }
   const url = await viewerUrl(session, first);
   const storedList = summaryOfStore.views.slice(0, 20).map((key) => `${key.viewId}@${key.snapshotId}`);
   const more = summaryOfStore.views.length - storedList.length;
-  const jsonHead = { stored: summaryOfStore.views, viewerUrl: url, validation: { valid: true, notes: [] } };
+  // the validator's notes on the accepted document; at most MAX_RENDER_NOTES are listed so the mandatory part of the reply stays small
+  const { listed: notes, omitted: notesOmitted } = boundedNotes(summaryOfStore.notes);
+  const noteLines = [...notes.map((note) => `note: ${note.pointer}: ${note.message}`), ...(notesOmitted > 0 ? [`(+${notesOmitted} more notes)`] : [])];
+  const jsonHead = { stored: summaryOfStore.views, viewerUrl: url, validation: { valid: true, notes, ...(notesOmitted > 0 ? { omitted: notesOmitted } : {}) } };
   if (first === undefined) {
     const payload = { schemaVersion: "paneweft.render/1", ...jsonHead, entities: summaryOfStore.entities, definitions: summaryOfStore.definitions, cursor: null };
-    return { ok: true, format, body: format === "json" ? JSON.stringify(payload) : `paneweft.render/1\nstored: nothing (${summaryOfStore.entities} entities, ${summaryOfStore.definitions} definitions)\nviewer: ${url ?? "none"}\n`, payload, cursor: null };
+    return { ok: true, format, body: format === "json" ? JSON.stringify(payload) : `paneweft.render/1\nstored: nothing (${summaryOfStore.entities} entities, ${summaryOfStore.definitions} definitions)\nviewer: ${url ?? "none"}\n${noteLines.map((line) => `${line}\n`).join("")}`, payload, cursor: null };
   }
   const loaded = await loadView(session, first, DEFAULT_QUERY, format);
   if (isOutcome(loaded)) return loaded;
   const digest = inspectDigest(first, DEFAULT_QUERY, loaded.summary.order);
-  const preamble = [`stored: ${storedList.join(", ")}${more > 0 ? ` (+${more} more)` : ""}`, `viewer: ${url ?? "none"}`];
+  const preamble = [`stored: ${storedList.join(", ")}${more > 0 ? ` (+${more} more)` : ""}`, `viewer: ${url ?? "none"}`, ...noteLines];
   return serve(layoutOf(loaded.summary, cursorAtFor(digest), { preamble, json: jsonHead }), digest, context);
 }
 

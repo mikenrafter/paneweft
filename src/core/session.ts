@@ -31,7 +31,7 @@ import { canonicalJson, compareCodeUnits, ownValue } from "./canonical.ts";
 import { canonicalSha256, sha256Hex } from "./digest.ts";
 import { viewItems } from "./items.ts";
 import { WriteLockError, withWriteLock } from "./write-lock.ts";
-import { validateDefinition, validateRunOutput, validateSubmission, type DefinitionMetadata, type ReferenceContext } from "./validate.ts";
+import { validateDefinition, validateRunOutput, validateSubmission, type DefinitionMetadata, type ReferenceContext, type ValidationNote } from "./validate.ts";
 
 export interface ViewKey { viewId: string; snapshotId: string }
 export interface RepositoryRegistration { id: string; root: string }
@@ -44,6 +44,8 @@ export interface ImportSummary {
   registryRevision: number;
   /** `${viewId}@${snapshotId}` -> sha256 of the canonical JSON of the stored envelope. */
   contentHashes: Record<string, string>;
+  /** The validator's non-fatal notes on the accepted document (empty when it had none); `render` reports them. */
+  notes: ValidationNote[];
 }
 export interface NotebookPage { pageId: string; snapshotId: string; revision: number; envelope: Envelope }
 export interface RecordedRun { runId: string; viewId: string; snapshotId: string; status: "passed" | "failed" | "error"; contentHash: string }
@@ -450,7 +452,7 @@ class DirectorySession implements Session {
     content: { entities: Entity[]; definitions: ViewDefinition[]; views: Envelope[] },
     predecessor: string | undefined,
     stage: (value: unknown) => Promise<string>,
-  ): Promise<{ manifest: Manifest; summary: ImportSummary } | { error: Failure }> {
+  ): Promise<{ manifest: Manifest; summary: Omit<ImportSummary, "notes"> } | { error: Failure }> {
     const entities = [...manifest.entities];
     const definitions = [...manifest.definitions];
     for (const entity of content.entities) {
@@ -524,7 +526,7 @@ class DirectorySession implements Session {
       if (report.kind !== "bundle") return { error: failure("INVALID_ARGUMENT", "importBundle takes a paneweft.bundle/1 document; use putView for a single envelope", { errors: [{ code: "SCHEMA_VERSION", pointer: "/schemaVersion", constraint: 'const: "paneweft.bundle/1"', hint: 'Use the literal "paneweft.bundle/1".' }] }) };
       const merged = await this.merge(manifest, input as Bundle, options.predecessorSnapshotId, stage);
       if ("error" in merged) return merged;
-      return { manifest: merged.manifest, value: merged.summary };
+      return { manifest: merged.manifest, value: { ...merged.summary, notes: report.notes } };
     });
   }
 
@@ -535,7 +537,7 @@ class DirectorySession implements Session {
       if (report.kind !== "envelope") return { error: failure("INVALID_ARGUMENT", "putView takes a paneweft.view/1 envelope; use importBundle for a bundle") };
       const merged = await this.merge(manifest, { entities: [], definitions: [], views: [input as Envelope] }, options.predecessorSnapshotId, stage);
       if ("error" in merged) return merged;
-      return { manifest: merged.manifest, value: merged.summary };
+      return { manifest: merged.manifest, value: { ...merged.summary, notes: report.notes } };
     });
   }
 
