@@ -42,7 +42,7 @@ Output: stdout carries the reply body (also for operation errors), stderr carrie
 An agent fills views with facts it has read, parsed, observed or inferred, and the tool checks and summarises them. The loop:
 
 1. **`components`**: the seven components (`list`, `tree`, `graph`, `source`, `shape`, `notebook`, `example`) and the question each answers. Pick the one that matches the question being asked.
-2. **`describe --component NAME`**: the component's JSON Schema, limits and one valid example. Copy the example and replace its facts.
+2. **`describe NAME`** (`describe graph`; `--component NAME` is the same): the component's JSON Schema, limits and one valid example. Copy the example and replace its facts.
 3. **`validate --file FILE`**: checks an envelope (`paneweft.view/1`) or a bundle (`paneweft.bundle/1`: entities, view definitions and views together) without storing anything. A failure lists every problem with its pointer and a hint. Given a session that exists (`--session DIR`, or over MCP), it also makes the decision `render` would: definitions, entities and views already stored there can refuse the input (`IDENTITY_CONFLICT`, `SNAPSHOT_CONFLICT`), and the reply says `identity: session`. Without a session only the document is checked and the reply says `identity: none`; that is not a promise that `render` will accept it.
 4. **`render --file FILE`**: validates again, stores the snapshot atomically and returns a bounded summary plus the viewer URL (when a viewer is running for the session). Stored views are immutable: change a view by submitting it under a new snapshot id.
 5. **`inspect`, `open`, `navigate`**: read it back. `inspect` returns a slice of one stored view (filter, order, focus). `open` shows an entity at a snapshot with the views that apply to it. `navigate` follows an item of a pane to its target (another entity, or the source lines behind it with `action: "open-source"`). `search` finds entities, view titles, examples and notebook claims.
@@ -52,7 +52,7 @@ Try the whole loop against the committed fixtures (run from the repository root)
 ```sh try
 export PANEWEFT_SESSION="$PWD/.session"
 paneweft components
-paneweft describe --component list
+paneweft describe list
 paneweft validate --file fixtures/components/all.bundle.json
 paneweft render --file fixtures/components/all.bundle.json
 paneweft inspect --view modules --snapshot snap-1

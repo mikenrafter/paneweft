@@ -38,6 +38,8 @@ interface Command {
   /** repeatable value flags (collected by name) */
   repeatable?: string[];
   positional?: { name: string };
+  /** One concrete invocation, runnable from the repository root against the committed fixtures; shown by `--help` (#2). */
+  example: string;
 }
 
 const COMMON_FLAGS = ["--args", "--args-file", "--format", "--max-bytes", "--cursor"] as const;
@@ -48,24 +50,24 @@ function setOnce(args: Record<string, unknown>, key: string, value: unknown, fla
 }
 
 const COMMANDS: Command[] = [
-  { words: ["components"], summary: "list the supported components and their questions", tool: "list_components", flags: { "--capability": (v, a) => setOnce(a, "capability", v, "--capability") } },
-  { words: ["describe"], summary: "describe one component: schema, limits, a valid example", tool: "describe_component", flags: { "--component": (v, a) => setOnce(a, "component", v, "--component") } },
-  { words: ["validate"], summary: "validate an envelope or bundle without storing it", tool: "validate", flags: { "--file": () => undefined } },
-  { words: ["render"], summary: "validate, store and summarise an envelope or bundle", tool: "render", flags: { "--file": () => undefined } },
-  { words: ["register"], summary: "register a view definition against an expected registry revision", tool: "register_view", flags: { "--file": () => undefined, "--expected-revision": () => undefined } },
-  { words: ["open"], summary: "open an entity at a snapshot: pane state, views and a bounded answer", tool: "open_entity", flags: {} },
-  { words: ["navigate"], summary: "follow an item of a pane to its target", tool: "navigate", flags: {} },
-  { words: ["inspect"], summary: "a bounded slice of a stored view (filter, order, focus, cursor)", tool: "inspect_view", flags: { "--view": (v, a) => setOnce(a, "viewId", v, "--view"), "--snapshot": (v, a) => setOnce(a, "snapshotId", v, "--snapshot") } },
-  { words: ["search"], summary: "search entities, view titles, examples and claims", tool: "search", flags: { "--query": (v, a) => setOnce(a, "query", v, "--query") } },
-  { words: ["notebook", "create"], summary: "create a notebook page", tool: "notebook_create", flags: { "--file": () => undefined } },
-  { words: ["notebook", "get"], summary: "read a notebook page", tool: "notebook_get", flags: { "--page": (v, a) => setOnce(a, "pageId", v, "--page"), "--snapshot": (v, a) => setOnce(a, "snapshotId", v, "--snapshot"), "--revision": () => undefined } },
-  { words: ["notebook", "update"], summary: "replace a notebook page's blocks against an expected revision", tool: "notebook_update", flags: {} },
-  { words: ["example", "record"], summary: "record one run of an example with its result bundle", tool: "example_record", flags: {} },
-  { words: ["example", "run"], summary: "run an owner-registered runner and record its result", flags: { "--runners": () => undefined, "--view": () => undefined, "--snapshot": () => undefined, "--format": () => undefined }, repeatable: ["--param"], positional: { name: "RUNNER_ID" } },
-  { words: ["repo", "add"], summary: "register a repository root (ID=ROOT) so freshness can be checked; CLI only", flags: {}, positional: { name: "ID=ROOT" } },
-  { words: ["repo", "list"], summary: "list the registered repository roots", flags: { "--format": () => undefined } },
-  { words: ["serve"], summary: "serve the local viewer for a session", flags: { "--host": () => undefined, "--port": () => undefined, "--assets": () => undefined }, repeatable: ["--repo"] },
-  { words: ["mcp"], summary: "serve the tools over stdio MCP", flags: {} },
+  { words: ["components"], summary: "list the supported components and their questions", tool: "list_components", flags: { "--capability": (v, a) => setOnce(a, "capability", v, "--capability") }, example: "paneweft components --capability focus-neighborhood" },
+  { words: ["describe"], summary: "describe one component: schema, limits, a valid example", tool: "describe_component", flags: { "--component": (v, a) => setOnce(a, "component", v, "--component") }, positional: { name: "COMPONENT" }, example: "paneweft describe graph" },
+  { words: ["validate"], summary: "validate an envelope or bundle without storing it", tool: "validate", flags: { "--file": () => undefined }, example: "paneweft validate --file fixtures/components/all.bundle.json" },
+  { words: ["render"], summary: "validate, store and summarise an envelope or bundle", tool: "render", flags: { "--file": () => undefined }, example: "paneweft render --file fixtures/components/all.bundle.json" },
+  { words: ["register"], summary: "register a view definition against an expected registry revision", tool: "register_view", flags: { "--file": () => undefined, "--expected-revision": () => undefined }, example: "paneweft register --file fixtures/wire/definition-valid.json --expected-revision 0" },
+  { words: ["open"], summary: "open an entity at a snapshot: pane state, views and a bounded answer", tool: "open_entity", flags: {}, example: "paneweft open --args-file fixtures/wire/open-entity-watch.json" },
+  { words: ["navigate"], summary: "follow an item of a pane to its target", tool: "navigate", flags: {}, example: "paneweft navigate --args '{\"pane\":{\"entity\":{\"repository\":\"r\",\"kind\":\"vigil/watch\",\"id\":\"watch\"},\"snapshotId\":\"snap-1\",\"viewDefinitionId\":\"def-modules\",\"selection\":[],\"filters\":{},\"pinned\":false},\"itemId\":\"mcp\"}'" },
+  { words: ["inspect"], summary: "a bounded slice of a stored view (filter, order, focus, cursor)", tool: "inspect_view", flags: { "--view": (v, a) => setOnce(a, "viewId", v, "--view"), "--snapshot": (v, a) => setOnce(a, "snapshotId", v, "--snapshot") }, example: "paneweft inspect --view modules --snapshot snap-1 --max-bytes 2048" },
+  { words: ["search"], summary: "search entities, view titles, examples and claims", tool: "search", flags: { "--query": (v, a) => setOnce(a, "query", v, "--query") }, example: "paneweft search --query cancellation" },
+  { words: ["notebook", "create"], summary: "create a notebook page", tool: "notebook_create", flags: { "--file": () => undefined }, example: "paneweft notebook create --file fixtures/components/notebook.json" },
+  { words: ["notebook", "get"], summary: "read a notebook page", tool: "notebook_get", flags: { "--page": (v, a) => setOnce(a, "pageId", v, "--page"), "--snapshot": (v, a) => setOnce(a, "snapshotId", v, "--snapshot"), "--revision": () => undefined }, example: "paneweft notebook get --page cancellation-notebook" },
+  { words: ["notebook", "update"], summary: "replace a notebook page's blocks against an expected revision", tool: "notebook_update", flags: {}, example: "paneweft notebook update --args-file fixtures/wire/notebook-update-a.json" },
+  { words: ["example", "record"], summary: "record one run of an example with its result bundle", tool: "example_record", flags: {}, example: "paneweft example record --args-file fixtures/wire/example-record-valid.json" },
+  { words: ["example", "run"], summary: "run an owner-registered runner and record its result", flags: { "--runners": () => undefined, "--view": () => undefined, "--snapshot": () => undefined, "--format": () => undefined }, repeatable: ["--param"], positional: { name: "RUNNER_ID" }, example: "paneweft example run pass --view vigil-one-write --snapshot snap-1 --runners runners.json --param name=value" },
+  { words: ["repo", "add"], summary: "register a repository root (ID=ROOT) so freshness can be checked; CLI only", flags: {}, positional: { name: "ID=ROOT" }, example: "paneweft repo add r=." },
+  { words: ["repo", "list"], summary: "list the registered repository roots", flags: { "--format": () => undefined }, example: "paneweft repo list --format json" },
+  { words: ["serve"], summary: "serve the local viewer for a session", flags: { "--host": () => undefined, "--port": () => undefined, "--assets": () => undefined }, repeatable: ["--repo"], example: "paneweft serve --port 0 --repo r=." },
+  { words: ["mcp"], summary: "serve the tools over stdio MCP", flags: {}, example: "paneweft mcp" },
 ];
 const TOP_LEVEL = ["components", "describe", "validate", "render", "register", "open", "navigate", "inspect", "search", "notebook", "example", "repo", "serve", "mcp"];
 
@@ -99,6 +101,7 @@ function commandHelp(words: string[]): string {
   const flags = [...(command.tool === undefined ? [] : COMMON_FLAGS), ...Object.keys(command.flags), ...(command.repeatable ?? [])];
   const lines = [`usage: paneweft ${command.words.join(" ")}${command.positional ? ` ${command.positional.name}` : ""} [options]`, "", command.summary];
   if (flags.length > 0) lines.push("", `options: ${flags.join(" ")}`);
+  lines.push("", `example: ${command.example}`);
   return lines.join("\n") + "\n";
 }
 
@@ -210,6 +213,11 @@ async function buildArguments(parsed: Parsed, io: CliIo): Promise<Record<string,
       if (!/^[1-9]\d*$/.test(value)) throw new UsageError("--revision must be a positive integer");
       setOnce(args, "revision", Number(value), "--revision");
     } else sugar(value, args);
+  }
+  if (command.tool === "describe_component" && parsed.positional[0] !== undefined) {
+    const given = parsed.positional[0];
+    if ("component" in args && args.component !== given) throw new UsageError(`describe got the component "${given}" as an argument but "${String(args.component)}" from --component/--args; give it once`);
+    args.component = given;
   }
   if (command.tool === "register_view" && !values.has("--args") && !values.has("--args-file")) {
     if (!values.has("--file")) throw new UsageError("register needs --file DEFINITION.json (or --args)");
