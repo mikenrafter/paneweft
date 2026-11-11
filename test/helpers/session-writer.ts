@@ -10,8 +10,8 @@ process.on("message", (message: { release: string }) => {
   if (resume) { waiters.delete(message.release); resume(); }
   else permits.add(message.release);
 });
-async function barrier(event: string): Promise<void> {
-  process.send!({ event, pid: process.pid });
+async function barrier(event: string, extra: Record<string, unknown> = {}): Promise<void> {
+  process.send!({ event, pid: process.pid, ...extra });
   if (permits.delete(event)) return;
   await new Promise<void>((resolve) => waiters.set(event, resolve));
 }
@@ -19,6 +19,8 @@ const opened = await openSession(dir!, { testHooks: {
   beforeLockAcquire: () => barrier("before-lock"),
   onLockContended: () => barrier("contended"),
   afterManifestRead: () => barrier("read"),
+  afterStaleObserved: () => barrier("stale-observed"),
+  afterStaleResolved: ({ broke }) => { process.send!({ event: "stale-resolved", pid: process.pid, broke }); }, // reported, not a barrier
 } });
 if (!opened.ok) process.send!({ event: "done", result: opened });
 else {
