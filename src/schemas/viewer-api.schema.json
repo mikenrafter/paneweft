@@ -155,9 +155,10 @@
       "description": "Success body of POST /api/notebooks/<pageId>/revisions.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["pageId", "revision", "envelope"],
+      "required": ["pageId", "snapshotId", "revision", "envelope"],
       "properties": {
         "pageId": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
+        "snapshotId": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id" },
         "revision": { "type": "integer", "minimum": 1 },
         "envelope": { "$ref": "urn:paneweft:schema:envelope:1" }
       }
@@ -168,6 +169,7 @@
       "additionalProperties": false,
       "required": ["expectedRevision", "blocks"],
       "properties": {
+        "snapshotId": { "$ref": "urn:paneweft:schema:common:1#/$defs/Id", "description": "The snapshot that holds the page; optional only while one snapshot holds the pageId. The viewer always sends it." },
         "expectedRevision": { "type": "integer", "minimum": 1 },
         "blocks": { "type": "array", "items": { "type": "object" } }
       }

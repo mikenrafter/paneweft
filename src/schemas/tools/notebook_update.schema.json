@@ -14,6 +14,10 @@
     "pageId": {
       "$ref": "urn:paneweft:schema:common:1#/$defs/Id"
     },
+    "snapshotId": {
+      "$ref": "urn:paneweft:schema:common:1#/$defs/Id",
+      "description": "Snapshot that holds the page. Optional while only one snapshot holds the pageId; required when several do."
+    },
     "expectedRevision": {
       "type": "integer",
       "minimum": 1

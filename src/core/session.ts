@@ -41,7 +41,7 @@ export interface ImportSummary {
   /** `${viewId}@${snapshotId}` -> sha256 of the canonical JSON of the stored envelope. */
   contentHashes: Record<string, string>;
 }
-export interface NotebookPage { pageId: string; revision: number; envelope: Envelope }
+export interface NotebookPage { pageId: string; snapshotId: string; revision: number; envelope: Envelope }
 export interface RecordedRun { runId: string; viewId: string; snapshotId: string; status: "passed" | "failed" | "error"; contentHash: string }
 
 /** Failure injection for tests of atomicity (MC16, MC20). Never set in production code paths. */
@@ -79,8 +79,12 @@ export interface Session {
   snapshotInfo(snapshotId: string): Promise<Result<SnapshotInfo>>;
   exportBundle(): Promise<Bundle>;
   notebookCreate(input: unknown): Promise<Result<NotebookPage>>;
-  notebookGet(pageId: string, revision?: number): Promise<Result<NotebookPage>>;
-  notebookUpdate(pageId: string, expectedRevision: number, change: { blocks: unknown[]; sources?: unknown[] }): Promise<Result<NotebookPage>>;
+  /**
+   * A page is addressed by (pageId, snapshotId). `snapshotId` may be omitted only while exactly one snapshot holds the pageId; with several the call
+   * is INVALID_ARGUMENT naming them (CLAIM(notebook-snapshot-identity)); an unknown snapshot or page is NOT_FOUND.
+   */
+  notebookGet(pageId: string, revision?: number, snapshotId?: string): Promise<Result<NotebookPage>>;
+  notebookUpdate(pageId: string, expectedRevision: number, change: { blocks: unknown[]; sources?: unknown[] }, snapshotId?: string): Promise<Result<NotebookPage>>;
   recordExampleRun(key: ViewKey, output: unknown): Promise<Result<RecordedRun>>;
   listRuns(key: ViewKey): Promise<Result<RecordedRun[]>>;
   close(): Promise<void>;
@@ -156,6 +160,22 @@ function referencedViewIds(documents: unknown[]): { ids: Set<string>; examples: 
     }
   }
   return { ids, examples };
+}
+
+/** The page (pageId, snapshotId) of the manifest; see Session.notebookGet for the rules when `snapshotId` is omitted. */
+function locatePage(manifest: Manifest, pageId: string, snapshotId: string | undefined): { page: PageEntry; index: number } | { error: Failure } {
+  const holders = manifest.pages.filter((candidate) => candidate.pageId === pageId);
+  if (holders.length === 0) return { error: failure("NOT_FOUND", `no notebook page "${pageId}"`) };
+  if (snapshotId === undefined) {
+    if (holders.length > 1) {
+      const names = holders.map((holder) => holder.snapshotId).sort(compareCodeUnits);
+      return { error: failure("INVALID_ARGUMENT", `notebook page "${pageId}" exists in ${holders.length} snapshots (${names.join(", ")}); pass snapshotId`, { errors: [{ code: "REQUIRED", pointer: "/snapshotId", constraint: "required: snapshotId when several snapshots hold the page", hint: `Pass one of: ${names.join(", ")}.` }] }) };
+    }
+    return { page: holders[0] as PageEntry, index: manifest.pages.indexOf(holders[0] as PageEntry) };
+  }
+  const page = holders.find((candidate) => candidate.snapshotId === snapshotId);
+  if (page === undefined) return { error: failure("NOT_FOUND", `no notebook page "${pageId}" in snapshot "${snapshotId}"`) };
+  return { page, index: manifest.pages.indexOf(page) };
 }
 
 // ---- the session --------------------------------------------------------------------------------------------------
@@ -283,15 +303,16 @@ class DirectorySession implements Session {
     });
   }
 
-  async notebookGet(pageId: string, revision?: number): Promise<Result<NotebookPage>> {
+  async notebookGet(pageId: string, revision?: number, snapshotId?: string): Promise<Result<NotebookPage>> {
     return this.withReads(async () => {
       const manifest = await this.readManifest();
-      const page = [...manifest.pages].reverse().find((candidate) => candidate.pageId === pageId);
-      if (page === undefined) return failure("NOT_FOUND", `no notebook page "${pageId}"`);
+      const located = locatePage(manifest, pageId, snapshotId);
+      if ("error" in located) return located.error;
+      const { page } = located;
       const wanted = revision ?? page.revisions.length;
       const hash = page.revisions[wanted - 1];
-      if (!Number.isInteger(wanted) || wanted < 1 || hash === undefined) return failure("NOT_FOUND", `notebook page "${pageId}" has no revision ${String(revision)}`);
-      return ok({ pageId, revision: wanted, envelope: (await this.readObject(hash)) as Envelope });
+      if (!Number.isInteger(wanted) || wanted < 1 || hash === undefined) return failure("NOT_FOUND", `notebook page "${pageId}" in snapshot "${page.snapshotId}" has no revision ${String(revision)}`);
+      return ok({ pageId, snapshotId: page.snapshotId, revision: wanted, envelope: (await this.readObject(hash)) as Envelope });
     });
   }
 
@@ -559,18 +580,18 @@ class DirectorySession implements Session {
       }
       const merged = await this.merge(manifest, { entities: [], definitions: [], views: [envelope] }, undefined, stage);
       if ("error" in merged) return merged;
-      return { manifest: merged.manifest, value: { pageId: envelope.id, revision: 1, envelope } };
+      return { manifest: merged.manifest, value: { pageId: envelope.id, snapshotId: envelope.snapshotId, revision: 1, envelope } };
     });
   }
 
-  async notebookUpdate(pageId: string, expectedRevision: number, change: { blocks: unknown[]; sources?: unknown[] }): Promise<Result<NotebookPage>> {
+  async notebookUpdate(pageId: string, expectedRevision: number, change: { blocks: unknown[]; sources?: unknown[] }, snapshotId?: string): Promise<Result<NotebookPage>> {
     return this.mutate<NotebookPage>("notebookUpdate", async (manifest, stage) => {
-      const index = manifest.pages.map((page) => page.pageId).lastIndexOf(pageId);
-      const page = manifest.pages[index];
-      if (page === undefined) return { error: failure("NOT_FOUND", `no notebook page "${pageId}"`) };
+      const located = locatePage(manifest, pageId, snapshotId);
+      if ("error" in located) return located;
+      const { page, index } = located;
       const currentRevision = page.revisions.length;
       if (expectedRevision !== currentRevision) {
-        return { error: failure("CONFLICT", `notebook page "${pageId}" is at revision ${currentRevision}, not ${expectedRevision}; re-read and retry`, { retryable: true, details: { currentRevision } }) };
+        return { error: failure("CONFLICT", `notebook page "${pageId}" in snapshot "${page.snapshotId}" is at revision ${currentRevision}, not ${expectedRevision}; re-read and retry`, { retryable: true, details: { currentRevision } }) };
       }
       const latest = (await this.readObject(page.revisions[currentRevision - 1] as string)) as Envelope;
       const envelope = { ...latest, ...(change.sources === undefined ? {} : { sources: change.sources }), data: { ...(latest.data as object), blocks: change.blocks } } as Envelope;
@@ -579,7 +600,7 @@ class DirectorySession implements Session {
       const hash = await stage(envelope);
       const pages = manifest.pages.map((entry, position) => (position === index ? { ...entry, revisions: [...entry.revisions, hash] } : entry));
       const views = manifest.views.map((view) => (view.viewId === pageId && view.snapshotId === page.snapshotId ? { ...view, hash } : view));
-      return { manifest: { ...manifest, pages, views }, value: { pageId, revision: currentRevision + 1, envelope } };
+      return { manifest: { ...manifest, pages, views }, value: { pageId, snapshotId: page.snapshotId, revision: currentRevision + 1, envelope } };
     });
   }
 

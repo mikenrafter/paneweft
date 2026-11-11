@@ -32,7 +32,7 @@ async function twoSnapshots(dir = tmp("nb-snapshots")): Promise<{ dir: string; s
   must(await session.importBundle(inSnapshot(bundleFixture(), "snap-2")));
   return { dir, session };
 }
-const blockIds = (page: { envelope: { data: unknown } }): string[] => (page.envelope.data as { blocks: Array<{ id: string }> }).blocks.map((block) => block.id);
+const blockIds = (page: { envelope: { data?: unknown } }): string[] => (page.envelope.data as { blocks: Array<{ id: string }> }).blocks.map((block) => block.id);
 const blocksOf = async (session: Session, snapshotId: string) => (must(await session.notebookGet(PAGE, undefined, snapshotId)).envelope.data as { blocks: unknown[] }).blocks;
 /** The documented block order of the fixture is [b1, b2]; the edit used everywhere swaps it. */
 const reversed = (blocks: unknown[]): unknown[] => [...blocks].reverse();

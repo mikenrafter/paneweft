@@ -187,11 +187,12 @@ export async function startViewer(options: ViewerServerOptions): Promise<Result<
     if (!body.ok) return fail("INVALID_ARGUMENT", "request body too large", 413);
     let parsed: unknown;
     try { parsed = JSON.parse(body.text); } catch { return fail("INVALID_ARGUMENT", "the request body is not JSON", 400); }
-    const write = parsed as { expectedRevision?: unknown; blocks?: unknown } | null;
-    if (write === null || typeof write !== "object" || !Number.isInteger(write.expectedRevision) || (write.expectedRevision as number) < 1 || !Array.isArray(write.blocks)) {
-      return fail("INVALID_ARGUMENT", "the body must be {expectedRevision: integer >= 1, blocks: array}", 400);
+    const write = parsed as { snapshotId?: unknown; expectedRevision?: unknown; blocks?: unknown } | null;
+    if (write === null || typeof write !== "object" || !Number.isInteger(write.expectedRevision) || (write.expectedRevision as number) < 1 || !Array.isArray(write.blocks)
+      || (write.snapshotId !== undefined && (typeof write.snapshotId !== "string" || write.snapshotId === ""))) {
+      return fail("INVALID_ARGUMENT", "the body must be {snapshotId?: string, expectedRevision: integer >= 1, blocks: array}", 400);
     }
-    const updated = await source.updateNotebook(pageId, write.expectedRevision as number, write.blocks);
+    const updated = await source.updateNotebook(pageId, write.expectedRevision as number, write.blocks, write.snapshotId as string | undefined);
     return fromResult(updated, (page) => page);
   }
 

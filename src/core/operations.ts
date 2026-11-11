@@ -491,25 +491,25 @@ async function render(session: Session, args: { input: Record<string, unknown> }
   return serve(layoutOf(loaded.summary, cursorAtFor(digest), { preamble, json: jsonHead }), digest, context);
 }
 
-async function notebookReply(session: Session, pageId: string, revision: number | undefined, context: Context): Promise<OperationOutcome> {
-  const page = await session.notebookGet(pageId, revision);
+async function notebookReply(session: Session, pageId: string, revision: number | undefined, snapshotId: string | undefined, context: Context): Promise<OperationOutcome> {
+  const page = await session.notebookGet(pageId, revision, snapshotId);
   if (!page.ok) return page.error.code === "NOT_FOUND" ? unresolved(context.format, page.error.message) : failedFrom(context.format, page.error);
   const freshness = await checkFreshness(page.value.envelope.freshness, await session.repositories());
   const summary = summariseView(page.value.envelope, freshness, DEFAULT_QUERY);
-  const digest = queryDigest({ tool: "notebook_get", pageId, revision: page.value.revision });
+  const digest = queryDigest({ tool: "notebook_get", pageId, snapshotId: page.value.snapshotId, revision: page.value.revision });
   return serve(layoutOf(summary, cursorAtFor(digest), { preamble: [`page: ${pageId} revision ${page.value.revision}`], json: { pageId, revision: page.value.revision } }), digest, context);
 }
 
 async function notebookCreate(session: Session, args: { input: unknown }, context: Context): Promise<OperationOutcome> {
   const created = await session.notebookCreate(args.input);
   if (!created.ok) return failedFrom(context.format, created.error);
-  return notebookReply(session, created.value.pageId, created.value.revision, context);
+  return notebookReply(session, created.value.pageId, created.value.revision, created.value.snapshotId, context);
 }
 
-async function notebookUpdate(session: Session, args: { pageId: string; expectedRevision: number; blocks: unknown[]; sources?: unknown[] }, context: Context): Promise<OperationOutcome> {
-  const updated = await session.notebookUpdate(args.pageId, args.expectedRevision, { blocks: args.blocks, ...(args.sources === undefined ? {} : { sources: args.sources }) });
+async function notebookUpdate(session: Session, args: { pageId: string; snapshotId?: string; expectedRevision: number; blocks: unknown[]; sources?: unknown[] }, context: Context): Promise<OperationOutcome> {
+  const updated = await session.notebookUpdate(args.pageId, args.expectedRevision, { blocks: args.blocks, ...(args.sources === undefined ? {} : { sources: args.sources }) }, args.snapshotId);
   if (!updated.ok) return failedFrom(context.format, updated.error);
-  return notebookReply(session, updated.value.pageId, updated.value.revision, context);
+  return notebookReply(session, updated.value.pageId, updated.value.revision, updated.value.snapshotId, context);
 }
 
 async function exampleRecord(session: Session, args: { viewId: string; snapshotId: string; output: unknown }, context: Context): Promise<OperationOutcome> {
@@ -583,8 +583,8 @@ async function dispatchOperation(session: Session | null, name: string, args: un
       case "inspect_view": return await inspectView(live, input as { viewId: string; snapshotId: string }, context);
       case "search": return await search(live, input as { query: string }, context);
       case "notebook_create": return await notebookCreate(live, input as { input: unknown }, context);
-      case "notebook_get": return await notebookReply(live, input.pageId as string, input.revision as number | undefined, context);
-      case "notebook_update": return await notebookUpdate(live, input as { pageId: string; expectedRevision: number; blocks: unknown[] }, context);
+      case "notebook_get": return await notebookReply(live, input.pageId as string, input.revision as number | undefined, input.snapshotId as string | undefined, context);
+      case "notebook_update": return await notebookUpdate(live, input as { pageId: string; snapshotId?: string; expectedRevision: number; blocks: unknown[] }, context);
       case "example_record": return await exampleRecord(live, input as { viewId: string; snapshotId: string; output: unknown }, context);
       default: return failed(requestedFormat, "UNKNOWN_OPERATION", `unknown operation "${name}"`);
     }

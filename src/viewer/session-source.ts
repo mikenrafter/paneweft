@@ -27,7 +27,7 @@ export function createSessionSource(session: Session): ViewerSource {
     const { envelope, contentHash } = stored.value;
     const freshness = await checkFreshness(envelope.freshness, await session.repositories());
     if (envelope.component !== "notebook") return ok({ envelope, freshness, contentHash });
-    const page = await session.notebookGet(envelope.id);
+    const page = await session.notebookGet(envelope.id, undefined, envelope.snapshotId);
     return ok({ envelope, freshness, contentHash, notebookRevision: page.ok ? page.value.revision : 1 });
   };
 
@@ -58,6 +58,6 @@ export function createSessionSource(session: Session): ViewerSource {
         ...(document.extra.entity === undefined ? {} : { entity: document.extra.entity as EntityRef }),
       })));
     },
-    updateNotebook: (pageId, expectedRevision, blocks) => session.notebookUpdate(pageId, expectedRevision, { blocks }),
+    updateNotebook: (pageId, expectedRevision, blocks, snapshotId) => session.notebookUpdate(pageId, expectedRevision, { blocks }, snapshotId),
   };
 }

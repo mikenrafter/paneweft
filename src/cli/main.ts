@@ -58,7 +58,7 @@ const COMMANDS: Command[] = [
   { words: ["inspect"], summary: "a bounded slice of a stored view (filter, order, focus, cursor)", tool: "inspect_view", flags: { "--view": (v, a) => setOnce(a, "viewId", v, "--view"), "--snapshot": (v, a) => setOnce(a, "snapshotId", v, "--snapshot") } },
   { words: ["search"], summary: "search entities, view titles, examples and claims", tool: "search", flags: { "--query": (v, a) => setOnce(a, "query", v, "--query") } },
   { words: ["notebook", "create"], summary: "create a notebook page", tool: "notebook_create", flags: { "--file": () => undefined } },
-  { words: ["notebook", "get"], summary: "read a notebook page", tool: "notebook_get", flags: { "--page": (v, a) => setOnce(a, "pageId", v, "--page"), "--revision": () => undefined } },
+  { words: ["notebook", "get"], summary: "read a notebook page", tool: "notebook_get", flags: { "--page": (v, a) => setOnce(a, "pageId", v, "--page"), "--snapshot": (v, a) => setOnce(a, "snapshotId", v, "--snapshot"), "--revision": () => undefined } },
   { words: ["notebook", "update"], summary: "replace a notebook page's blocks against an expected revision", tool: "notebook_update", flags: {} },
   { words: ["example", "record"], summary: "record one run of an example with its result bundle", tool: "example_record", flags: {} },
   { words: ["example", "run"], summary: "run an owner-registered runner and record its result", flags: { "--runners": () => undefined, "--view": () => undefined, "--snapshot": () => undefined }, repeatable: ["--param"], positional: { name: "RUNNER_ID" } },

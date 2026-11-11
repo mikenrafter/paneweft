@@ -419,7 +419,7 @@ export async function mountViewer(container: HTMLElement, options: MountOptions)
     const to = direction === "up" ? at - 1 : at + 1;
     if (at < 0 || to < 0 || to >= blocks.length) return;
     [blocks[at], blocks[to]] = [blocks[to] as { id: string }, blocks[at] as { id: string }];
-    const written = await source.updateNotebook(model.envelope.id, model.notebookRevision ?? 1, blocks);
+    const written = await source.updateNotebook(model.envelope.id, model.notebookRevision ?? 1, blocks, model.envelope.snapshotId);
     if (!written.ok) { ui.error = { code: written.error.code, message: written.error.message }; render(); return; }
     ui.error = null;
     views.delete(JSON.stringify([keyOfEntity(pane.entity, pane.snapshotId), pane.viewDefinitionId]));

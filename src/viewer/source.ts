@@ -27,7 +27,8 @@ export interface ViewerSource {
   getView(key: ViewKey): Promise<Result<ViewModel>>;
   openItemSource(key: ViewKey, itemId: string): Promise<Result<SourceOpening>>;
   search(query: string, scope?: { entity: EntityRef; snapshotId: string }): Promise<Result<SearchHit[]>>;
-  updateNotebook(pageId: string, expectedRevision: number, blocks: unknown[]): Promise<Result<NotebookPage>>;
+  /** `snapshotId` names the page's snapshot; it may be omitted only while one snapshot holds the pageId. The viewer always sends it. */
+  updateNotebook(pageId: string, expectedRevision: number, blocks: unknown[], snapshotId?: string): Promise<Result<NotebookPage>>;
 }
 
 export { createSessionSource } from "./session-source.ts";

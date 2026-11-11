@@ -1,5 +1,6 @@
 {
   "pageId": "cancellation-notebook",
+  "snapshotId": "snap-1",
   "revision": 2,
   "envelope": {
     "schemaVersion": "paneweft.view/1",

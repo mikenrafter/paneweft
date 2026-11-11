@@ -119,13 +119,13 @@ const TABLE: Record<ToolNameLiteral, { required: string[]; properties: string[];
     invalid: [{}, { input: {}, maxBytes: 1 }],
   },
   notebook_get: {
-    required: ["pageId"], properties: ["cursor", "format", "maxBytes", "pageId", "revision"],
-    valid: [{ pageId: "p" }, { pageId: "p", revision: 2 }],
+    required: ["pageId"], properties: ["cursor", "format", "maxBytes", "pageId", "revision", "snapshotId"],
+    valid: [{ pageId: "p" }, { pageId: "p", revision: 2 }, { pageId: "p", snapshotId: "snap-1" }],
     invalid: [{ pageId: "p", revision: 0 }, { revision: 1 }],
   },
   notebook_update: {
-    required: ["blocks", "expectedRevision", "pageId"], properties: ["blocks", "expectedRevision", "format", "maxBytes", "pageId", "sources"],
-    valid: [{ pageId: "p", expectedRevision: 1, blocks: [] }, { pageId: "p", expectedRevision: 3, blocks: [{ a: 1 }], sources: [{}] }],
+    required: ["blocks", "expectedRevision", "pageId"], properties: ["blocks", "expectedRevision", "format", "maxBytes", "pageId", "snapshotId", "sources"],
+    valid: [{ pageId: "p", expectedRevision: 1, blocks: [] }, { pageId: "p", expectedRevision: 3, blocks: [{ a: 1 }], sources: [{}] }, { pageId: "p", snapshotId: "snap-1", expectedRevision: 1, blocks: [] }],
     invalid: [{ pageId: "p", expectedRevision: 0, blocks: [] }, { pageId: "p", expectedRevision: 1, blocks: {} }, { pageId: "p", expectedRevision: 1 }],
   },
   example_record: {

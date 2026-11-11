@@ -89,7 +89,7 @@ export function createHttpSource(baseUrl: string, token: string, fetchImpl: type
       const read = await call<{ hits: SearchHit[] }>(`/api/search?q=${encodeURIComponent(query)}${where}`);
       return read.ok ? ok(read.value.hits) : read;
     },
-    updateNotebook: (pageId, expectedRevision, blocks) =>
-      call<NotebookPage>(`/api/notebooks/${encodeURIComponent(pageId)}/revisions`, { method: "POST", body: { expectedRevision, blocks } }),
+    updateNotebook: (pageId, expectedRevision, blocks, snapshotId) =>
+      call<NotebookPage>(`/api/notebooks/${encodeURIComponent(pageId)}/revisions`, { method: "POST", body: { ...(snapshotId === undefined ? {} : { snapshotId }), expectedRevision, blocks } }),
   };
 }
