@@ -68,9 +68,14 @@ when it exceeds 2048. The maximum remains 32768.
 ## S5: process-lock observation
 
 `SessionTestHooks.beforeLockAcquire` runs immediately before acquiring the
-process lock. `onLockContended` runs when another writer holds it, before waiting
-or returning CONFLICT. `afterManifestRead` runs after reading mutable manifest
-state inside the acquired lock. Each hook is awaited. Production supplies none.
+write lock. `afterHelperSpawned` runs when the `flock` helper that waits for the
+lock has been spawned (round 3, S2 flock rewrite; it replaced `onLockContended`,
+because a blocking kernel lock has no "contended" moment to report: a waiting
+writer is a live helper process). `afterLockAcquired` runs once the helper
+reported the lock held. `afterManifestRead` runs after reading mutable manifest
+state inside the acquired lock. `beforeManifestRename` / `afterManifestRename`
+bracket the rename that commits a manifest. Each hook is awaited. Production
+supplies none.
 
 The test holds A after its read, starts B, and observes B's contention or conflict
 before releasing A. B must never read mutable manifest state while A owns the

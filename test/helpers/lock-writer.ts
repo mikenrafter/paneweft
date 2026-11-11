@@ -3,7 +3,7 @@
 // Every hook point reports {event, pid, ...} to the parent. A point named in `job.pause` additionally waits until the parent releases it.
 // `job.log` (a file path) receives one O_APPEND line "enter <pid>" when the lock is acquired and "leave <pid>" right after the manifest
 // rename, still inside the lock; the kernel orders those appends, so the file is a total order of critical sections across processes.
-import { appendFileSync, readdirSync } from "node:fs";
+import { appendFileSync, readdirSync, readlinkSync } from "node:fs";
 import { openSession, type SessionTestHooks } from "../../src/core/session.ts";
 
 const [dir, jobText] = process.argv.slice(2);
@@ -31,6 +31,8 @@ async function hit(event: string, extra: Record<string, unknown> = {}): Promise<
   await new Promise<void>((resolve) => waiters.set(event, resolve));
 }
 const descriptors = (): number => readdirSync("/proc/self/fd").length;
+/** Descriptors of this process that still point at a session lock file. After a mutation there must be none. */
+const lockDescriptors = (): number => readdirSync("/proc/self/fd").filter((fd) => { try { return readlinkSync(`/proc/self/fd/${fd}`).endsWith(".write.lock"); } catch { return false; } }).length;
 
 const fdsBefore = descriptors();
 const hooks: SessionTestHooks = {
@@ -50,6 +52,6 @@ else {
     ? await opened.value.importBundle(job.bundle)
     : await opened.value.notebookUpdate(job.pageId!, job.revision!, { blocks: job.blocks! });
   await opened.value.close();
-  process.send!({ event: "done", pid: process.pid, result, fdsBefore, fdsAfter: descriptors() });
+  process.send!({ event: "done", pid: process.pid, result, fdsBefore, fdsAfter: descriptors(), lockDescriptors: lockDescriptors() });
 }
 process.disconnect();

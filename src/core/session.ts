@@ -4,24 +4,25 @@
 // Layout of a session directory:
 //   manifest.json          the ONLY mutable file: registry, entities, snapshot table, view/page/run index. Replaced atomically.
 //   objects/<sha256>.json  immutable canonical JSON of one stored view, notebook revision or run output, named by its content hash.
-//   .lock/                 exists only while a process mutates the session; its `owner` file records who holds it (boot id, pid, start time, token).
-//   .lock.recovery/        exists only while a contender removes a dead owner's lock (see breakStaleLock); same record. .lock.stale.* and
-//                          .lock.recovery.stale.* are tombstones, .lock.new.* staging directories; a crash can leave them, and they are removed once their
-//                          recorded process is dead.
+//   .write.lock            permanent, empty lock file (write-lock.ts): every mutation takes a kernel flock on a fresh descriptor of it. It is never
+//                          unlinked, renamed or written; a crashed holder cannot leave it locked because the kernel releases the lock with the process.
 //   server.json            written and removed by the viewer server; not part of the session state.
 //
 // CLAIM(atomic-manifest): the manifest is replaced atomically (write a temp file, fsync, rename), so a crash or injected failure
 //   leaves the previous state fully readable [design section 5; session.test.ts, MC16, MC20].
 // CLAIM(snapshot-immutable): a stored (viewId, snapshotId) never changes; different content under the same key is
 //   SNAPSHOT_CONFLICT, identical content is idempotent [design section 4; MC20].
-// CLAIM(process-lock): every mutation holds the session lock from BEFORE it reads mutable state until after the manifest swap, so
-//   two processes (or two handles) serialise and neither can act on a stale read [session.processes.test.ts, S5].
+// CLAIM(process-lock): every mutation holds the session write lock (write-lock.ts, flock) from BEFORE it reads mutable state until after the
+//   manifest swap, so two processes (or two handles) serialise and neither can act on a stale read [session.processes.test.ts, S5;
+//   session.write-lock.test.ts]. Readers take no lock: each reads ONE manifest snapshot (CLAIM(manifest-snapshot-read), session.write-lock.test.ts).
 // CLAIM(verified-reads): a stored object is read only through the manifest, and its canonical hash must equal the one the manifest
 //   recorded; a tampered, truncated or emptied file is STORAGE_CORRUPT, never silently served; a file nobody registered is invisible
 //   [session.atomic.test.ts, MC20].
+// Mutation failures that are about the lock: CONFLICT (retryable) when another writer held the lock for the whole wait; STORAGE_FAILED with
+//   details.cause "flock-missing" (util-linux `flock` not on PATH), "flock-failed" or "lock-file-unavailable" otherwise. None of them mutates.
 // Errors: methods return Result<T>; they never throw for domain failures. Readers that return plain arrays throw a
 //   `SessionStorageError` only when the manifest itself is unreadable.
-import { mkdir, open, readdir, readFile, rename, rm, rmdir, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, writeFile } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import type { Bundle, Entity, EntityRef, Envelope, ViewDefinition } from "./wire.ts";
@@ -29,7 +30,7 @@ import type { OperationError, Result, ValidationIssue } from "./errors.ts";
 import { canonicalJson, compareCodeUnits, ownValue } from "./canonical.ts";
 import { canonicalSha256, sha256Hex } from "./digest.ts";
 import { viewItems } from "./items.ts";
-import { identityOf, isAlive, type ProcessIdentity } from "./process-identity.ts";
+import { WriteLockError, withWriteLock } from "./write-lock.ts";
 import { validateDefinition, validateRunOutput, validateSubmission, type DefinitionMetadata, type ReferenceContext } from "./validate.ts";
 
 export interface ViewKey { viewId: string; snapshotId: string }
@@ -49,25 +50,13 @@ export interface RecordedRun { runId: string; viewId: string; snapshotId: string
 
 /** Failure injection for tests of atomicity (MC16, MC20). Never set in production code paths. */
 export interface SessionTestHooks {
-  /** S5: immediately before trying the process lock, before reading mutable manifest state. */
+  /** S5: immediately before trying the write lock, before reading mutable manifest state. */
   beforeLockAcquire?: (info: { operation: string }) => void | Promise<void>;
-  /** S5: a lock attempt found another process holding it, before waiting or returning CONFLICT. */
-  onLockContended?: (info: { operation: string }) => void | Promise<void>;
   /** S5: after reading the manifest INSIDE the lock; held until the hook resolves. */
   afterManifestRead?: (info: { operation: string }) => void | Promise<void>;
-  /** S2: a contender decided the lock's owner is dead, before it tries to break the lock. Other contenders may finish recovery while this is held. */
-  afterStaleObserved?: (info: { operation: string }) => void | Promise<void>;
-  /** S2: that contender's attempt to break the stale lock finished; `broke` says whether it removed the lock it had judged stale. */
-  afterStaleResolved?: (info: { operation: string; broke: boolean }) => void | Promise<void>;
-  /** S2 round 2: this contender holds the recovery mutex, before it re-reads the main lock. */
-  afterRecoveryMutexTaken?: (info: { operation: string }) => void | Promise<void>;
-  /** S2 round 2: a contender found the recovery mutex's holder dead, before it takes the mutex away. */
-  afterMutexStaleObserved?: (info: { operation: string }) => void | Promise<void>;
-  /** S2 round 2: `target` (the main lock or the recovery mutex) was just renamed to a tombstone and has not been verified yet. */
-  afterDisplaced?: (info: { operation: string; target: "lock" | "recovery" }) => void | Promise<void>;
   /** S2 flock: the lock helper was spawned (its pid), before the lock is known to be held. Reported while the helper may still be waiting. */
   afterHelperSpawned?: (info: { operation: string; helperPid: number }) => void | Promise<void>;
-  /** S2 flock: the helper reported the lock acquired; nothing mutable has been read yet. */
+  /** S2 flock: the helper reported the lock acquired; nothing mutable has been read yet. Runs inside the critical section. */
   afterLockAcquired?: (info: { operation: string }) => void | Promise<void>;
   /** S2 flock: the new manifest is written and synced under a temporary name; the rename (the commit point) has not happened. */
   beforeManifestRename?: (info: { operation: string }) => void | Promise<void>;
@@ -80,7 +69,7 @@ export interface SessionTestHooks {
 }
 export interface SessionOptions {
   testHooks?: SessionTestHooks;
-  /** How long a mutation waits for a lock held by a live process before it answers CONFLICT. Default 15 seconds. */
+  /** How long a mutation waits for a lock another writer holds before it answers CONFLICT, in whole milliseconds (>= 1). Default 15 seconds. */
   lockWaitMs?: number;
 }
 
@@ -146,9 +135,7 @@ const emptyManifest = (): Manifest => ({
 
 const MANIFEST = "manifest.json";
 const OBJECTS = "objects";
-const LOCK = ".lock";
 const LOCK_WAIT_MS = 15_000;
-const LOCK_POLL_MS = 5;
 
 // ---- errors -------------------------------------------------------------------------------------------------------
 
@@ -165,6 +152,10 @@ function validationFailure(subject: string, errors: ValidationIssue[]) {
 const entityKey = (entity: EntityRef & { snapshotId: string }): string => `${entity.snapshotId}\u0000${entity.repository}\u0000${entity.kind}\u0000${entity.id}`;
 const viewKey = (key: ViewKey): string => `${key.snapshotId}\u0000${key.viewId}`;
 const byViewKey = (a: ViewKey, b: ViewKey): number => compareCodeUnits(a.viewId, b.viewId) || compareCodeUnits(a.snapshotId, b.snapshotId);
+/** CLAIM(manifest-snapshot-read): compound reads derive everything from ONE manifest, never from a second read that a commit may have changed. */
+const sortedEntities = (entities: readonly Entity[], snapshotId?: string): Entity[] => entities
+  .filter((entity) => snapshotId === undefined || entity.snapshotId === snapshotId)
+  .sort((a, b) => compareCodeUnits(a.repository, b.repository) || compareCodeUnits(a.id, b.id) || compareCodeUnits(a.kind, b.kind) || compareCodeUnits(a.snapshotId, b.snapshotId));
 const hashesLabel = (key: ViewKey): string => `${key.viewId}@${key.snapshotId}`;
 
 /** Items of a view that other views may point at (the item ids a ReferenceContext view lists). */
@@ -208,8 +199,6 @@ class DirectorySession implements Session {
   private readonly hooks: SessionTestHooks;
   private closed = false;
   private readonly lockWaitMs: number;
-  /** Whether the start-up sweep of crashed processes' leftovers has run for this handle. */
-  private swept = false;
 
   constructor(dir: string, options: SessionOptions) {
     this.dir = dir;
@@ -286,8 +275,7 @@ class DirectorySession implements Session {
   }
 
   async listEntities(snapshotId?: string): Promise<Entity[]> {
-    const entities = (await this.readManifest()).entities.filter((entity) => snapshotId === undefined || entity.snapshotId === snapshotId);
-    return entities.sort((a, b) => compareCodeUnits(a.repository, b.repository) || compareCodeUnits(a.id, b.id) || compareCodeUnits(a.kind, b.kind) || compareCodeUnits(a.snapshotId, b.snapshotId));
+    return sortedEntities((await this.readManifest()).entities, snapshotId);
   }
 
   async listDefinitions(): Promise<{ revision: number; definitions: ViewDefinition[] }> {
@@ -316,7 +304,7 @@ class DirectorySession implements Session {
     for (const entry of views) envelopes.push((await this.readObject(entry.hash)) as Envelope);
     return {
       schemaVersion: "paneweft.bundle/1",
-      entities: await this.listEntities(),
+      entities: sortedEntities(manifest.entities),
       definitions: [...manifest.definitions].sort((a, b) => compareCodeUnits(a.id, b.id)),
       views: envelopes,
     };
@@ -369,180 +357,55 @@ class DirectorySession implements Session {
 
   // -- the mutation protocol ---------------------------------------------------------------------------------------------
 
-  private async acquireLock(operation: string): Promise<() => Promise<void>> {
-    await mkdir(this.dir, { recursive: true });
-    const lock = join(this.dir, LOCK);
-    const doc = await newLockDoc();
-    if (!this.swept) {
-      this.swept = true;
-      await this.sweepOrphans(operation); // start-up: whatever a crashed process left behind
-    }
-    const deadline = Date.now() + this.lockWaitMs;
-    let contended = false;
-    for (;;) {
-      if (await publishLock(this.dir, lock, doc)) return () => releaseLock(lock, doc.token);
-      if (!contended) {
-        contended = true;
-        await this.hooks.onLockContended?.({ operation });
-      }
-      if (await this.breakStaleLock(lock, operation)) continue;
-      if (Date.now() > deadline) throw new LockTimeout();
-      await new Promise<void>((resolve) => setTimeout(resolve, LOCK_POLL_MS));
-    }
-  }
-
   /**
-   * Stale-lock recovery (review S2, round 2). A lock is stale ONLY when the process identity it records is dead (process-identity.ts);
-   * its age proves nothing. It is removed by exactly one contender at a time, and never a lock that is not the one that was judged dead.
-   * CLAIM(stale-lock-recovery): a contender removes a lock only (1) inside the recovery mutex `.lock.recovery`, which is itself a lock with a
-   *   recorded identity and is reaped only when that identity is dead (and then by the same move-aside-and-verify step), (2) after re-reading the
-   *   lock there and finding the SAME dead identity (same token) it first judged stale, (3) by renaming it to a unique tombstone (atomic, so the
-   *   lock never half exists), and (4) after verifying the tombstone still holds that dead identity; otherwise the tombstone is put back (a
-   *   rename that fails while the path is retaken) and, if it cannot be put back, the displacement is reported as STORAGE_FAILED. Tombstones and
-   *   staging directories of dead identities left by a crash are removed at start-up and before each recovery
-   *   [session.stale-lock.test.ts, session.lock-recovery.test.ts].
-   * Why a mutex and a tombstone: a rename is by NAME, so a contender that judged an old lock dead could otherwise take the live replacement
-   *   another contender just created. Re-judging inside the mutex stops that; the tombstone check detects a violated mutex.
-   * Returns true when the lock this contender judged stale is gone and the acquire should be retried at once.
-   */
-  private async breakStaleLock(lock: string, operation: string): Promise<boolean> {
-    const observed = await inspectLock(lock);
-    if (observed.kind === "gone") return true; // released or already recovered: just try to acquire
-    if (observed.kind === "held") return false;
-    await this.hooks.afterStaleObserved?.({ operation });
-    const broke = await this.withRecoveryMutex(operation, false, async () => {
-      await this.removeOrphans();
-      const current = await inspectLock(lock);
-      if (current.kind !== "dead" || current.doc.token !== observed.doc.token) return false; // gone, replaced or revived since it was judged
-      return this.displaceDead(lock, observed.doc, "lock", operation);
-    });
-    await this.hooks.afterStaleResolved?.({ operation, broke });
-    return broke;
-  }
-
-  /**
-   * Runs `work` holding the recovery mutex, or answers `busy` without running it: the mutex is held by a live process (never reaped, however
-   * old) or could not be made. A mutex whose holder is dead is taken away here, and the caller polls and tries again.
-   */
-  private async withRecoveryMutex<T>(operation: string, busy: T, work: () => Promise<T>): Promise<T> {
-    const mutex = join(this.dir, RECOVERY);
-    const mine = await newLockDoc();
-    if (!(await publishLock(this.dir, mutex, mine))) {
-      const holder = await inspectLock(mutex);
-      if (holder.kind === "dead") {
-        await this.hooks.afterMutexStaleObserved?.({ operation });
-        await this.displaceDead(mutex, holder.doc, "recovery", operation);
-      }
-      return busy;
-    }
-    try {
-      await this.hooks.afterRecoveryMutexTaken?.({ operation });
-      return await work();
-    } finally {
-      await releaseLock(mutex, mine.token);
-    }
-  }
-
-  /**
-   * Moves the dead lock `observed` at `path` aside and discards it, but only if what was moved really is that dead lock. Anything else
-   * (a live owner took the path after `observed` was read) is put back; if the path has been retaken meanwhile it cannot be, and that is reported.
-   * Returns true when the dead lock is gone.
-   */
-  private async displaceDead(path: string, observed: LockDoc, target: "lock" | "recovery", operation: string): Promise<boolean> {
-    const tombstone = `${path}.stale.${randomBytes(8).toString("hex")}`;
-    try {
-      await rename(path, tombstone);
-    } catch {
-      return false; // gone already, or not movable: judge again
-    }
-    await this.hooks.afterDisplaced?.({ operation, target });
-    const held = await readOwner(tombstone);
-    if (held === "gone") return true; // a sweeper removed it first, and sweepers remove only dead identities
-    if (held !== "unreadable" && held.token === observed.token && !(await isAlive(held))) {
-      await rm(tombstone, { recursive: true, force: true });
-      return true;
-    }
-    try {
-      await rename(tombstone, path);
-      return false;
-    } catch {
-      if (held !== "unreadable" && !(await isAlive(held))) {
-        await rm(tombstone, { recursive: true, force: true }); // a dead lock of somebody else: nothing alive was displaced
-        return false;
-      }
-      throw new SessionStorageError("STORAGE_FAILED", `a session ${target === "lock" ? "lock" : "recovery lock"} that may belong to a running process was displaced during recovery and could not be restored because its path was taken again; it is kept at "${tombstone}"`);
-    }
-  }
-
-  /** Start-up sweep: removes the leftovers of crashed processes if there are any, taking a dead recovery mutex away on the way. */
-  private async sweepOrphans(operation: string): Promise<void> {
-    if (!(await readdir(this.dir)).some((name) => name.startsWith(`${LOCK}.`))) return;
-    for (let attempt = 0; attempt < 2; attempt += 1) { // the second attempt follows the reaping of a dead mutex on the first
-      if (await this.withRecoveryMutex(operation, false, async () => { await this.removeOrphans(); return true; })) return;
-    }
-  }
-
-  /** Removes staging directories and tombstones whose recorded identity is dead. A live or unattributable one is never touched. Needs the mutex. */
-  private async removeOrphans(): Promise<void> {
-    for (const name of await readdir(this.dir)) {
-      const path = join(this.dir, name);
-      const staging = STAGING_NAME.exec(name);
-      if (staging !== null) {
-        const [, bootId, pid, startTime] = staging as unknown as [string, string, string, string];
-        if (!(await isAlive({ bootId: bootId === "-" ? null : bootId, pid: Number(pid), startTime: startTime === "-" ? null : Number(startTime) }))) await rm(path, { recursive: true, force: true });
-      } else if (TOMBSTONE_NAME.test(name)) {
-        const held = await readOwner(path);
-        if (held !== "gone" && held !== "unreadable" && !(await isAlive(held))) await rm(path, { recursive: true, force: true });
-      }
-    }
-  }
-
-  /**
-   * Runs `build` under the process lock with a freshly read manifest. `build` validates first and stages files only afterwards (through
-   * `stage`), so a rejected request leaves the directory untouched. The manifest swap is the single commit point.
+   * Runs `build` under the write lock (write-lock.ts) with a freshly read manifest. `build` validates first and stages files only afterwards
+   * (through `stage`), so a rejected request leaves the directory untouched. The manifest rename is the single commit point.
+   * CLAIM(flock-no-premature-mutation): when the lock was not acquired (contention timeout, missing or failing `flock`) nothing is read or written
+   *   and the answer is a Failure; the lock is released only after every write of the critical section has settled
+   *   [session.write-lock.test.ts, write-lock.test.ts].
    */
   private async mutate<T>(
     operation: string,
     build: (manifest: Manifest, stage: (value: unknown) => Promise<string>) => Promise<{ manifest: Manifest; value: T } | { error: Failure }>,
   ): Promise<Result<T>> {
     if (this.closed) return failure("INVALID_ARGUMENT", "the session handle is closed");
-    let release: (() => Promise<void>) | null = null;
     try {
       await this.hooks.beforeLockAcquire?.({ operation });
-      release = await this.acquireLock(operation);
-      const current = await this.readManifest();
-      await this.hooks.afterManifestRead?.({ operation });
-      let writes = 0;
-      const stage = async (value: unknown): Promise<string> => {
-        const text = canonicalJson(value);
-        const hash = sha256Hex(text);
-        const target = join(this.dir, OBJECTS, `${hash}.json`);
-        const existing = await readFile(target, "utf8").catch(() => null);
-        if (existing === text) return hash; // already stored, byte-identical: nothing to write
-        await mkdir(join(this.dir, OBJECTS), { recursive: true });
-        const temporary = `${target}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-        await writeFile(temporary, text);
-        await rename(temporary, target);
-        writes += 1;
-        await this.hooks.afterWrite?.({ count: writes, path: target });
-        return hash;
-      };
-      const built = await build(current, stage);
-      if ("error" in built) return built.error;
-      await this.hooks.beforeManifestSwap?.({ operation });
-      await this.swapManifest({ ...built.manifest, generation: current.generation + 1 });
-      return ok(built.value);
+      await mkdir(this.dir, { recursive: true });
+      return await withWriteLock(this.dir, { waitMs: this.lockWaitMs, onHelperSpawned: (helperPid) => this.hooks.afterHelperSpawned?.({ operation, helperPid }) }, async () => {
+        await this.hooks.afterLockAcquired?.({ operation });
+        const current = await this.readManifest();
+        await this.hooks.afterManifestRead?.({ operation });
+        let writes = 0;
+        const stage = async (value: unknown): Promise<string> => {
+          const text = canonicalJson(value);
+          const hash = sha256Hex(text);
+          const target = join(this.dir, OBJECTS, `${hash}.json`);
+          const existing = await readFile(target, "utf8").catch(() => null);
+          if (existing === text) return hash; // already stored, byte-identical: nothing to write
+          await mkdir(join(this.dir, OBJECTS), { recursive: true });
+          const temporary = `${target}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+          await writeFile(temporary, text);
+          await rename(temporary, target);
+          writes += 1;
+          await this.hooks.afterWrite?.({ count: writes, path: target });
+          return hash;
+        };
+        const built = await build(current, stage);
+        if ("error" in built) return built.error;
+        await this.hooks.beforeManifestSwap?.({ operation });
+        await this.swapManifest({ ...built.manifest, generation: current.generation + 1 }, operation);
+        return ok(built.value);
+      });
     } catch (error) {
-      if (error instanceof LockTimeout) return failure("CONFLICT", `another writer holds the session lock; retry (${operation})`, { retryable: true });
+      if (error instanceof WriteLockError) return lockFailure(error, operation, this.lockWaitMs);
       if (error instanceof SessionStorageError) return failure(error.code, error.message);
       return failure("STORAGE_FAILED", `${operation} could not be saved: ${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      await release?.();
     }
   }
 
   /** CLAIM(atomic-manifest): temp file in the same directory, fsync, rename over manifest.json. */
-  private async swapManifest(manifest: Manifest): Promise<void> {
+  private async swapManifest(manifest: Manifest, operation: string): Promise<void> {
     const target = join(this.dir, MANIFEST);
     const temporary = `${target}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
     const handle = await open(temporary, "w");
@@ -552,7 +415,9 @@ class DirectorySession implements Session {
     } finally {
       await handle.close();
     }
+    await this.hooks.beforeManifestRename?.({ operation });
     await rename(temporary, target);
+    await this.hooks.afterManifestRename?.({ operation });
   }
 
   // -- validation context -----------------------------------------------------------------------------------------------
@@ -749,80 +614,17 @@ class DirectorySession implements Session {
   }
 }
 
-class LockTimeout extends Error {}
-
-// ---- the process lock: records, publication, inspection ----------------------------------------------------------------
-// A lock (`.lock`) and the recovery mutex (`.lock.recovery`) are directories holding one file, `owner`, with the holder's identity and a
-// token unique to this acquisition. A lock is PUBLISHED by building the directory under a staging name and renaming it into place, so it
-// exists with its owner record or not at all; rename onto an existing lock fails (ENOTEMPTY), which is the exclusion.
-
-/** What a lock records: who holds it (process-identity.ts) and which acquisition it is. Records from older code may lack boot id and start time. */
-interface LockDoc extends ProcessIdentity { token: string }
-/** `held` is a live holder, or a lock nobody can be attributed to (never judged stale: its age proves nothing). */
-type LockState = { kind: "gone" } | { kind: "held" } | { kind: "dead"; doc: LockDoc };
-
-const RECOVERY = `${LOCK}.recovery`;
-const STAGING_NAME = /^\.lock\.new\.([0-9a-f-]+|-)\.(\d+)\.(\d+|-)\.[0-9a-f]+$/;
-const TOMBSTONE_NAME = /^\.lock(?:\.recovery)?\.stale\./;
-
-async function newLockDoc(): Promise<LockDoc> {
-  return { ...(await identityOf(process.pid)), token: `${process.pid}-${randomBytes(8).toString("hex")}` };
-}
-
-/** Creates `target` holding `doc`, atomically; false when it already exists. */
-async function publishLock(dir: string, target: string, doc: LockDoc): Promise<boolean> {
-  const staging = join(dir, `${LOCK}.new.${doc.bootId ?? "-"}.${doc.pid}.${doc.startTime ?? "-"}.${randomBytes(6).toString("hex")}`);
-  await mkdir(staging);
-  try {
-    await writeFile(join(staging, "owner"), JSON.stringify(doc));
-    await rename(staging, target);
-    return true;
-  } catch (error) {
-    await rm(staging, { recursive: true, force: true });
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOTEMPTY" || code === "EEXIST") return false;
-    throw error;
-  }
-}
-
-/** Removes the lock at `path` if it is still this acquisition's. A lock somebody else holds now is not ours to remove. */
-async function releaseLock(path: string, token: string): Promise<void> {
-  try {
-    const held = await readOwner(path);
-    if (held === "gone" || held === "unreadable" || held.token !== token) return;
-    await unlink(join(path, "owner"));
-    await rmdir(path);
-  } catch { /* already gone, or replaced between the two steps */ }
-}
-
-async function readOwner(path: string): Promise<LockDoc | "gone" | "unreadable"> {
-  let text: string;
-  try {
-    text = await readFile(join(path, "owner"), "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT" && (error as NodeJS.ErrnoException).code !== "ENOTDIR") return "unreadable";
-    return (await stat(path).then(() => true, () => false)) ? "unreadable" : "gone";
-  }
-  try {
-    const doc = JSON.parse(text) as Partial<Record<keyof LockDoc, unknown>>;
-    const { pid, token, bootId, startTime } = doc;
-    if (!Number.isInteger(pid) || (pid as number) < 1 || typeof token !== "string") return "unreadable";
-    if ((bootId !== undefined && bootId !== null && typeof bootId !== "string") || (startTime !== undefined && startTime !== null && typeof startTime !== "number")) return "unreadable";
-    return { pid: pid as number, token, bootId: (bootId as string | null | undefined) ?? null, startTime: (startTime as number | null | undefined) ?? null };
-  } catch {
-    return "unreadable";
-  }
-}
-
-async function inspectLock(path: string): Promise<LockState> {
-  const doc = await readOwner(path);
-  if (doc === "gone") return { kind: "gone" };
-  if (doc === "unreadable") return { kind: "held" };
-  return (await isAlive(doc)) ? { kind: "held" } : { kind: "dead", doc };
+/** How a lock that was not acquired is reported: CONFLICT (retryable) for contention, STORAGE_FAILED with `details.cause` for everything else. */
+function lockFailure(error: WriteLockError, operation: string, waitMs: number): Failure {
+  if (error.kind === "contended") return failure("CONFLICT", `another writer held the session lock for more than ${waitMs} ms; retry (${operation})`, { retryable: true });
+  return failure("STORAGE_FAILED", `${operation} could not be saved: ${error.message}`, { details: { cause: error.kind } });
 }
 
 /** Creates the directory if needed and opens a handle. Opening reads and writes nothing; every call re-reads the manifest. */
 export async function openSession(dir: string, options: SessionOptions = {}): Promise<Result<Session>> {
+  if (options.lockWaitMs !== undefined && (!Number.isInteger(options.lockWaitMs) || options.lockWaitMs < 1)) {
+    return failure("INVALID_ARGUMENT", `lockWaitMs must be a whole number of milliseconds, at least 1; got ${String(options.lockWaitMs)}`);
+  }
   try {
     await mkdir(dir, { recursive: true });
   } catch (error) {

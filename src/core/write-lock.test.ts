@@ -31,7 +31,7 @@ describe("[S2] withWriteLock: how the helper is started", () => {
   it("[S2] spawns flock directly with the exact arguments and the lock file as descriptor 3", async () => {
     const dir = tmp("args");
     const record = join(tmp("args-out"), "record.txt");
-    const fake = fakeFlockDirectory(tmp("fake-args"), `{ echo "argv:$*"; echo "ppid:$PPID"; echo "fd0:$(readlink /proc/$$/fd/0)"; echo "fd1:$(readlink /proc/$$/fd/1)"; echo "fd3:$(readlink /proc/$$/fd/3)"; } > ${record}\nexec ${realFlock()} "$@"`);
+    const fake = fakeFlockDirectory(tmp("fake-args"), `fd0=$(readlink /proc/$$/fd/0); fd1=$(readlink /proc/$$/fd/1); fd3=$(readlink /proc/$$/fd/3)\n{ echo "argv:$*"; echo "ppid:$PPID"; echo "fd0:$fd0"; echo "fd1:$fd1"; echo "fd3:$fd3"; } > ${record}\nexec ${realFlock()} "$@"`);
 
     await withPath(fake, () => withWriteLock(dir, { waitMs: 250 }, async () => undefined));
 

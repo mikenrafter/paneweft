@@ -154,7 +154,7 @@ describe("[S2] a lock helper that dies or misbehaves never lets a mutation throu
     expect(writer.seen.map((event) => event.event), "no critical-section hook ran").not.toContain("lock-acquired");
     expect(writer.seen.map((event) => event.event)).not.toContain("read");
     expect(readdirSync(dir).filter((name) => name !== ".write.lock"), "nothing was written").toEqual([]);
-    expect(finished.fdsAfter, "the descriptor was closed").toBe(finished.fdsBefore);
+    expect(finished.lockDescriptors, "the lock descriptor was closed").toBe(0);
     const next = spawnLockWriter(dir, importing("modules"), children);
     expect((await next.done()).result, "the lock is not leaked").toMatchObject({ ok: true });
   });
@@ -178,7 +178,7 @@ describe("[S2] a lock helper that dies or misbehaves never lets a mutation throu
 
     expect(finished.result).toMatchObject({ ok: false, error: { code: "STORAGE_FAILED", details: { cause: "flock-failed" } } });
     expect(waiter.seen.map((event) => event.event)).not.toContain("lock-acquired");
-    expect(finished.fdsAfter).toBe(finished.fdsBefore);
+    expect(finished.lockDescriptors).toBe(0);
     expect(await viewIds(dir), "only the holder's change exists").toEqual(["modules"]);
     const next = spawnLockWriter(dir, importing("layout"), children);
     expect((await next.done()).result).toMatchObject({ ok: true });
@@ -227,7 +227,7 @@ describe("[S2] a missing or unusable flock is reported, never ignored", () => {
     expect(finished.result.error.message).toMatch(/flock/);
     expect(writer.seen.map((event) => event.event)).not.toContain("lock-acquired");
     expect(readdirSync(dir).filter((name) => name !== ".write.lock")).toEqual([]);
-    expect(finished.fdsAfter).toBe(finished.fdsBefore);
+    expect(finished.lockDescriptors).toBe(0);
   });
 
   // why: a `flock` that exists but cannot be executed is a different failure from a missing one (the fix differs), and also must not mutate.

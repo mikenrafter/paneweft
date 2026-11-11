@@ -5,7 +5,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readlinkSync, writeFile
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export interface WriterEvent { event: string; pid?: number; helperPid?: number; count?: number; result?: any; fdsBefore?: number; fdsAfter?: number }
+export interface WriterEvent { event: string; pid?: number; helperPid?: number; count?: number; result?: any; fdsBefore?: number; fdsAfter?: number; lockDescriptors?: number }
 export interface LockWriter {
   readonly child: ChildProcess;
   /** Every event received so far, in order (including ones already awaited). */

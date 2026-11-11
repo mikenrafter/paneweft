@@ -55,3 +55,15 @@ the owner can overturn any of them (then the cited test changes). Numbers are ci
 15. **Concurrency.** Two handles on one directory serialise mutations. For imports the tests accept either
     "both succeed" or a retryable `CONFLICT` for the loser, never a lost update. Notebook updates from one
     revision: exactly one ok, the rest `CONFLICT` with `details.currentRevision`.
+
+## Write lock (review S2, flock rewrite)
+
+Every mutation takes an exclusive kernel `flock(2)` on a fresh descriptor of the permanent file `<session>/.write.lock` (`src/core/write-lock.ts`).
+There are no owner records, stale-lock judgements or recovery steps: the kernel drops the lock when the holder's last descriptor closes, including when the
+holder is killed. Readers take no lock and use one manifest snapshot per call (`exportBundle()` derives entities, definitions and views from the same read).
+
+Failures that are about the lock never mutate:
+* `CONFLICT`, `retryable: true`: another writer held the lock for the whole `lockWaitMs` (default 15 000 ms; whole milliseconds >= 1, else `openSession` answers `INVALID_ARGUMENT`).
+* `STORAGE_FAILED`, `details.cause: "flock-missing"`: no `flock` program on PATH (util-linux is a runtime dependency; see README).
+* `STORAGE_FAILED`, `details.cause: "flock-failed"`: the helper could not start, was killed, or exited with an error other than the timeout.
+* `STORAGE_FAILED`, `details.cause: "lock-file-unavailable"`: `.write.lock` could not be opened.
