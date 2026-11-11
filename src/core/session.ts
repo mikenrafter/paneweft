@@ -469,6 +469,7 @@ class DirectorySession implements Session {
     const contentHashes: Record<string, string> = {};
     const keys: ViewKey[] = [];
     const toStore: Array<{ envelope: Envelope; hash: string }> = [];
+    const queuedHashes = new Map<string, string>();
     for (const envelope of content.views) {
       const hash = canonicalSha256(envelope);
       const key = { viewId: envelope.id, snapshotId: envelope.snapshotId };
@@ -476,8 +477,15 @@ class DirectorySession implements Session {
       const page = pages.find((candidate) => candidate.pageId === envelope.id && candidate.snapshotId === envelope.snapshotId);
       const known = existing?.hash === hash || page?.revisions.includes(hash) === true;
       if (existing !== undefined && !known) return { error: failure("SNAPSHOT_CONFLICT", `view "${key.viewId}" already exists in snapshot "${key.snapshotId}" with different content; submit a new snapshot`) };
+      const queued = queuedHashes.get(viewKey(key));
+      // validate.ts lets a bundle repeat an identical view; the manifest still gets one row (and one page entry) per key
+      if (queued !== undefined) {
+        if (queued !== hash) return { error: failure("SNAPSHOT_CONFLICT", `view "${key.viewId}" appears twice in snapshot "${key.snapshotId}" with different content; submit a new snapshot`) };
+        continue;
+      }
+      queuedHashes.set(viewKey(key), hash);
       contentHashes[hashesLabel(key)] = hash;
-      if (!keys.some((candidate) => viewKey(candidate) === viewKey(key))) keys.push(key);
+      keys.push(key);
       if (existing === undefined) toStore.push({ envelope, hash });
     }
     for (const snapshotId of new Set([...content.entities.map((entity) => entity.snapshotId), ...content.views.map((view) => view.snapshotId)])) {
