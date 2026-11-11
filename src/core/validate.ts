@@ -20,7 +20,8 @@ import type { IssueCode, ValidationIssue } from "./errors.ts";
 import { LIMITS } from "./limits.ts";
 import { createSchemaRegistry, loadSchemaDocuments, type SchemaDocument } from "../schemas/index.ts";
 import { createAjv } from "../schemas/ajv.ts";
-import type { EntityRef } from "./wire.ts";
+import type { EntityRef, Envelope } from "./wire.ts";
+import { referencedSnapshot } from "./items.ts";
 
 /** A registered view definition as the context knows it (S8): identity plus the metadata an instance must agree with. */
 export interface DefinitionMetadata { id: string; component: string; entityKind: string }
@@ -32,6 +33,8 @@ export interface ReferenceContext {
   entities?: Array<EntityRef & { snapshotId: string }>;
   /** S8: replaces the bare `definitionIds`; an instance whose component or entity kind disagrees is DEFINITION_MISMATCH. */
   definitions?: DefinitionMetadata[];
+  /** The snapshot a run output is recorded on: its result entity must be registered in THIS snapshot (S6). Unset: any snapshot (callers with no addressed snapshot). */
+  snapshotId?: string;
   /** Extra declared sources a run output's evidence may cite: the sources of the example view the run is recorded on. */
   evidenceSources?: Array<{ id: string }>;
 }
@@ -606,49 +609,50 @@ function checkBundle(bundle: Obj, prefix: string, context: ReferenceContext | un
     if (definition.entityKind !== view.entity.kind) issues.add("DEFINITION_MISMATCH", `${prefix}/views/${index}/entity/kind`, `entity kind: ${definition.entityKind}`, `Definition "${definition.id}" is for entity kind "${definition.entityKind}"; this instance's entity has kind "${view.entity.kind}".`);
   });
 
-  // notebook references to other views (bundle scope only)
-  const viewIdsInBundle = new Map<string, Set<string>>();
-  for (const view of views) {
-    const ids = viewIdsInBundle.get(view.id) ?? new Set<string>();
-    for (const id of itemIdsOf(view)) ids.add(id);
-    viewIdsInBundle.set(view.id, ids);
-  }
-  const itemsOfViewId = (viewId: string): Set<string> | null => {
+  checkNotebookReferences(views.map((view, index) => ({ view, pointer: `${prefix}/views/${index}` })), views, context, issues);
+}
+
+/**
+ * Notebook references to other views, judged in the snapshot each one ADDRESSES (CLAIM(exact-snapshot-references)): the snapshot the notebook's
+ * `links` name for that view (the rule navigation and embeds use, `referencedSnapshot`), else the notebook's own. Item ids of the same view id in
+ * another snapshot never vouch for a reference. `siblings` are the views submitted together (a bundle's views, or the lone envelope itself);
+ * `context.views` are the stored ones. Used for a bundle, a run output's bundle and a lone notebook envelope (putView, notebook_create/update).
+ */
+function checkNotebookReferences(notebooks: Array<{ view: Obj; pointer: string }>, siblings: Obj[], context: ReferenceContext | undefined, issues: IssueSet): void {
+  const itemsOfView = (viewId: string, snapshotId: string): Set<string> | null => {
     const found = new Set<string>();
     let any = false;
-    const inBundle = viewIdsInBundle.get(viewId);
-    if (inBundle !== undefined) { any = true; for (const id of inBundle) found.add(id); }
-    for (const known of context?.views ?? []) if (known.id === viewId) { any = true; for (const id of known.itemIds) found.add(id); }
+    for (const sibling of siblings) if (sibling.id === viewId && sibling.snapshotId === snapshotId) { any = true; for (const id of itemIdsOf(sibling)) found.add(id); }
+    for (const known of context?.views ?? []) if (known.id === viewId && known.snapshotId === snapshotId) { any = true; for (const id of known.itemIds) found.add(id); }
     return any ? found : null;
   };
-  const exampleExists = (id: string): boolean => {
-    for (const view of views) {
-      if (view.component === "example" && (view.id === id || itemIdsOf(view).has(id))) return true;
-    }
-    return (context?.views ?? []).some((known) => (known.component === undefined || known.component === "example") && (known.id === id || known.itemIds.includes(id)));
-  };
-  views.forEach((view, index) => {
-    if (view.component !== "notebook" || view.data === undefined) return;
+  const exampleExists = (id: string, snapshotId: string): boolean =>
+    siblings.some((sibling) => sibling.component === "example" && sibling.snapshotId === snapshotId && (sibling.id === id || itemIdsOf(sibling).has(id)))
+    || (context?.views ?? []).some((known) => known.snapshotId === snapshotId && (known.component === undefined || known.component === "example") && (known.id === id || known.itemIds.includes(id)));
+  const snapshotOf = (notebook: Obj, viewId: string, itemId?: string): string => referencedSnapshot(notebook as Envelope, viewId, itemId);
+  for (const { view, pointer } of notebooks) {
+    if (view.component !== "notebook" || view.data === undefined) continue;
     (view.data.blocks as Obj[]).forEach((block, at) => {
-      const blockPointer = `${prefix}/views/${index}/data/blocks/${at}`;
-      if (typeof block.viewId === "string" && itemsOfViewId(block.viewId) === null) {
-        issues.add("DANGLING_REFERENCE", `${blockPointer}/viewId`, "a notebook block must name a registered view", `No view "${block.viewId}" is in this bundle or the session.`);
+      const blockPointer = `${pointer}/data/blocks/${at}`;
+      if (typeof block.viewId === "string" && itemsOfView(block.viewId, snapshotOf(view, block.viewId)) === null) {
+        issues.add("DANGLING_REFERENCE", `${blockPointer}/viewId`, "a notebook block must name a registered view", `No view "${block.viewId}" is in snapshot "${snapshotOf(view, block.viewId)}" of this bundle or the session.`);
       }
       // A2: an example block names an example view (by its view id) or the scenario of one (by its item id).
-      if (typeof block.exampleId === "string" && !exampleExists(block.exampleId)) {
-        issues.add("DANGLING_REFERENCE", `${blockPointer}/exampleId`, "an example block must name a registered example", `No example view or scenario "${block.exampleId}" is in this bundle or the session.`);
+      if (typeof block.exampleId === "string" && !exampleExists(block.exampleId, snapshotOf(view, block.exampleId))) {
+        issues.add("DANGLING_REFERENCE", `${blockPointer}/exampleId`, "an example block must name a registered example", `No example view or scenario "${block.exampleId}" is in snapshot "${snapshotOf(view, block.exampleId)}" of this bundle or the session.`);
       }
       for (const key of ["supports", "contradicts"] as const) {
         (block[key] ?? []).forEach((target: Json, targetIndex: number) => {
           if (target === null || typeof target !== "object") return; // bare source ids: checked per view
-          const items = itemsOfViewId(target.viewId);
+          const snapshotId = snapshotOf(view, target.viewId, target.itemId);
+          const items = itemsOfView(target.viewId, snapshotId);
           if (items === null || !items.has(target.itemId)) {
-            issues.add("DANGLING_REFERENCE", `${blockPointer}/${key}/${targetIndex}`, "evidence must name an existing view item", `View "${target.viewId}" ${items === null ? "is not in this bundle or the session" : `has no item "${target.itemId}"`}.`);
+            issues.add("DANGLING_REFERENCE", `${blockPointer}/${key}/${targetIndex}`, "evidence must name an existing view item", `View "${target.viewId}" ${items === null ? `is not in snapshot "${snapshotId}" of this bundle or the session` : `has no item "${target.itemId}" in snapshot "${snapshotId}"`}.`);
           }
         });
       }
     });
-  });
+  }
 }
 
 /** Context checks for a lone envelope (session putView): entity and definition must already be known. */
@@ -716,7 +720,10 @@ export function validateSubmission(input: unknown, context?: ReferenceContext): 
   }
   if (kindOfDocument === "envelope") {
     checkView(root, "", issues);
-    if (context !== undefined) checkEnvelopeContext(root, context, issues);
+    if (context !== undefined) {
+      checkEnvelopeContext(root, context, issues);
+      checkNotebookReferences([{ view: root, pointer: "" }], [root], context, issues);
+    }
   } else {
     (root.views as Obj[]).forEach((view, index) => checkView(view, `/views/${index}`, issues));
     checkBundle(root, "", context, issues);
@@ -749,10 +756,11 @@ export function validateRunOutput(input: unknown, context?: ReferenceContext): V
   for (const entry of entries) checkItem(entry, sources, itemIds, null, issues);
   checkRunRules(run, "/run", issues);
   if (run.result !== undefined) {
-    const inBundle = (bundle.entities as Obj[]).some((entity) => entity.repository === run.result.repository && entity.kind === run.result.kind && entity.id === run.result.id);
-    const inContext = (context?.entities ?? []).some((entity) => entity.repository === run.result.repository && entity.kind === run.result.kind && entity.id === run.result.id);
+    const inSnapshot = (entity: { snapshotId?: string }): boolean => context?.snapshotId === undefined || entity.snapshotId === context.snapshotId;
+    const inBundle = (bundle.entities as Obj[]).some((entity) => inSnapshot(entity) && entity.repository === run.result.repository && entity.kind === run.result.kind && entity.id === run.result.id);
+    const inContext = (context?.entities ?? []).some((entity) => inSnapshot(entity) && entity.repository === run.result.repository && entity.kind === run.result.kind && entity.id === run.result.id);
     if (!inBundle && !inContext) {
-      issues.add("DANGLING_REFERENCE", "/run/result", "a run's result must be a registered entity", `Register entity ${run.result.repository}/${run.result.kind}/${run.result.id} in the output bundle so the result can be inspected.`);
+      issues.add("DANGLING_REFERENCE", "/run/result", "a run's result must be a registered entity", `Register entity ${run.result.repository}/${run.result.kind}/${run.result.id}${context?.snapshotId === undefined ? "" : ` in snapshot "${context.snapshotId}"`} in the output bundle so the result can be inspected.`);
     }
   }
   (bundle.views as Obj[]).forEach((view, index) => checkView(view, `/bundle/views/${index}`, issues));

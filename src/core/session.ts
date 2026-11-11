@@ -614,7 +614,7 @@ class DirectorySession implements Session {
       const view = (await this.readObject(entry.hash)) as Envelope;
       if (view.component !== "example") return { error: failure("INVALID_ARGUMENT", `view "${key.viewId}" is a ${view.component} view; runs are recorded on example views`) };
       const context = await this.contextFor(manifest, ((output as { bundle?: { views?: unknown[] } } | null)?.bundle?.views) ?? []);
-      const report = validateRunOutput(output, { ...context, evidenceSources: view.sources });
+      const report = validateRunOutput(output, { ...context, evidenceSources: view.sources, snapshotId: key.snapshotId });
       if (!report.ok) return { error: validationFailure("the run output", report.errors) };
       const document = output as { run: { runId: string; status: RecordedRun["status"] }; bundle: Bundle };
       if (manifest.runs.some((run) => run.viewId === key.viewId && run.snapshotId === key.snapshotId && run.runId === document.run.runId)) {

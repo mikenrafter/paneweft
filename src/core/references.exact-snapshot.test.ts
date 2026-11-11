@@ -23,7 +23,7 @@ const shared = (snapshotId: string, itemId: string): Json =>
   listView({ id: "shared", snapshotId, definitionId: "def-shared", title: "Shared", completeness: complete("fixture"), rows: [row(itemId, { name: itemId }, { entity: moduleRef(itemId) })] });
 const only1 = (): Json => listView({ id: "only-1", snapshotId: "snap-1", definitionId: "def-only", title: "Only in snap-1", completeness: complete("fixture"), rows: [row("o1", { name: "o1" })] });
 const example1 = (): Json => exampleView({ id: "ex-1", snapshotId: "snap-1", definitionId: "def-example-x", title: "Example in snap-1", completeness: complete("fixture") });
-const withLink = (notebook: Json, snapshotId: string, viewId: string): Json => ({ ...notebook, links: [{ id: `link-${viewId}`, relation: "cites", snapshotId, viewId }] });
+const withLink = (notebook: Json, snapshotId: string, viewId: string): Json => ({ ...notebook, links: [...notebook.links, { id: `link-${viewId}`, relation: "cites", snapshotId, viewId }] });
 const story = (blocks: Json[], id = "story", links?: { snapshotId: string; viewId: string }): Json => {
   const notebook = notebookView({ id, snapshotId: "snap-2", definitionId: "def-story-x", title: "Story", completeness: complete("fixture"), blocks });
   return links === undefined ? notebook : withLink(notebook, links.snapshotId, links.viewId);
