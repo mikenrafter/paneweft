@@ -97,12 +97,13 @@
       }
     },
     "Source": {
+      "description": "Where a fact came from. file/command/log/document sources record captured bytes; a 'run' source names one execution of an owner-configured runner (so run evidence can honestly be 'observed'); a 'tool' source names the compiler or language service behind 'compiled' facts (round 2, S4).",
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "kind", "sha256", "capturedAt", "method"],
+      "required": ["id", "kind"],
       "properties": {
         "id": { "$ref": "#/$defs/Id" },
-        "kind": { "enum": ["file", "command", "log", "document"], "x-hint": "Use one of: file, command, log, document." },
+        "kind": { "enum": ["file", "command", "log", "document", "run", "tool"], "x-hint": "Use one of: file, command, log, document, run, tool." },
         "repository": { "$ref": "#/$defs/Id" },
         "path": { "type": "string", "minLength": 1, "maxLength": 1024 },
         "url": {
@@ -116,10 +117,47 @@
         "method": { "$ref": "#/$defs/ShortText" },
         "runId": { "$ref": "#/$defs/Id" },
         "argv": { "type": "array", "maxItems": 256, "items": { "type": "string", "maxLength": 4096 } },
-        "exitCode": { "type": "integer" }
+        "exitCode": { "type": "integer" },
+        "run_id": { "$ref": "#/$defs/Id" },
+        "runner_id": { "$ref": "#/$defs/Id" },
+        "started_at": { "type": "string", "format": "date-time" },
+        "finished_at": { "type": "string", "format": "date-time" },
+        "name": { "$ref": "#/$defs/Label" },
+        "version": { "$ref": "#/$defs/Label" }
       },
-      "if": { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "file" } } },
-      "then": { "type": "object", "required": ["repository", "path"], "x-hint": "A file source needs 'repository' and 'path'." }
+      "allOf": [
+        {
+          "if": { "type": "object", "required": ["kind"], "properties": { "kind": { "enum": ["file", "command", "log", "document"] } } },
+          "then": {
+            "type": "object",
+            "required": ["sha256", "capturedAt", "method"],
+            "properties": { "run_id": false, "runner_id": false, "started_at": false, "finished_at": false, "name": false, "version": false },
+            "x-hint": "A file, command, log or document source needs 'sha256', 'capturedAt' and 'method' and none of the run/tool members."
+          }
+        },
+        {
+          "if": { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "file" } } },
+          "then": { "type": "object", "required": ["repository", "path"], "x-hint": "A file source needs 'repository' and 'path'." }
+        },
+        {
+          "if": { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "run" } } },
+          "then": {
+            "type": "object",
+            "required": ["run_id", "runner_id", "started_at"],
+            "properties": { "sha256": false, "capturedAt": false, "method": false, "runId": false, "path": false, "repository": false, "url": false, "argv": false, "exitCode": false, "name": false, "version": false },
+            "x-hint": "A run source is {id, kind:'run', run_id, runner_id, started_at, finished_at?} and nothing else."
+          }
+        },
+        {
+          "if": { "type": "object", "required": ["kind"], "properties": { "kind": { "const": "tool" } } },
+          "then": {
+            "type": "object",
+            "required": ["name", "version"],
+            "properties": { "sha256": false, "capturedAt": false, "method": false, "runId": false, "path": false, "repository": false, "url": false, "argv": false, "exitCode": false, "run_id": false, "runner_id": false, "started_at": false, "finished_at": false },
+            "x-hint": "A tool source is {id, kind:'tool', name, version} and nothing else."
+          }
+        }
+      ]
     },
     "Completeness": {
       "type": "object",

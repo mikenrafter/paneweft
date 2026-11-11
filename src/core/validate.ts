@@ -9,11 +9,15 @@
 import type { EntityRef } from "./wire.ts";
 import type { ValidationIssue } from "./errors.ts";
 
+/** A registered view definition as the context knows it (S8): identity plus the metadata an instance must agree with. */
+export interface DefinitionMetadata { id: string; component: string; entityKind: string }
+
 /** What lies outside the submitted document, so cross references can be checked against it. */
 export interface ReferenceContext {
   views?: Array<{ id: string; snapshotId: string; itemIds: string[] }>;
   entities?: Array<EntityRef & { snapshotId: string }>;
-  definitionIds?: string[];
+  /** S8: replaces the bare `definitionIds`; an instance whose component or entity kind disagrees is DEFINITION_MISMATCH. */
+  definitions?: DefinitionMetadata[];
 }
 
 export interface ValidationNote { pointer: string; message: string }

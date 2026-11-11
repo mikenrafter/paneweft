@@ -29,9 +29,17 @@
       "type": "object",
       "required": ["status"],
       "properties": {
-        "status": { "enum": ["fresh", "stale", "unknown"] },
+        "status": { "enum": ["fresh", "stale", "unknown", "unverified"] },
         "changedPaths": { "type": "array", "items": { "type": "string" } },
-        "inaccessibleRoots": { "type": "array", "items": { "type": "string" } }
+        "inaccessibleRoots": { "type": "array", "items": { "type": "string" } },
+        "unverified": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["repository", "code", "reason"],
+            "properties": { "repository": { "type": "string" }, "code": { "type": "string" }, "reason": { "type": "string", "minLength": 1 } }
+          }
+        }
       }
     },
     "provenance": {
@@ -61,7 +69,29 @@
       }
     },
     "notice": { "type": "string" },
-    "items": { "type": "array" },
+    "items": { "type": "array", "items": { "if": { "type": "object", "required": ["fragment"] }, "then": { "$ref": "#/$defs/FragmentItem" } } },
     "cursor": { "type": ["string", "null"] }
+  },
+  "$defs": {
+    "FragmentItem": {
+      "description": "One slice of an item that cannot fit a page whole (round 2, S3). 'text' is a code-point-aligned slice of the item's canonical JSON text; concatenating the slices of one item_id in offset order yields the whole item.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fragment"],
+      "properties": {
+        "fragment": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["item_id", "offset", "length", "total", "text"],
+          "properties": {
+            "item_id": { "type": "string", "minLength": 1 },
+            "offset": { "type": "integer", "minimum": 0 },
+            "length": { "type": "integer", "minimum": 1 },
+            "total": { "type": "integer", "minimum": 1 },
+            "text": { "type": "string", "minLength": 1 }
+          }
+        }
+      }
+    }
   }
 }

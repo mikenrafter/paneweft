@@ -9,6 +9,12 @@
   "properties": {
     "schemaVersion": { "const": "paneweft.run/1", "x-hint": "Use the literal \"paneweft.run/1\"." },
     "run": { "$ref": "urn:paneweft:schema:component:example:1#/$defs/Run" },
-    "bundle": { "$ref": "urn:paneweft:schema:bundle:1" }
+    "bundle": { "$ref": "urn:paneweft:schema:bundle:1" },
+    "sources": {
+      "description": "Sources the runner declares for this run, typically one 'run' source carrying the run id (round 2, S4). Run and assertion evidence resolves against these plus the sources of the example view the run is recorded on.",
+      "type": "array",
+      "maxItems": 512,
+      "items": { "$ref": "urn:paneweft:schema:common:1#/$defs/Source" }
+    }
   }
 }

@@ -1,7 +1,7 @@
 // Cross-view links and evidence (design section 3, MC8): exact addressing by snapshot, view
 // instance and optional item. Navigation never silently mixes snapshots; a missing target is a
 // named unresolved result, never the newest snapshot.
-import type { EntityRef } from "./wire.ts";
+import type { EntityRef, Source } from "./wire.ts";
 import type { Session, ViewKey } from "./session.ts";
 import type { NumberedLine } from "./anchors.ts";
 
@@ -47,8 +47,18 @@ export async function resolveItemSource(_session: Session, _key: ViewKey, _itemI
   return { status: "unresolved", code: "UNRESOLVED_TARGET", message: "resolveItemSource is not implemented" };
 }
 
-export interface EvidenceStep { target: LinkTarget; resolution: LinkResolution; relation: "supports" | "contradicts" }
-/** Resolves every supports/contradicts target of a notebook claim block, in declared order. STUB. */
+/** S11: evidence cites a declared source of the claim's view as well as items of views. */
+export type SourceTarget = { snapshotId: string; viewId: string; sourceId: string };
+export type SourceResolution =
+  | { status: "resolved"; sourceId: string; source: Source }
+  | { status: "unresolved"; code: "UNRESOLVED_TARGET"; missing: "source"; message: string };
+export type EvidenceStep =
+  | { relation: "supports" | "contradicts"; target: LinkTarget; resolution: LinkResolution }
+  | { relation: "supports" | "contradicts"; target: SourceTarget; resolution: SourceResolution };
+/**
+ * Resolves every supports/contradicts target of a notebook claim block, in declared order (source ids and
+ * `{viewId,itemId}` targets interleaved exactly as the claim lists them; supports first, then contradicts). STUB.
+ */
 export async function resolveClaimEvidence(_session: Session, _key: ViewKey, _claimBlockId: string): Promise<EvidenceStep[]> {
   return [];
 }

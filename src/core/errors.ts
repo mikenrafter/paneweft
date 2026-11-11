@@ -9,6 +9,8 @@ export const ISSUE_CODES = [
   // semantic
   "DUPLICATE_ID", "DANGLING_REFERENCE", "INVALID_LINE_RANGE", "ANNOTATION_OUTSIDE_EXCERPT", "TREE_CYCLE",
   "ALIAS_CYCLE", "PATH_DISCONTINUOUS", "PROVENANCE_RUN_REQUIRED", "PASSED_WITH_FAILED_ASSERTION",
+  // round 2: S4 compiled facts need a tool source, S8 definition metadata and conflicting identities
+  "PROVENANCE_TOOL_REQUIRED", "DEFINITION_MISMATCH", "IDENTITY_CONFLICT",
   // limits
   "LIMIT_EXCEEDED",
 ] as const;

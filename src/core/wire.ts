@@ -7,10 +7,15 @@ export type Provenance = "read" | "parsed" | "compiled" | "observed" | "inferred
 export type Scalar = string | number | boolean | null;
 export interface Anchor { repository: string; path: string; lines: [number, number] }
 export interface EntityRef { repository: string; id: string; kind: string }
-export interface Source {
+export interface CapturedSource {
   id: string; kind: "file" | "command" | "log" | "document"; repository?: string; path?: string; url?: string;
   sha256: string; capturedAt: string; method: string; runId?: string; argv?: string[]; exitCode?: number;
 }
+/** S4: one execution of an owner-configured runner; makes example evidence honestly `observed`. */
+export interface RunSource { id: string; kind: "run"; run_id: string; runner_id: string; started_at: string; finished_at?: string }
+/** S4: the compiler or language service behind `compiled` facts. */
+export interface ToolSource { id: string; kind: "tool"; name: string; version: string }
+export type Source = CapturedSource | RunSource | ToolSource;
 export type Completeness =
   | { status: "complete"; criterion: string }
   | { status: "partial"; gaps: Array<{ id: string; question: string; reason: string }> }
