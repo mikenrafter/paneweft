@@ -15,6 +15,13 @@ import { exampleBase, item, listBase, passedRun, runKindSource, runSource } from
 const check = (doc: unknown) => calm(() => validateSubmission(doc), "validateSubmission");
 const checkRun = (doc: unknown, context?: ReferenceContext) => calm(() => validateRunOutput(doc, context), "validateRunOutput");
 const assertion = (id: string, passed: boolean) => item(id, { statement: `statement ${id}`, passed });
+/** The example base plus a second observed run `run-b` that cites its own `run` source s3 (N2: no run is observed through another run's source). */
+const withSecondRun = (runId: string, assertions: Array<Record<string, unknown>>) =>
+  patch(
+    exampleBase(),
+    { op: "add", path: "/sources/-", value: runKindSource("s3", runId) },
+    { op: "add", path: "/data/runs/-", value: passedRun({ id: "run-b", runId, assertions, evidence: ["s3"] }) },
+  );
 
 describe("[MC17] run status rules inside an example view", () => {
   // why: the controls first: a passed run with a result and passing assertions is the contract's happy path.
@@ -48,12 +55,8 @@ describe("[MC17] run status rules inside an example view", () => {
     expectAccepted(check(patch(exampleBase(), { op: "add", path: "/data/runs/0/assertions/-", value: assertion("as-2", true) })), "envelope");
   });
   it("[MC17] on the second run, the issue is addressed at /data/runs/1/status", () => {
-    const second = passedRun({
-      id: "run-b",
-      runId: "run-2",
-      assertions: [assertion("as-3", false)],
-    });
-    expectRejected(check(patch(exampleBase(), { op: "add", path: "/data/runs/-", value: second })), [{ code: "PASSED_WITH_FAILED_ASSERTION", pointer: "/data/runs/1/status" }]);
+    // N2 fixture repair: the second observed run cites a run source of its OWN run id.
+    expectRejected(check(withSecondRun("run-2", [assertion("as-3", false)])), [{ code: "PASSED_WITH_FAILED_ASSERTION", pointer: "/data/runs/1/status" }]);
   });
 
   // why: "Failed assertions may still return an inspectable result": a failed run with failing assertions AND
@@ -96,20 +99,20 @@ describe("[MC17] run status rules inside an example view", () => {
 });
 
 describe("[MC17] run ids within one view", () => {
-  const secondRun = (runId: string) => passedRun({ id: "run-b", runId, assertions: [assertion("as-2", true)] });
+  const secondRun = (runId: string) => withSecondRun(runId, [assertion("as-2", true)]);
 
   // why: "repeated runs with distinct run IDs" (design 7 MC17): a run id names one recorded run, so two runs
   //      sharing it in one view are DUPLICATE_ID on the later run's runId. The twin with distinct ids is accepted.
   // proves: CLAIM(MC17)
   it("[MC17] positive control: two runs with distinct run ids are accepted", () => {
-    expectAccepted(check(patch(exampleBase(), { op: "add", path: "/data/runs/-", value: secondRun("run-2") })), "envelope");
+    expectAccepted(check(secondRun("run-2")), "envelope");
   });
   it("[MC17] a repeated runId is DUPLICATE_ID at the later run's runId", () => {
-    expectRejected(check(patch(exampleBase(), { op: "add", path: "/data/runs/-", value: secondRun("run-1") })), [{ code: "DUPLICATE_ID", pointer: "/data/runs/1/runId" }], "envelope");
+    expectRejected(check(secondRun("run-1")), [{ code: "DUPLICATE_ID", pointer: "/data/runs/1/runId" }], "envelope");
   });
   it("[MC17] a runId colliding with a DIFFERENT item id is not a duplicate (separate namespaces)", () => {
     // run-a is the item id of run 0; reuse that string as the runId of the second run.
-    expectAccepted(check(patch(exampleBase(), { op: "add", path: "/data/runs/-", value: secondRun("run-a") })), "envelope");
+    expectAccepted(check(secondRun("run-a")), "envelope");
   });
 });
 
