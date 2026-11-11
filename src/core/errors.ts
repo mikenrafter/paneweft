@@ -48,6 +48,11 @@ export interface OperationError {
 
 export type Result<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: OperationError };
 
+export const ok = <T>(value: T): Result<T> => ({ ok: true, value });
+export function err<T = never>(code: OperationErrorCode, message: string, extra: { errors?: ValidationIssue[]; retryable?: boolean; details?: Record<string, unknown> } = {}): Result<T> {
+  return { ok: false, error: { schemaVersion: "paneweft.error/1", code, message, errors: extra.errors ?? [], retryable: extra.retryable ?? false, ...(extra.details === undefined ? {} : { details: extra.details }) } };
+}
+
 /** STUB marker. A stub returns this so that tests fail on assertions rather than on thrown errors. */
 export function notImplemented(what: string): OperationError {
   return {

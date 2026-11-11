@@ -32,6 +32,7 @@ import { fragmentSource, minimumBytes, paginate, type Entry, type Format, type L
 import { layoutOf, summariseView, QueryError, type EmbedInfo, type ReplyExtras, type ViewFilter, type ViewOrder, type ViewQuery, type ViewSummary } from "./summaries.ts";
 import { loadSchemaDocuments, type ComponentId } from "../schemas/index.ts";
 import { compareCodeUnits } from "./canonical.ts";
+import { searchSession } from "./search.ts";
 
 export type ReplyFormat = "text" | "json";
 
@@ -519,51 +520,9 @@ async function exampleRecord(session: Session, args: { viewId: string; snapshotI
 
 // -- search ----------------------------------------------------------------------------------------------------------------------
 
-const SEARCH_TYPES = ["entity", "view", "example", "claim"] as const;
-interface SearchDocument { type: (typeof SEARCH_TYPES)[number]; id: string; snapshotId: string; texts: string[]; text: string; extra: Record<string, unknown> }
-
 async function search(session: Session, args: { query: string; scope?: { entity: EntityRef; snapshotId: string } }, context: Context): Promise<OperationOutcome> {
-  const documents: SearchDocument[] = [];
-  const entities = await session.listEntities();
-  const inScope = (snapshotId: string, ref: EntityRef): boolean => {
-    if (args.scope === undefined) return true;
-    if (snapshotId !== args.scope.snapshotId) return false;
-    const same = (a: EntityRef, b: EntityRef) => a.repository === b.repository && a.kind === b.kind && a.id === b.id;
-    const origin = entities.find((entity) => entity.snapshotId === snapshotId && same(entity, args.scope?.entity as EntityRef));
-    return same(ref, args.scope.entity) || (origin?.relations ?? []).some((relation) => same(relation.target, ref));
-  };
-  for (const entity of entities) {
-    if (inScope(entity.snapshotId, entity)) documents.push({ type: "entity", id: entity.id, snapshotId: entity.snapshotId, texts: [entity.label], text: entity.label, extra: { entity: { repository: entity.repository, id: entity.id, kind: entity.kind } } });
-  }
-  for (const key of await session.listViews()) {
-    const stored = await session.getView(key);
-    if (!stored.ok) continue;
-    const view = stored.value.envelope;
-    if (!inScope(view.snapshotId, view.entity)) continue;
-    documents.push({ type: "view", id: view.id, snapshotId: view.snapshotId, texts: [view.title, view.question], text: view.title, extra: { viewId: view.id, component: view.component } });
-    if (view.component === "example" && view.data !== undefined) {
-      const label = (view.data as { scenario: { label?: string; id: string } }).scenario.label ?? (view.data as { scenario: { id: string } }).scenario.id;
-      documents.push({ type: "example", id: view.id, snapshotId: view.snapshotId, texts: [label], text: label, extra: { viewId: view.id } });
-    }
-    if (view.component === "notebook") {
-      for (const block of viewItems(view)) {
-        if (block.kind === "claim") documents.push({ type: "claim", id: block.id, snapshotId: view.snapshotId, texts: [String(block.statement)], text: String(block.statement), extra: { viewId: view.id, itemId: block.id } });
-      }
-    }
-  }
-  const needle = args.query.toLowerCase();
-  const tierOf = (texts: string[]): number | null => {
-    let best: number | null = null;
-    for (const text of texts) {
-      const lower = text.toLowerCase();
-      const tier = lower === needle ? 0 : lower.startsWith(needle) ? 1 : lower.includes(needle) ? 2 : null;
-      if (tier !== null && (best === null || tier < best)) best = tier;
-    }
-    return best;
-  };
-  const ranked = documents.flatMap((document) => { const tier = tierOf(document.texts); return tier === null ? [] : [{ document, tier }]; })
-    .sort((a, b) => a.tier - b.tier || SEARCH_TYPES.indexOf(a.document.type) - SEARCH_TYPES.indexOf(b.document.type) || compareCodeUnits(a.document.id, b.document.id) || compareCodeUnits(a.document.snapshotId, b.document.snapshotId));
-  const entries: Entry[] = ranked.map(({ document }) => ({
+  const ranked = await searchSession(session, args.query, args.scope);
+  const entries: Entry[] = ranked.map((document) => ({
     id: `${document.type}:${document.id}@${document.snapshotId}`, kind: "item", countable: true,
     json: { type: document.type, id: document.id, text: document.text, snapshotId: document.snapshotId, ...document.extra },
     text: `${document.type} ${document.id} ${JSON.stringify(document.text)} (${document.snapshotId})`,
