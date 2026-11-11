@@ -14,6 +14,8 @@
 //   is written, so a power loss cannot leave a durable manifest pointing at objects that never reached the disk [session.durability.test.ts, T10].
 // CLAIM(snapshot-immutable): a stored (viewId, snapshotId) never changes; different content under the same key is
 //   SNAPSHOT_CONFLICT, identical content is idempotent [design section 4; MC20].
+// CLAIM(preflight-parity): `preflight` runs the very admission code importBundle and putView run inside their lock (`admitBundle`, `admitView`), with a
+//   stage function that writes nothing, so what it accepts is what an import would accept at that manifest [operations.validate-session.test.ts, #4].
 // CLAIM(process-lock): every mutation holds the session write lock (write-lock.ts, flock) from BEFORE it reads mutable state until after the
 //   manifest swap, so two processes (or two handles) serialise and neither can act on a stale read [session.processes.test.ts, S5;
 //   session.write-lock.test.ts]. Readers take no lock: each reads ONE manifest snapshot (CLAIM(manifest-snapshot-read), session.write-lock.test.ts).
@@ -80,6 +82,12 @@ export interface SessionOptions {
 export interface Session {
   readonly dir: string;
   importBundle(input: unknown, options?: { predecessorSnapshotId?: string }): Promise<Result<ImportSummary>>;
+  /**
+   * What importBundle (a `paneweft.bundle/1`) or putView (an envelope) would answer for `input` against this session as it is now, with nothing stored
+   * and no lock taken: the same validation with the session's reference context and the same identity and snapshot conflict checks, through the same code
+   * (CLAIM(preflight-parity)). `validate` with a session is this.
+   */
+  preflight(input: unknown, options?: { predecessorSnapshotId?: string }): Promise<Result<{ kind: "envelope" | "bundle"; notes: ValidationNote[] }>>;
   /** A single envelope; its entity and view definition must already be registered. */
   putView(input: unknown, options?: { predecessorSnapshotId?: string }): Promise<Result<ImportSummary>>;
   getView(key: ViewKey): Promise<Result<StoredView>>;
@@ -532,25 +540,41 @@ class DirectorySession implements Session {
     };
   }
 
+  /** The admission of a bundle against `manifest`: validation with the session's reference context, then the conflict checks and the merge. */
+  private async admitBundle(manifest: Manifest, input: unknown, predecessor: string | undefined, stage: (value: unknown) => Promise<string>): Promise<{ manifest: Manifest; value: ImportSummary } | { error: Failure }> {
+    const report = validateSubmission(input, await this.contextFor(manifest, (input as { views?: unknown[] } | null)?.views ?? []));
+    if (!report.ok) return { error: validationFailure("the bundle", report.errors) };
+    if (report.kind !== "bundle") return { error: failure("INVALID_ARGUMENT", "importBundle takes a paneweft.bundle/1 document; use putView for a single envelope", { errors: [{ code: "SCHEMA_VERSION", pointer: "/schemaVersion", constraint: 'const: "paneweft.bundle/1"', hint: 'Use the literal "paneweft.bundle/1".' }] }) };
+    const merged = await this.merge(manifest, input as Bundle, predecessor, stage);
+    if ("error" in merged) return merged;
+    return { manifest: merged.manifest, value: { ...merged.summary, notes: report.notes } };
+  }
+
+  /** The admission of a single envelope against `manifest`; see admitBundle. */
+  private async admitView(manifest: Manifest, input: unknown, predecessor: string | undefined, stage: (value: unknown) => Promise<string>): Promise<{ manifest: Manifest; value: ImportSummary } | { error: Failure }> {
+    const report = validateSubmission(input, await this.contextFor(manifest, [input]));
+    if (!report.ok) return { error: validationFailure("the view", report.errors) };
+    if (report.kind !== "envelope") return { error: failure("INVALID_ARGUMENT", "putView takes a paneweft.view/1 envelope; use importBundle for a bundle") };
+    const merged = await this.merge(manifest, { entities: [], definitions: [], views: [input as Envelope] }, predecessor, stage);
+    if ("error" in merged) return merged;
+    return { manifest: merged.manifest, value: { ...merged.summary, notes: report.notes } };
+  }
+
   async importBundle(input: unknown, options: { predecessorSnapshotId?: string } = {}): Promise<Result<ImportSummary>> {
-    return this.mutate<ImportSummary>("importBundle", async (manifest, stage) => {
-      const report = validateSubmission(input, await this.contextFor(manifest, (input as { views?: unknown[] } | null)?.views ?? []));
-      if (!report.ok) return { error: validationFailure("the bundle", report.errors) };
-      if (report.kind !== "bundle") return { error: failure("INVALID_ARGUMENT", "importBundle takes a paneweft.bundle/1 document; use putView for a single envelope", { errors: [{ code: "SCHEMA_VERSION", pointer: "/schemaVersion", constraint: 'const: "paneweft.bundle/1"', hint: 'Use the literal "paneweft.bundle/1".' }] }) };
-      const merged = await this.merge(manifest, input as Bundle, options.predecessorSnapshotId, stage);
-      if ("error" in merged) return merged;
-      return { manifest: merged.manifest, value: { ...merged.summary, notes: report.notes } };
-    });
+    return this.mutate<ImportSummary>("importBundle", (manifest, stage) => this.admitBundle(manifest, input, options.predecessorSnapshotId, stage));
   }
 
   async putView(input: unknown, options: { predecessorSnapshotId?: string } = {}): Promise<Result<ImportSummary>> {
-    return this.mutate<ImportSummary>("putView", async (manifest, stage) => {
-      const report = validateSubmission(input, await this.contextFor(manifest, [input]));
-      if (!report.ok) return { error: validationFailure("the view", report.errors) };
-      if (report.kind !== "envelope") return { error: failure("INVALID_ARGUMENT", "putView takes a paneweft.view/1 envelope; use importBundle for a bundle") };
-      const merged = await this.merge(manifest, { entities: [], definitions: [], views: [input as Envelope] }, options.predecessorSnapshotId, stage);
-      if ("error" in merged) return merged;
-      return { manifest: merged.manifest, value: { ...merged.summary, notes: report.notes } };
+    return this.mutate<ImportSummary>("putView", (manifest, stage) => this.admitView(manifest, input, options.predecessorSnapshotId, stage));
+  }
+
+  async preflight(input: unknown, options: { predecessorSnapshotId?: string } = {}): Promise<Result<{ kind: "envelope" | "bundle"; notes: ValidationNote[] }>> {
+    return this.withReads(async () => {
+      const manifest = await this.readManifest();
+      const isBundle = typeof input === "object" && input !== null && (input as { schemaVersion?: unknown }).schemaVersion === "paneweft.bundle/1";
+      const dry = async (value: unknown): Promise<string> => canonicalSha256(value); // names the object, writes nothing
+      const admitted = isBundle ? await this.admitBundle(manifest, input, options.predecessorSnapshotId, dry) : await this.admitView(manifest, input, options.predecessorSnapshotId, dry);
+      return "error" in admitted ? admitted.error : ok({ kind: isBundle ? "bundle" as const : "envelope" as const, notes: admitted.value.notes });
     });
   }
 

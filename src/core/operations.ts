@@ -240,11 +240,28 @@ function describeComponent(args: { component: ComponentId }, context: Context): 
   return { ok: true, format, body, payload, cursor: next };
 }
 
-function validateOperation(args: { input: unknown }, context: Context): OperationOutcome {
-  const report = validateSubmission(args.input);
-  if (!report.ok) return failed(context.format, "VALIDATION_FAILED", `the input failed validation with ${report.errors.length} issue${report.errors.length === 1 ? "" : "s"}; first: ${report.errors[0]?.code} at "${report.errors[0]?.pointer}"`, { errors: report.errors });
-  const payload = { schemaVersion: "paneweft.validate/1", valid: true, kind: report.kind, notes: report.notes };
-  const body = context.format === "json" ? JSON.stringify(payload) : `valid: ${report.kind}\n${report.notes.map((note) => `note: ${note.pointer}: ${note.message}\n`).join("")}`;
+const IDENTITY_NONE = "none (the document alone was checked, not compared with any session; pass --session DIR to also check registered definitions, entities and stored views)";
+const IDENTITY_SESSION = "session (compared with this session's registered definitions, entities and stored views, as render would)";
+
+/**
+ * Without a session: the document alone. With one: exactly what render would decide (Session.preflight), nothing stored. The reply says which (#4):
+ * `identity` is `session` or `none`.
+ */
+async function validateOperation(session: Session | null, args: { input: unknown }, context: Context): Promise<OperationOutcome> {
+  let kind: string;
+  let notes: ValidationNote[];
+  if (session === null) {
+    const report = validateSubmission(args.input);
+    if (!report.ok) return failed(context.format, "VALIDATION_FAILED", `the input failed validation with ${report.errors.length} issue${report.errors.length === 1 ? "" : "s"}; first: ${report.errors[0]?.code} at "${report.errors[0]?.pointer}"`, { errors: report.errors });
+    ({ kind, notes } = report);
+  } else {
+    const checked = await session.preflight(args.input);
+    if (!checked.ok) return failedFrom(context.format, checked.error);
+    ({ kind, notes } = checked.value);
+  }
+  const identity = session === null ? "none" : "session";
+  const payload = { schemaVersion: "paneweft.validate/1", valid: true, kind, identity, notes };
+  const body = context.format === "json" ? JSON.stringify(payload) : `valid: ${kind}\nidentity: ${session === null ? IDENTITY_NONE : IDENTITY_SESSION}\n${notes.map((note) => `note: ${note.pointer}: ${note.message}\n`).join("")}`;
   return { ok: true, format: context.format, body, payload, cursor: null };
 }
 
@@ -602,7 +619,7 @@ async function dispatchOperation(session: Session | null, name: string, args: un
     switch (name) {
       case "list_components": return listComponents(input, context);
       case "describe_component": return describeComponent(input as { component: ComponentId }, context);
-      case "validate": return validateOperation(input as { input: unknown }, context);
+      case "validate": return await validateOperation(session, input as { input: unknown }, context);
       case "register_view": return await registerView(live, input as { definition: unknown; expectedRevision: number }, context);
       case "render": return await render(live, input as { input: Record<string, unknown> }, context);
       case "open_entity": return await openEntityOperation(live, input as { entity: EntityRef; snapshotId: string }, context);

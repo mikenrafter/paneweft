@@ -70,6 +70,7 @@ the arbiter).
 
 **WIRE-1. `validate` success.** Proposed JSON body: an object with `"valid": true` (plus optional notes). The contract says only
 "returns valid". Text form is unpinned.
+Since #4 the body also carries `"identity": "session"` (the input was compared with the session exactly as `render` would, nothing stored) or `"identity": "none"` (document only); the text form has an `identity:` line after `valid: <kind>`.
 
 **WIRE-2. JSON replies.** `render`, `inspect_view`, `open_entity` and `notebook_get` JSON bodies are `reply.schema.json`
 objects with the reply fields at the top level: `view.id`, `counts`, `cursor`, `items[]` where each item has `id`. `render` adds

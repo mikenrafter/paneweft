@@ -9,7 +9,7 @@
 //   budgets, cursors and errors all come from executeOperation, so CLI and MCP bodies for one request are byte-identical
 //   [test/parity.test.ts, MC11]. The two exceptions are `example run` (it executes an owner runner, which only the CLI may do) and the
 //   long-running `serve` / `mcp` commands.
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { executeOperation, type OperationOutcome } from "../core/operations.ts";
 import { boundError, replyBudget } from "../core/reply-budget.ts";
@@ -336,6 +336,10 @@ async function serveCommand(parsed: Parsed, session: Session | null, io: CliIo):
   return 0;
 }
 
+async function isDirectory(path: string): Promise<boolean> {
+  try { return (await stat(path)).isDirectory(); } catch { return false; }
+}
+
 export async function runCli(argv: string[], io: CliIo): Promise<number> {
   try {
     const parsed = parseArguments(argv);
@@ -350,6 +354,11 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
       // the directory WAS given; saying SESSION_REQUIRED would hide why it cannot be used
       if (!opened.ok) return printError(opened.error, io);
       session = opened.value;
+    } else if (dir !== undefined && dir !== "" && command.tool === "validate" && (await isDirectory(resolve(io.cwd, dir)))) {
+      // `validate` compares with a session when it is given one that exists (#4); it never creates one, and a session it cannot open leaves it
+      // document-only, which its reply labels `identity: none`
+      const opened = await openSession(resolve(io.cwd, dir));
+      if (opened.ok) session = opened.value;
     }
     try {
       const word = command.words.join(" ");

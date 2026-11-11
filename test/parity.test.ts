@@ -61,11 +61,13 @@ function withoutFreshness(lines: string[], freshnessIndex: number): string[] {
 const LIST_QUESTION = "question: What is in this set, and which members matter?";
 
 describe("parity: valid and invalid submissions (MC11)", () => {
+  // #4: `validate` with a session compares the input with the session (as render does), and the MCP server always has one, so the CLI is given the same
+  //   session here. The CLI without a session validates the document alone and says `identity: none` (operations.validate-session.test.ts).
   // why: a valid graph is accepted identically by both transports; the verdict shape `valid: true` is proposed in
   //      docs/contract-additions/wire.md (WIRE-1) because the contract only says "returns valid".
   // proves: CLAIM(MC11)
   it("[MC11] validate-valid-graph.json: exit 0 / not an error, byte-identical, valid true", async () => {
-    const pair = await readPair("validate", "validate-valid-graph.json", false);
+    const pair = await readPair("validate", "validate-valid-graph.json");
     expectParity(pair);
     expect(pair.cli.exitCode).toBe(0);
     expect(parseBody(pair.cli.stdout, "stdout").valid).toBe(true);
@@ -75,7 +77,7 @@ describe("parity: valid and invalid submissions (MC11)", () => {
   //      the rule text "type: integer" (red-contract 2: constraint states the rule; hints are never empty).
   // proves: CLAIM(MC11), CLAIM(MC1)
   it("[MC11] validate-graph-string-depth.json: VALIDATION_FAILED with exactly [TYPE /data/focus/depth], identical bodies", async () => {
-    const pair = await readPair("validate", "validate-graph-string-depth.json", false);
+    const pair = await readPair("validate", "validate-graph-string-depth.json");
     expectParity(pair);
     expect(pair.cli.exitCode).toBe(1);
     expect(pair.mcp.isError).toBe(true);
@@ -92,7 +94,7 @@ describe("parity: valid and invalid submissions (MC11)", () => {
   // why: an unknown component is its own issue code and stops data checking (red-contract 2): exactly one issue.
   // proves: CLAIM(MC11), CLAIM(MC1)
   it("[MC11] validate-unknown-component.json: VALIDATION_FAILED with exactly [UNKNOWN_COMPONENT /component]", async () => {
-    const pair = await readPair("validate", "validate-unknown-component.json", false);
+    const pair = await readPair("validate", "validate-unknown-component.json");
     expectParity(pair);
     const body = parseBody(pair.cli.stdout, "stdout");
     expect(body.code).toBe("VALIDATION_FAILED");
