@@ -22,8 +22,6 @@ export const OPERATION_ERROR_CODES = [
   "REPOSITORY_NOT_REGISTERED", "INVALID_PATH", "LINES_OUT_OF_RANGE", "SNAPSHOT_CONFLICT", "STORAGE_FAILED",
   "STORAGE_CORRUPT", "RUNNER_NOT_FOUND", "RUNNER_TIMEOUT", "RUNNER_OUTPUT_INVALID", "RUNNER_FAILED",
   "DUPLICATE_RUN", "NON_LOOPBACK_HOST", "FORBIDDEN_ORIGIN", "UNAUTHORIZED", "NO_SUCH_PANE", "INTERNAL",
-  // Present only in stubs. Green phase deletes every use; `grep -r NOT_IMPLEMENTED src` must be empty.
-  "NOT_IMPLEMENTED",
 ] as const;
 export type OperationErrorCode = (typeof OPERATION_ERROR_CODES)[number];
 
@@ -51,19 +49,4 @@ export type Result<T> = { readonly ok: true; readonly value: T } | { readonly ok
 export const ok = <T>(value: T): Result<T> => ({ ok: true, value });
 export function err<T = never>(code: OperationErrorCode, message: string, extra: { errors?: ValidationIssue[]; retryable?: boolean; details?: Record<string, unknown> } = {}): Result<T> {
   return { ok: false, error: { schemaVersion: "paneweft.error/1", code, message, errors: extra.errors ?? [], retryable: extra.retryable ?? false, ...(extra.details === undefined ? {} : { details: extra.details }) } };
-}
-
-/** STUB marker. A stub returns this so that tests fail on assertions rather than on thrown errors. */
-export function notImplemented(what: string): OperationError {
-  return {
-    schemaVersion: "paneweft.error/1",
-    code: "NOT_IMPLEMENTED",
-    message: `${what} is not implemented (red phase stub)`,
-    errors: [],
-    retryable: false,
-  };
-}
-
-export function notImplementedResult<T>(what: string): Result<T> {
-  return { ok: false, error: notImplemented(what) };
 }
