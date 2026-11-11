@@ -15,7 +15,8 @@ interface SourceBody {
   revision: string | null;
   repository: string;
   path: string;
-  viewId: string;
+  origin?: "stored-excerpt" | "registered-root"; // absent from an older server: the stored excerpt
+  viewId: string | null;
   snapshotId: string;
   recordedSha256: string | null;
   currentSha256: string | null;
@@ -90,6 +91,7 @@ export function createHttpSource(baseUrl: string, token: string, fetchImpl: type
         revision: body.revision,
         path: body.path,
         highlight: body.highlight,
+        origin: body.origin ?? "stored-excerpt",
         stored: { viewId: body.viewId, snapshotId: body.snapshotId, lines: body.numberedLines.filter((line) => line.n >= body.highlight[0] && line.n <= body.highlight[1]) },
         currency: { state: body.currency === "current" ? "fresh" : body.currency, recordedSha256: body.recordedSha256, currentSha256: body.currentSha256 },
       });

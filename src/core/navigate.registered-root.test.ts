@@ -8,10 +8,12 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { sha256Hex } from "../../test/helpers/hash.ts";
-import { failure, okJson, okText, useOps } from "../../test/helpers/ops-env.ts";
+import { failure, okJson, useOps } from "../../test/helpers/ops-env.ts";
 import { SHA, bundleOf, listView, row, sourceView, withFreshnessRoot, type Json } from "../../test/helpers/ops-views.ts";
 import { useTempDirs } from "../../test/helpers/tmp.ts";
 import { MAX_CONFINED_FILE_BYTES } from "./confined-read.ts";
+import { createSessionSource } from "../viewer/session-source.ts";
+import { must } from "../../test/helpers/must.ts";
 
 const open = useOps();
 const tempDir = useTempDirs();
@@ -50,11 +52,21 @@ describe("[#19] open-source reads a fresh registered file when no excerpt covers
 
   it("[#19] text: the origin line and the numbered lines", async () => {
     const { env } = await setup();
-    const text = okText(await env.call("navigate", NAV)).raw;
+    const outcome = await env.call("navigate", NAV);
+    expect(outcome.ok, outcome.body).toBe(true);
+    const text = outcome.body;
     expect(text).toContain("origin: registered-root");
     expect(text).toContain("3: export function mapping() {");
     expect(text).toContain("4:   return choose();");
     expect(text).toContain("currency: fresh");
+  });
+
+  // why: the viewer asks the same question through its own adapter; it must get the same opening, not "unresolved", and must be able to tell the lines
+  //   have no holding view (it would otherwise fetch a view called null).
+  it("[#19] the viewer's source adapter resolves it too, with no holding view", async () => {
+    const { env } = await setup();
+    const opening = must(await createSessionSource(env.session).openItemSource({ viewId: "modules", snapshotId: "snap-1" }, "m"));
+    expect(opening).toMatchObject({ status: "resolved", origin: "registered-root", highlight: [3, 4], stored: { viewId: null, snapshotId: "snap-1" }, currency: { state: "fresh" } });
   });
 
   // why: the cap of the confined read path (16 MiB) holds here too: a file of exactly the cap reads, one byte more is refused with an answer that names the cap.

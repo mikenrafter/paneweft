@@ -447,8 +447,8 @@ async function navigate(session: Session, args: { pane: Record<string, unknown>;
     const query = queryDigest({ tool: "navigate", viewKey, itemId: args.itemId, action: "open-source" });
     const listing = listingLayout({
       schema: "paneweft.source/1",
-      jsonHead: { repository: opening.repository, revision: opening.revision, path: opening.path, highlight: opening.highlight, storedView: opening.stored.viewId, currency: opening.currency },
-      textHead: [`source: ${opening.repository} ${opening.revision ?? "no revision"} ${opening.path}`, `highlight: ${opening.highlight[0]}-${opening.highlight[1]}`, `currency: ${opening.currency.state}`],
+      jsonHead: { repository: opening.repository, revision: opening.revision, path: opening.path, highlight: opening.highlight, origin: opening.origin, storedView: opening.stored.viewId, currency: opening.currency },
+      textHead: [`source: ${opening.repository} ${opening.revision ?? "no revision"} ${opening.path}`, `highlight: ${opening.highlight[0]}-${opening.highlight[1]}`, `origin: ${opening.origin}`, `currency: ${opening.currency.state}`],
       unit: "lines", total: entries.length, matched: entries.length, notice: null, entries,
     }, cursorAtFor(query));
     return serve(listing, query, context);

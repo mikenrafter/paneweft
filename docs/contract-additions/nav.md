@@ -40,6 +40,11 @@ The stub types leave the resolution object's optional keys open. Pinned (toStric
    repository and path in the same snapshot. Currency: file bytes differ or file gone under an accessible root -> `stale`
    (`currentSha256` null when gone); repository unregistered or root missing -> `unknown` (`currentSha256` null);
    `recordedSha256` always the envelope's `freshness.files[path]`. Alternative for lines: whole excerpt + highlight subrange.
+   `origin` is `stored-excerpt` for the above. **No covering excerpt (#19):** the anchored lines are read from the registered root
+   through the confined read path (at most 16 MiB) and shown, with `origin: "registered-root"`, `stored.viewId: null` and currency
+   `fresh`, only when the bytes read hash to the hash the view recorded. Otherwise `UNRESOLVED_TARGET` whose message names the
+   missing excerpt (`<path>:<a>-<b>`), why the file was not used (repository not registered, hash differs, too large, lines out of
+   range, not found) and the fix (register the root, or submit a source view covering the lines).
 5. `resolveClaimEvidence`: `EvidenceStep.target` cannot represent a bare source-id target (`supports: ["s1"]`), so the fixtures
    use only `{viewId, itemId}` targets. Proposal: source-id targets are omitted from the steps (or `LinkTarget` gains a
    source variant). Targets resolve in the claim view's own snapshot. An unknown item is an unresolved step in place.

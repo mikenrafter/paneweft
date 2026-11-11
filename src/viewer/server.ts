@@ -179,8 +179,8 @@ export async function startViewer(options: ViewerServerOptions): Promise<Result<
         const opening = opened.value;
         if (opening.status === "unresolved") return fail("UNRESOLVED_TARGET", opening.message);
         // numberedLines are the whole stored excerpt, numbered by file line; `highlight` says which of them the item covers.
-        const holder = await session.getView({ viewId: opening.stored.viewId, snapshotId: opening.stored.snapshotId });
-        const excerpt = holder.ok && holder.value.envelope.component === "source"
+        const holder = opening.stored.viewId === null ? null : await session.getView({ viewId: opening.stored.viewId, snapshotId: opening.stored.snapshotId });
+        const excerpt = holder !== null && holder.ok && holder.value.envelope.component === "source"
           ? (holder.value.envelope.data as { excerpt: { text: string; anchor: { lines: [number, number] } } }).excerpt : null;
         const numberedLines = excerpt === null ? opening.stored.lines : excerptLines(excerpt.text, excerpt.anchor.lines[0]);
         return jsonReply(200, {
@@ -190,6 +190,7 @@ export async function startViewer(options: ViewerServerOptions): Promise<Result<
           revision: opening.revision,
           repository: opening.repository,
           path: opening.path,
+          origin: opening.origin,
           viewId: opening.stored.viewId,
           snapshotId: opening.stored.snapshotId,
           recordedSha256: opening.currency.recordedSha256,

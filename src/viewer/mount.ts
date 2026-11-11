@@ -369,7 +369,7 @@ export async function mountViewer(container: HTMLElement, options: MountOptions)
     ui.menu = null;
     const result = await source.openItemSource({ viewId: model.envelope.id, snapshotId: pane.snapshotId }, itemId);
     ui.opened = { itemId, result };
-    if (result.ok && result.value.status === "resolved" && model.envelope.component !== "source") {
+    if (result.ok && result.value.status === "resolved" && result.value.stored.viewId !== null && model.envelope.component !== "source") {
       // The opening carries the anchored lines; the pane shows the whole stored excerpt with those lines highlighted.
       const holder = await source.getView({ viewId: result.value.stored.viewId, snapshotId: result.value.stored.snapshotId });
       if (holder.ok && holder.value.envelope.component === "source") {

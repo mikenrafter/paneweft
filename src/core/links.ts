@@ -6,11 +6,17 @@
 //   the precedence of misses is snapshot, then view or entity, then item [links.test.ts, MC8].
 // CLAIM(source-currency): the stored excerpt lines are returned whether the registered file is fresh, stale or unreachable; only
 //   `currency` says which, by comparing the recorded hash with the operator-registered root's bytes [links.test.ts, MC6/MC8].
+// CLAIM(source-fallback): when no stored excerpt covers an anchor, its lines are read from the registered root through the confined read path
+//   (so the 16 MiB cap and the confinement hold) and shown only if the file's bytes hash to the hash the view recorded, with origin
+//   `registered-root`; in every other case the answer is UNRESOLVED_TARGET naming the missing excerpt, why the file was not read, and the fix
+//   [navigate.registered-root.test.ts, #19].
 import type { EntityRef, Source } from "./wire.ts";
 import type { Session, ViewKey } from "./session.ts";
 import type { NumberedLine } from "./anchors.ts";
 import { rankViews } from "./registry.ts";
 import { currentFileHash } from "./freshness.ts";
+import { resolveSourceAnchor } from "./anchors.ts";
+import { MAX_CONFINED_FILE_BYTES } from "./confined-read.ts";
 import { readEffectiveView } from "./example-runs.ts";
 import { referencedSnapshot, viewItems, type AnyItem } from "./items.ts";
 import { compareCodeUnits, ownValue } from "./canonical.ts";
@@ -96,7 +102,10 @@ export type SourceOpening =
       revision: string | null;
       path: string;
       highlight: [number, number];
-      stored: { viewId: string; snapshotId: string; lines: NumberedLine[] };
+      /** Where the lines came from: a stored source view's excerpt, or (no excerpt covers the anchor) the registered root's fresh file. */
+      origin: "stored-excerpt" | "registered-root";
+      /** `viewId` is the source view holding the excerpt; null when the lines were read from the registered root. */
+      stored: { viewId: string | null; snapshotId: string; lines: NumberedLine[] };
       currency: { state: "fresh" | "stale" | "unknown"; recordedSha256: string | null; currentSha256: string | null };
     }
   | { status: "unresolved"; code: "UNRESOLVED_TARGET"; message: string };
@@ -109,6 +118,43 @@ function storedLines(source: { anchor: { lines: [number, number] }; text: string
   if (all[all.length - 1] === "") all.pop();
   const offset = source.anchor.lines[0];
   return Array.from({ length: last - first + 1 }, (_, index) => ({ n: first + index, text: all[first - offset + index] ?? "" }));
+}
+
+/**
+ * No stored excerpt covers the anchor: read the anchored lines from the registered root (the confined read path, so at most 16 MiB) and show
+ * them only when the bytes read hash to what the view recorded. The hash is taken from the very bytes the lines come from, so there is no
+ * window between "checked" and "read". Otherwise the answer says what is missing, why the file was not used, and how to fix it.
+ */
+async function openFromRegisteredRoot(session: Session, key: ViewKey, envelope: { freshness: { repositories: Array<{ id: string; gitRev?: string | null; files: Record<string, string> }> } }, itemId: string, anchor: { repository: string; path: string; lines: [number, number] }): Promise<SourceOpening> {
+  const where = `${anchor.path}:${anchor.lines[0]}-${anchor.lines[1]}`;
+  const missing = `item "${itemId}" is anchored at ${where}, which no stored source excerpt of snapshot "${key.snapshotId}" covers`;
+  const fix = `submit a source view whose excerpt covers lines ${anchor.lines[0]}-${anchor.lines[1]} of ${anchor.path}`;
+  const repositories = await session.repositories();
+  const repository = envelope.freshness.repositories.find((candidate) => candidate.id === anchor.repository);
+  const recordedSha256 = (repository === undefined ? undefined : ownValue(repository.files, anchor.path)) ?? null;
+  if (!repositories.some((registered) => registered.id === anchor.repository)) {
+    return cannotOpen(`${missing}, and repository "${anchor.repository}" is not registered with this session, so the file was not read. Fix: register its root (paneweft repo add ${anchor.repository}=ROOT, or serve --repo ${anchor.repository}=ROOT) so a fresh file can be shown, or ${fix}`);
+  }
+  if (recordedSha256 === null) return cannotOpen(`${missing}, and the view records no hash for ${anchor.path}, so a file read could not be checked. Fix: ${fix}`);
+  const read = await resolveSourceAnchor(repositories, anchor);
+  if (!read.ok) {
+    const why = read.error.code === "FILE_TOO_LARGE" ? `${anchor.path} is larger than ${MAX_CONFINED_FILE_BYTES} bytes, the most a registered file read takes` : read.error.message;
+    return cannotOpen(`${missing}, and the registered file was not read: ${why}. Fix: ${fix}`);
+  }
+  const current = read.value.fileSha256;
+  if (current !== recordedSha256) {
+    return cannotOpen(`${missing}, and ${anchor.path} under the registered root no longer matches the hash the view recorded (hash mismatch), so its current lines are not shown as the lines the view's author saw. Fix: re-render the view against the current file, or ${fix}`);
+  }
+  return {
+    status: "resolved",
+    repository: anchor.repository,
+    revision: repository?.gitRev ?? null,
+    path: anchor.path,
+    highlight: [anchor.lines[0], anchor.lines[1]],
+    origin: "registered-root",
+    stored: { viewId: null, snapshotId: key.snapshotId, lines: read.value.numberedLines },
+    currency: { state: "fresh", recordedSha256, currentSha256: current },
+  };
 }
 
 /**
@@ -140,7 +186,7 @@ export async function resolveItemSource(session: Session, key: ViewKey, itemId: 
       if (covered) { excerptView = { viewId: candidate.viewId, text: data.excerpt.text, anchor: data.excerpt.anchor }; break; }
     }
   }
-  if (excerptView === undefined) return cannotOpen(`item "${itemId}" is anchored at ${anchor.path}:${anchor.lines[0]}-${anchor.lines[1]}, which no stored source excerpt of snapshot "${key.snapshotId}" covers`);
+  if (excerptView === undefined) return openFromRegisteredRoot(session, key, envelope, itemId, anchor);
 
   const repository = envelope.freshness.repositories.find((candidate) => candidate.id === anchor.repository);
   const recordedSha256 = (repository === undefined ? undefined : ownValue(repository.files, anchor.path)) ?? null;
@@ -153,6 +199,7 @@ export async function resolveItemSource(session: Session, key: ViewKey, itemId: 
     revision: repository?.gitRev ?? null,
     path: anchor.path,
     highlight: [anchor.lines[0], anchor.lines[1]],
+    origin: "stored-excerpt",
     stored: { viewId: excerptView.viewId, snapshotId: key.snapshotId, lines: storedLines(excerptView, anchor.lines[0], anchor.lines[1]) },
     currency: { state, recordedSha256, currentSha256 },
   };

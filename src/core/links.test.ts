@@ -217,6 +217,7 @@ describe("resolveItemSource: follow a graph edge to its stored source", () => {
       revision: REV,
       path: "src/check.ts",
       highlight: [5, 6],
+      origin: "stored-excerpt",
       stored: { viewId: "flow-source", snapshotId: "snap-1", lines: lines(5, 6) },
       currency: { state: "fresh", recordedSha256: HELLO_SHA, currentSha256: HELLO_SHA },
     });
@@ -278,6 +279,7 @@ describe("resolveItemSource: follow a graph edge to its stored source", () => {
       revision: REV,
       path: "src/check.ts",
       highlight: [5, 6],
+      origin: "stored-excerpt",
       stored: { viewId: "flow-source", snapshotId: "snap-1", lines: lines(5, 6) },
       currency: { state: "stale", recordedSha256: HELLO_SHA, currentSha256: sha256Hex("hello world\n") },
     });
@@ -299,6 +301,7 @@ describe("resolveItemSource: follow a graph edge to its stored source", () => {
       revision: REV,
       path: "src/check.ts",
       highlight: [5, 6],
+      origin: "stored-excerpt",
       stored: { viewId: "flow-source", snapshotId: "snap-1", lines: lines(5, 6) },
       currency: { state: "unknown", recordedSha256: HELLO_SHA, currentSha256: null },
     };
@@ -339,6 +342,7 @@ describe("resolveItemSource: follow a graph edge to its stored source", () => {
       revision: REV,
       path: "src/check.ts",
       highlight: [...range],
+      origin: "stored-excerpt",
       stored: { viewId: "flow-source", snapshotId: "snap-1", lines: lines(range[0], range[1]) },
       currency: { state: "fresh", recordedSha256: HELLO_SHA, currentSha256: HELLO_SHA },
     });
