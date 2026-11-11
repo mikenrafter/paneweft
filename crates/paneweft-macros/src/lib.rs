@@ -73,6 +73,13 @@ struct ViewSpec {
     component: String,
     priority: TokenStream2,
     fn_span: Span,
+    /// The method's `#[cfg(...)]` attributes: everything generated for the view (the call and the descriptor) carries them, so a method
+    /// compiled out leaves no reference to itself (S17).
+    cfgs: Vec<syn::Attribute>,
+}
+
+fn cfg_attributes(attributes: &[syn::Attribute]) -> Vec<syn::Attribute> {
+    attributes.iter().filter(|attribute| attribute.path().is_ident("cfg")).cloned().collect()
 }
 
 fn is_view_attribute(attribute: &syn::Attribute) -> bool {
@@ -94,7 +101,7 @@ fn read_view(method: &syn::ImplItemFn) -> syn::Result<Option<ViewSpec>> {
         Some(expr) => quote!((#expr) as i32),
         None => quote!(50i32),
     };
-    Ok(Some(ViewSpec { method: method.sig.ident.clone(), id: field("id")?, title: field("title")?, question: field("question")?, component, priority, fn_span: method.sig.fn_token.span }))
+    Ok(Some(ViewSpec { method: method.sig.ident.clone(), id: field("id")?, title: field("title")?, question: field("question")?, component, priority, fn_span: method.sig.fn_token.span, cfgs: cfg_attributes(&method.attrs) }))
 }
 
 /// `#[paneweft::views(type_id = "...")]` on an inherent impl: generates `paneweft::Inspectable` for the (concrete) type.
@@ -131,15 +138,17 @@ fn expand_views(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenStre
     }
     let self_type = block.self_ty.clone();
     let runs = views.iter().map(|view| {
-        let ViewSpec { method, id, title, question, component, priority, .. } = view;
+        let ViewSpec { method, id, title, question, component, priority, cfgs, .. } = view;
         quote! {
+            #(#cfgs)*
             set.run(cx, ::paneweft::ViewMeta { id: #id, title: #title, question: #question, component: #component, priority: #priority }, |cx| self.#method(cx));
         }
     });
     let descriptors = views.iter().map(|view| {
-        let ViewSpec { id, title, question, component, priority, fn_span, .. } = view;
+        let ViewSpec { id, title, question, component, priority, fn_span, cfgs, .. } = view;
         let line = quote_spanned!(*fn_span=> ::core::line!());
         quote! {
+            #(#cfgs)*
             #[::paneweft::linkme::distributed_slice(::paneweft::catalogue::VIEW_DESCRIPTORS)]
             #[linkme(crate = ::paneweft::linkme)]
             static DESCRIPTOR: ::paneweft::ViewDescriptor = ::paneweft::ViewDescriptor {
@@ -155,6 +164,7 @@ fn expand_views(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenStre
         }
     });
     let scoped = descriptors.map(|descriptor| quote! { const _: () = { #descriptor }; });
+    // a descriptor statement with a `#[cfg]` inside a block is the cfg of that statement; the block itself is always compiled
     Ok(quote! {
         #block
         impl ::paneweft::Inspectable for #self_type {
@@ -242,6 +252,8 @@ fn expand_example(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenSt
     let line = quote_spanned!(function.sig.fn_token.span=> ::core::line!());
     let test_name = quote!(::core::concat!(::core::module_path!(), "::paneweft_example_", ::core::stringify!(#name)));
     let attrs = &function.attrs;
+    // the wrapper calls the function, so it is compiled out whenever the function is (S17)
+    let cfgs = cfg_attributes(&function.attrs);
     let visibility = &function.vis;
     let body = &function.block;
     let invoke = if result_ok.is_some() {
@@ -271,6 +283,7 @@ fn expand_example(attr: TokenStream2, item: TokenStream2) -> syn::Result<TokenSt
             #invoke
         }
 
+        #(#cfgs)*
         #[cfg(test)]
         #[test]
         fn #wrapper() {
