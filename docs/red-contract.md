@@ -212,6 +212,9 @@ equals `v`.
 bits, base64url or hex, unique per instance. `server.json` `{origin, token, pid}` is written (mode 0600)
 into the session directory while serving and removed on `close`; `render` replies carry
 `viewerUrl: string | null` (`${origin}/#token=${token}&view=..&snapshot=..`; `null` without `server.json`).
+`server.json` is written to a fresh 0600 temp file in the same directory and renamed over the old one (a planted
+symlink or hard link is replaced, never written through; readers see a whole file). The viewer app removes `token`
+from `location.hash` (history.replaceState) before its first request and keeps it in memory.
 * `GET /` and `GET /assets/<file>`: no token; `Host` must be the server's own loopback `host:port`
   (else 403 `FORBIDDEN_ORIGIN`); nothing outside `assetsDirectory` is ever served (`..`, encoded `..`,
   absolute paths, NUL: 400/403/404).

@@ -10,7 +10,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { constants } from "node:fs";
-import { chmod, open, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { open, readdir, readFile, rename, rm } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { err, ok, type OperationError, type OperationErrorCode, type Result } from "../core/errors.ts";
@@ -269,11 +269,21 @@ export async function startViewer(options: ViewerServerOptions): Promise<Result<
   hostHeader = host === "::1" ? `[::1]:${port}` : `${host}:${port}`;
   origin = `http://${hostHeader}`;
 
+  // CLAIM(atomic-server-json): the credential goes into a fresh 0600 file (O_EXCL: never a planted link) next to server.json and is renamed over it, so
+  //   whatever was at server.json (a symlink, a hard link, a wider-mode file) is replaced, never written through, and a reader sees the old file or the new one whole.
   const serverFile = join(session.dir, "server.json");
+  const temporaryFile = `${serverFile}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   try {
-    await writeFile(serverFile, `${JSON.stringify({ origin, token, pid: process.pid })}\n`, { mode: 0o600 });
-    await chmod(serverFile, 0o600);
+    const handle = await open(temporaryFile, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    try {
+      await handle.writeFile(`${JSON.stringify({ origin, token, pid: process.pid })}\n`);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await rename(temporaryFile, serverFile);
   } catch (error) {
+    await rm(temporaryFile, { force: true }).catch(() => {});
     server.close();
     return err("STORAGE_FAILED", `server.json could not be written: ${String(error)}`);
   }
