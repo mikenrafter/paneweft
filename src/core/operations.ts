@@ -72,8 +72,11 @@ function cursorIssue(code: string, constraint: string, hint: string): Validation
 // ---- serving a layout ----------------------------------------------------------------------------------------------------
 
 /** Pages `layout` from the cursor in `context` (or the start) within the budget; the single exit of every paged operation. */
-function serve(layout: Layout, query: string, context: Context): OperationOutcome {
+function serve(unbound: Layout, query: string, context: Context): OperationOutcome {
   const { format, budget } = context;
+  // CLAIM(cursor-content-bound): every cursor issued here carries a digest of this listing's entries, checked when it comes back
+  const content = queryDigest(unbound.entries.map((entry) => [entry.kind, entry.id, entry.countable, entry.text, entry.json])).slice(0, 8);
+  const layout: Layout = { ...unbound, cursorAt: (index, offset, cursorFormat) => encodeCursor(query, { index, offset, ...(offset > 0 ? { format: cursorFormat } : {}) }, content) };
   const minimum = minimumBytes(layout, format);
   if (budget < minimum) {
     return failed(format, "BUDGET_TOO_SMALL", `maxBytes ${budget} is below the ${minimum} bytes needed for the mandatory part of this reply`, { details: { minimumBytes: minimum } });
@@ -83,6 +86,7 @@ function serve(layout: Layout, query: string, context: Context): OperationOutcom
     const decoded = decodeCursor(context.cursor);
     if (!decoded.ok) return failed(format, "CURSOR_INVALID", "the cursor is not a cursor this server issued", { errors: [cursorIssue("CURSOR_INVALID", "an unmodified cursor", "Pass the cursor of the previous reply unchanged, or omit it to start from the beginning.")] });
     if (decoded.query !== query) return failed(format, "CURSOR_MISMATCH", "the cursor belongs to a different query (view, snapshot, filter, order or target)", { errors: [cursorIssue("CURSOR_MISMATCH", "the query that issued the cursor", "Repeat the original request with the cursor, or drop the cursor to start the new query.")] });
+    if (decoded.content !== content) return failed(format, "CURSOR_STALE", "the listing changed since this cursor was issued (its content is no longer the one that was paged); repeat the request without a cursor", { errors: [cursorIssue("CURSOR_STALE", "the listing the cursor was issued for", "Repeat the request without a cursor to read the current listing from the start.")] });
     const { index, offset, format: cursorFormat } = decoded.position;
     const entry = layout.entries[index];
     const valid = index <= layout.entries.length && (offset === 0 || (entry !== undefined && cursorFormat === format && offset < Buffer.byteLength(fragmentSource(entry, format), "utf8")));

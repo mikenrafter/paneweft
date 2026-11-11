@@ -98,7 +98,7 @@ so they are NOT validated against `reply.schema.json`; neither are `list_compone
   names the item/entity (and the snapshot). The target opens in the PANE's snapshot. `pane` argument faults:
   missing member `/pane/entity` -> INVALID_ARGUMENT REQUIRED.
 * **inspect_view** with an unknown view or snapshot -> `UNRESOLVED_TARGET` naming it (not `NOT_FOUND`).
-* **Cursor faults**: CURSOR_INVALID / CURSOR_MISMATCH carry exactly one issue with pointer `/cursor`. Non-object tool arguments:
+* **Cursor faults**: CURSOR_INVALID / CURSOR_MISMATCH / CURSOR_STALE carry exactly one issue with pointer `/cursor`. CURSOR_STALE (review S10): the cursor belongs to this query but the listing's entries changed since it was issued (a notebook edit, a recorded run, an import that changes a search); repeat the request without a cursor. Order of checks: INVALID, MISMATCH, STALE, then the position. Non-object tool arguments:
   INVALID_ARGUMENT with one issue `("", TYPE)`.
 
 ## 7. Open questions
