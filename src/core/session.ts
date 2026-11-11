@@ -14,6 +14,9 @@
 //   is written, so a power loss cannot leave a durable manifest pointing at objects that never reached the disk [session.durability.test.ts, T10].
 // CLAIM(snapshot-immutable): a stored (viewId, snapshotId) never changes; different content under the same key is
 //   SNAPSHOT_CONFLICT, identical content is idempotent [design section 4; MC20].
+// CLAIM(manifest-snapshot-read): a compound operation derives everything from ONE manifest read (`Session.snapshot()`), never from a second read that a commit may
+//   have changed; the view lists (entity, title, definition, completeness) come from the manifest rows, and the stored object is verified when it is opened
+//   [session.snapshot-reads.test.ts, T5; session.write-lock.test.ts].
 // CLAIM(preflight-parity): `preflight` runs the very admission code importBundle and putView run inside their lock (`admitBundle`, `admitView`), with a
 //   stage function that writes nothing, so what it accepts is what an import would accept at that manifest [operations.validate-session.test.ts, #4].
 // CLAIM(process-lock): every mutation holds the session write lock (write-lock.ts, flock) from BEFORE it reads mutable state until after the
@@ -41,6 +44,16 @@ export interface ViewKey { viewId: string; snapshotId: string }
 export interface RepositoryRegistration { id: string; root: string }
 export interface StoredView { envelope: Envelope; contentHash: string }
 export interface SnapshotInfo { snapshotId: string; predecessor: string | null; viewIds: string[] }
+/** What the view lists need of a view's completeness: whether it is unsupported (and why). */
+export type ViewCompleteness = { status: "complete" | "partial" } | { status: "unsupported"; reason: string };
+/** One stored view as the lists see it, answered from the manifest without opening the stored object (T5). */
+export interface ViewIndexEntry extends ViewKey {
+  component: Envelope["component"];
+  title: string;
+  viewDefinitionId: string;
+  entity: EntityRef;
+  completeness: ViewCompleteness;
+}
 export interface ImportSummary {
   entities: number;
   definitions: number;
@@ -79,8 +92,41 @@ export interface SessionOptions {
   lockWaitMs?: number;
 }
 
-export interface Session {
+/**
+ * Every read of a session. `Session` answers each from a fresh manifest read; a `SessionSnapshot` answers all of them from ONE manifest read, which is what
+ * a compound operation (open_entity, navigate, render, ...) needs so that its steps cannot see different generations (CLAIM(manifest-snapshot-read)).
+ */
+export interface SessionReader {
+  getView(key: ViewKey): Promise<Result<StoredView>>;
+  listViews(): Promise<ViewKey[]>;
+  /** The stored views (of one snapshot when `snapshotId` is given) with entity, title, definition id and completeness, in key order. Opens no object whose manifest row has them. */
+  listViewIndex(snapshotId?: string): Promise<ViewIndexEntry[]>;
+  getEntity(entity: EntityRef, snapshotId: string): Promise<Result<Entity>>;
+  listEntities(snapshotId?: string): Promise<Entity[]>;
+  listDefinitions(): Promise<{ revision: number; definitions: ViewDefinition[] }>;
+  repositories(): Promise<RepositoryRegistration[]>;
+  snapshotInfo(snapshotId: string): Promise<Result<SnapshotInfo>>;
+  exportBundle(): Promise<Bundle>;
+  /**
+   * A page is addressed by (pageId, snapshotId). `snapshotId` may be omitted only while exactly one snapshot holds the pageId; with several the call
+   * is INVALID_ARGUMENT naming them (CLAIM(notebook-snapshot-identity)); an unknown snapshot or page is NOT_FOUND.
+   */
+  notebookGet(pageId: string, revision?: number, snapshotId?: string): Promise<Result<NotebookPage>>;
+  listRuns(key: ViewKey): Promise<Result<RecordedRun[]>>;
+  /** The runs recorded on an example view with their stored `paneweft.run/1` outputs, in recording order; each output is read through its verified content hash. */
+  recordedRunOutputs(key: ViewKey): Promise<Result<Array<{ run: RecordedRun; output: unknown }>>>;
+}
+
+/** The session as it was at one manifest read: every answer, and the generation and registry revision, are those of that read. */
+export interface SessionSnapshot extends SessionReader {
+  readonly generation: number;
+  readonly registryRevision: number;
+}
+
+export interface Session extends SessionReader {
   readonly dir: string;
+  /** One manifest read, to be passed through every step of a compound operation. */
+  snapshot(): Promise<SessionSnapshot>;
   importBundle(input: unknown, options?: { predecessorSnapshotId?: string }): Promise<Result<ImportSummary>>;
   /**
    * What importBundle (a `paneweft.bundle/1`) or putView (an envelope) would answer for `input` against this session as it is now, with nothing stored
@@ -90,27 +136,11 @@ export interface Session {
   preflight(input: unknown, options?: { predecessorSnapshotId?: string }): Promise<Result<{ kind: "envelope" | "bundle"; notes: ValidationNote[] }>>;
   /** A single envelope; its entity and view definition must already be registered. */
   putView(input: unknown, options?: { predecessorSnapshotId?: string }): Promise<Result<ImportSummary>>;
-  getView(key: ViewKey): Promise<Result<StoredView>>;
-  listViews(): Promise<ViewKey[]>;
-  getEntity(entity: EntityRef, snapshotId: string): Promise<Result<Entity>>;
-  listEntities(snapshotId?: string): Promise<Entity[]>;
-  listDefinitions(): Promise<{ revision: number; definitions: ViewDefinition[] }>;
   registerView(definition: unknown, expectedRevision: number): Promise<Result<{ revision: number }>>;
   registerRepository(registration: RepositoryRegistration): Promise<Result<void>>;
-  repositories(): Promise<RepositoryRegistration[]>;
-  snapshotInfo(snapshotId: string): Promise<Result<SnapshotInfo>>;
-  exportBundle(): Promise<Bundle>;
   notebookCreate(input: unknown): Promise<Result<NotebookPage>>;
-  /**
-   * A page is addressed by (pageId, snapshotId). `snapshotId` may be omitted only while exactly one snapshot holds the pageId; with several the call
-   * is INVALID_ARGUMENT naming them (CLAIM(notebook-snapshot-identity)); an unknown snapshot or page is NOT_FOUND.
-   */
-  notebookGet(pageId: string, revision?: number, snapshotId?: string): Promise<Result<NotebookPage>>;
   notebookUpdate(pageId: string, expectedRevision: number, change: { blocks: unknown[]; sources?: unknown[] }, snapshotId?: string): Promise<Result<NotebookPage>>;
   recordExampleRun(key: ViewKey, output: unknown): Promise<Result<RecordedRun>>;
-  listRuns(key: ViewKey): Promise<Result<RecordedRun[]>>;
-  /** The runs recorded on an example view with their stored `paneweft.run/1` outputs, in recording order; each output is read through its verified content hash. */
-  recordedRunOutputs(key: ViewKey): Promise<Result<Array<{ run: RecordedRun; output: unknown }>>>;
   close(): Promise<void>;
 }
 
@@ -126,7 +156,19 @@ export class SessionStorageError extends Error {
 
 // ---- manifest -----------------------------------------------------------------------------------------------------
 
-interface ViewEntry { viewId: string; snapshotId: string; hash: string; component: Envelope["component"] }
+/**
+ * One stored view. `entity`, `title`, `viewDefinitionId` and `completeness` are what the lists need, recorded at write time so that listing the views of an
+ * entity does not open every object (T5). A row written before they existed lacks them; readers derive them from the object (ManifestReader.indexOf) and
+ * `paneweft.session/1` is unchanged: an older reader ignores the extra members.
+ */
+interface ViewEntry { viewId: string; snapshotId: string; hash: string; component: Envelope["component"]; entity?: EntityRef; title?: string; viewDefinitionId?: string; completeness?: ViewCompleteness }
+type IndexFields = Pick<ViewIndexEntry, "entity" | "title" | "viewDefinitionId" | "completeness">;
+const indexFieldsOf = (envelope: Envelope): IndexFields => ({
+  entity: { repository: envelope.entity.repository, id: envelope.entity.id, kind: envelope.entity.kind },
+  title: envelope.title,
+  viewDefinitionId: envelope.viewDefinitionId,
+  completeness: envelope.completeness.status === "unsupported" ? { status: "unsupported", reason: envelope.completeness.reason } : { status: envelope.completeness.status },
+});
 interface PageEntry { pageId: string; snapshotId: string; /** content hashes; revision N is index N-1 */ revisions: string[] }
 interface RunEntry extends RecordedRun { /** the stored run output is objects/<contentHash>.json */ }
 interface Manifest {
@@ -204,6 +246,154 @@ function locatePage(manifest: Manifest, pageId: string, snapshotId: string | und
   return { page, index: manifest.pages.indexOf(page) };
 }
 
+/** Reads a stored object by content hash and verifies the hash (CLAIM(verified-reads)). */
+async function readStoredObject(dir: string, hash: string): Promise<unknown> {
+  let text: string;
+  try {
+    text = await readFile(join(dir, OBJECTS, `${hash}.json`), "utf8");
+  } catch (error) {
+    throw new SessionStorageError("STORAGE_CORRUPT", `stored object ${hash} cannot be read: ${String(error)}`);
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch (error) {
+    throw new SessionStorageError("STORAGE_CORRUPT", `stored object ${hash} is not JSON: ${String(error)}`);
+  }
+  if (canonicalSha256(value) !== hash) throw new SessionStorageError("STORAGE_CORRUPT", `stored object ${hash} no longer matches its recorded content hash`);
+  return value;
+}
+
+/** The session at one manifest read (see SessionSnapshot). Objects are immutable and never swept, so a hash named by this manifest stays readable. */
+class ManifestReader implements SessionSnapshot {
+  readonly generation: number;
+  readonly registryRevision: number;
+  private readonly dir: string;
+  private readonly manifest: Manifest;
+  private readonly derived: Map<string, IndexFields>;
+
+  // no parameter properties: Node's strip-only TypeScript (bin.smoke.test.ts) does not support them
+  constructor(dir: string, manifest: Manifest, derived: Map<string, IndexFields>) {
+    this.dir = dir;
+    this.manifest = manifest;
+    this.derived = derived;
+    this.generation = manifest.generation;
+    this.registryRevision = manifest.registryRevision;
+  }
+
+  private readObject(hash: string): Promise<unknown> {
+    return readStoredObject(this.dir, hash);
+  }
+
+  private async withReads<T>(read: () => Promise<Result<T>>): Promise<Result<T>> {
+    try {
+      return await read();
+    } catch (error) {
+      if (error instanceof SessionStorageError) return failure(error.code, error.message);
+      throw error;
+    }
+  }
+
+  async getView(key: ViewKey): Promise<Result<StoredView>> {
+    return this.withReads(async () => {
+      const entry = this.manifest.views.find((candidate) => candidate.viewId === key.viewId && candidate.snapshotId === key.snapshotId);
+      if (entry === undefined) return failure("NOT_FOUND", `no view "${key.viewId}" in snapshot "${key.snapshotId}"`);
+      const envelope = (await this.readObject(entry.hash)) as Envelope;
+      return ok({ envelope, contentHash: entry.hash });
+    });
+  }
+
+  async listViews(): Promise<ViewKey[]> {
+    return this.manifest.views.map(({ viewId, snapshotId }) => ({ viewId, snapshotId })).sort(byViewKey);
+  }
+
+  async listViewIndex(snapshotId?: string): Promise<ViewIndexEntry[]> {
+    const found: ViewIndexEntry[] = [];
+    for (const entry of this.manifest.views) {
+      if (snapshotId !== undefined && entry.snapshotId !== snapshotId) continue;
+      let fields: IndexFields | undefined = entry.entity !== undefined && entry.title !== undefined && entry.viewDefinitionId !== undefined && entry.completeness !== undefined
+        ? { entity: entry.entity, title: entry.title, viewDefinitionId: entry.viewDefinitionId, completeness: entry.completeness }
+        : this.derived.get(entry.hash);
+      if (fields === undefined) {
+        try {
+          fields = indexFieldsOf((await this.readObject(entry.hash)) as Envelope);
+        } catch (error) {
+          if (error instanceof SessionStorageError) continue; // an unreadable stored view is not listed, as before the index existed; opening it reports why
+          throw error;
+        }
+        this.derived.set(entry.hash, fields);
+      }
+      found.push({ viewId: entry.viewId, snapshotId: entry.snapshotId, component: entry.component, ...fields });
+    }
+    return found.sort(byViewKey);
+  }
+
+  async getEntity(entity: EntityRef, snapshotId: string): Promise<Result<Entity>> {
+    const found = this.manifest.entities.find((candidate) => candidate.snapshotId === snapshotId && candidate.repository === entity.repository && candidate.kind === entity.kind && candidate.id === entity.id);
+    return found === undefined ? failure("NOT_FOUND", `no entity ${entity.repository}/${entity.kind}/${entity.id} in snapshot "${snapshotId}"`) : ok(found);
+  }
+
+  async listEntities(snapshotId?: string): Promise<Entity[]> {
+    return sortedEntities(this.manifest.entities, snapshotId);
+  }
+
+  async listDefinitions(): Promise<{ revision: number; definitions: ViewDefinition[] }> {
+    return { revision: this.manifest.registryRevision, definitions: [...this.manifest.definitions].sort((a, b) => compareCodeUnits(a.id, b.id)) };
+  }
+
+  async repositories(): Promise<RepositoryRegistration[]> {
+    return [...this.manifest.repositories].sort((a, b) => compareCodeUnits(a.id, b.id));
+  }
+
+  async snapshotInfo(snapshotId: string): Promise<Result<SnapshotInfo>> {
+    const snapshot = ownValue(this.manifest.snapshots, snapshotId);
+    if (snapshot === undefined) return failure("NOT_FOUND", `no snapshot "${snapshotId}"`);
+    const viewIds = [...new Set(this.manifest.views.filter((view) => view.snapshotId === snapshotId).map((view) => view.viewId))].sort(compareCodeUnits);
+    return ok({ snapshotId, predecessor: snapshot.predecessor, viewIds });
+  }
+
+  async exportBundle(): Promise<Bundle> {
+    const views = [...this.manifest.views].sort(byViewKey);
+    const envelopes: Envelope[] = [];
+    for (const entry of views) envelopes.push((await this.readObject(entry.hash)) as Envelope);
+    return {
+      schemaVersion: "paneweft.bundle/1",
+      entities: sortedEntities(this.manifest.entities),
+      definitions: [...this.manifest.definitions].sort((a, b) => compareCodeUnits(a.id, b.id)),
+      views: envelopes,
+    };
+  }
+
+  async listRuns(key: ViewKey): Promise<Result<RecordedRun[]>> {
+    if (!this.manifest.views.some((view) => view.viewId === key.viewId && view.snapshotId === key.snapshotId)) return failure("NOT_FOUND", `no view "${key.viewId}" in snapshot "${key.snapshotId}"`);
+    return ok(this.manifest.runs.filter((run) => run.viewId === key.viewId && run.snapshotId === key.snapshotId).map(({ runId, viewId, snapshotId, status, contentHash }) => ({ runId, viewId, snapshotId, status, contentHash })));
+  }
+
+  async recordedRunOutputs(key: ViewKey): Promise<Result<Array<{ run: RecordedRun; output: unknown }>>> {
+    return this.withReads(async () => {
+      if (!this.manifest.views.some((view) => view.viewId === key.viewId && view.snapshotId === key.snapshotId)) return failure("NOT_FOUND", `no view "${key.viewId}" in snapshot "${key.snapshotId}"`);
+      const found: Array<{ run: RecordedRun; output: unknown }> = [];
+      for (const run of this.manifest.runs.filter((entry) => entry.viewId === key.viewId && entry.snapshotId === key.snapshotId)) {
+        const { runId, viewId, snapshotId, status, contentHash } = run;
+        found.push({ run: { runId, viewId, snapshotId, status, contentHash }, output: await this.readObject(contentHash) });
+      }
+      return ok(found);
+    });
+  }
+
+  async notebookGet(pageId: string, revision?: number, snapshotId?: string): Promise<Result<NotebookPage>> {
+    return this.withReads(async () => {
+      const located = locatePage(this.manifest, pageId, snapshotId);
+      if ("error" in located) return located.error;
+      const { page } = located;
+      const wanted = revision ?? page.revisions.length;
+      const hash = page.revisions[wanted - 1];
+      if (!Number.isInteger(wanted) || wanted < 1 || hash === undefined) return failure("NOT_FOUND", `notebook page "${pageId}" in snapshot "${page.snapshotId}" has no revision ${String(revision)}`);
+      return ok({ pageId, snapshotId: page.snapshotId, revision: wanted, envelope: (await this.readObject(hash)) as Envelope });
+    });
+  }
+}
+
 // ---- the session --------------------------------------------------------------------------------------------------
 
 class DirectorySession implements Session {
@@ -238,123 +428,30 @@ class DirectorySession implements Session {
     }
   }
 
-  private async readObject(hash: string): Promise<unknown> {
-    let text: string;
-    try {
-      text = await readFile(join(this.dir, OBJECTS, `${hash}.json`), "utf8");
-    } catch (error) {
-      throw new SessionStorageError("STORAGE_CORRUPT", `stored object ${hash} cannot be read: ${String(error)}`);
-    }
-    let value: unknown;
-    try {
-      value = JSON.parse(text);
-    } catch (error) {
-      throw new SessionStorageError("STORAGE_CORRUPT", `stored object ${hash} is not JSON: ${String(error)}`);
-    }
-    if (canonicalSha256(value) !== hash) throw new SessionStorageError("STORAGE_CORRUPT", `stored object ${hash} no longer matches its recorded content hash`);
-    return value;
+  private readObject(hash: string): Promise<unknown> {
+    return readStoredObject(this.dir, hash);
   }
 
-  private async withReads<T>(read: () => Promise<Result<T>>): Promise<Result<T>> {
-    try {
-      return await read();
-    } catch (error) {
-      if (error instanceof SessionStorageError) return failure(error.code, error.message);
-      throw error;
-    }
+  /** One manifest read; every method of the result answers from it. */
+  async snapshot(): Promise<SessionSnapshot> {
+    return new ManifestReader(this.dir, await this.readManifest(), this.derivedIndex);
   }
 
-  async getView(key: ViewKey): Promise<Result<StoredView>> {
-    return this.withReads(async () => {
-      const manifest = await this.readManifest();
-      const entry = manifest.views.find((candidate) => candidate.viewId === key.viewId && candidate.snapshotId === key.snapshotId);
-      if (entry === undefined) return failure("NOT_FOUND", `no view "${key.viewId}" in snapshot "${key.snapshotId}"`);
-      const envelope = (await this.readObject(entry.hash)) as Envelope;
-      return ok({ envelope, contentHash: entry.hash });
-    });
-  }
+  /** Index fields derived from stored objects of rows that lack them, by content hash (objects are immutable, so the answer never goes stale). */
+  private readonly derivedIndex = new Map<string, IndexFields>();
 
-  async listViews(): Promise<ViewKey[]> {
-    return (await this.readManifest()).views.map(({ viewId, snapshotId }) => ({ viewId, snapshotId })).sort(byViewKey);
-  }
-
-  async getEntity(entity: EntityRef, snapshotId: string): Promise<Result<Entity>> {
-    return this.withReads(async () => {
-      const manifest = await this.readManifest();
-      const found = manifest.entities.find((candidate) => candidate.snapshotId === snapshotId && candidate.repository === entity.repository && candidate.kind === entity.kind && candidate.id === entity.id);
-      return found === undefined ? failure("NOT_FOUND", `no entity ${entity.repository}/${entity.kind}/${entity.id} in snapshot "${snapshotId}"`) : ok(found);
-    });
-  }
-
-  async listEntities(snapshotId?: string): Promise<Entity[]> {
-    return sortedEntities((await this.readManifest()).entities, snapshotId);
-  }
-
-  async listDefinitions(): Promise<{ revision: number; definitions: ViewDefinition[] }> {
-    const manifest = await this.readManifest();
-    return { revision: manifest.registryRevision, definitions: [...manifest.definitions].sort((a, b) => compareCodeUnits(a.id, b.id)) };
-  }
-
-  async repositories(): Promise<RepositoryRegistration[]> {
-    return [...(await this.readManifest()).repositories].sort((a, b) => compareCodeUnits(a.id, b.id));
-  }
-
-  async snapshotInfo(snapshotId: string): Promise<Result<SnapshotInfo>> {
-    return this.withReads(async () => {
-      const manifest = await this.readManifest();
-      const snapshot = ownValue(manifest.snapshots, snapshotId);
-      if (snapshot === undefined) return failure("NOT_FOUND", `no snapshot "${snapshotId}"`);
-      const viewIds = [...new Set(manifest.views.filter((view) => view.snapshotId === snapshotId).map((view) => view.viewId))].sort(compareCodeUnits);
-      return ok({ snapshotId, predecessor: snapshot.predecessor, viewIds });
-    });
-  }
-
-  async exportBundle(): Promise<Bundle> {
-    const manifest = await this.readManifest();
-    const views = [...manifest.views].sort(byViewKey);
-    const envelopes: Envelope[] = [];
-    for (const entry of views) envelopes.push((await this.readObject(entry.hash)) as Envelope);
-    return {
-      schemaVersion: "paneweft.bundle/1",
-      entities: sortedEntities(manifest.entities),
-      definitions: [...manifest.definitions].sort((a, b) => compareCodeUnits(a.id, b.id)),
-      views: envelopes,
-    };
-  }
-
-  async listRuns(key: ViewKey): Promise<Result<RecordedRun[]>> {
-    return this.withReads(async () => {
-      const manifest = await this.readManifest();
-      if (!manifest.views.some((view) => view.viewId === key.viewId && view.snapshotId === key.snapshotId)) return failure("NOT_FOUND", `no view "${key.viewId}" in snapshot "${key.snapshotId}"`);
-      return ok(manifest.runs.filter((run) => run.viewId === key.viewId && run.snapshotId === key.snapshotId).map(({ runId, viewId, snapshotId, status, contentHash }) => ({ runId, viewId, snapshotId, status, contentHash })));
-    });
-  }
-
-  async recordedRunOutputs(key: ViewKey): Promise<Result<Array<{ run: RecordedRun; output: unknown }>>> {
-    return this.withReads(async () => {
-      const manifest = await this.readManifest();
-      if (!manifest.views.some((view) => view.viewId === key.viewId && view.snapshotId === key.snapshotId)) return failure("NOT_FOUND", `no view "${key.viewId}" in snapshot "${key.snapshotId}"`);
-      const found: Array<{ run: RecordedRun; output: unknown }> = [];
-      for (const run of manifest.runs.filter((entry) => entry.viewId === key.viewId && entry.snapshotId === key.snapshotId)) {
-        const { runId, viewId, snapshotId, status, contentHash } = run;
-        found.push({ run: { runId, viewId, snapshotId, status, contentHash }, output: await this.readObject(contentHash) });
-      }
-      return ok(found);
-    });
-  }
-
-  async notebookGet(pageId: string, revision?: number, snapshotId?: string): Promise<Result<NotebookPage>> {
-    return this.withReads(async () => {
-      const manifest = await this.readManifest();
-      const located = locatePage(manifest, pageId, snapshotId);
-      if ("error" in located) return located.error;
-      const { page } = located;
-      const wanted = revision ?? page.revisions.length;
-      const hash = page.revisions[wanted - 1];
-      if (!Number.isInteger(wanted) || wanted < 1 || hash === undefined) return failure("NOT_FOUND", `notebook page "${pageId}" in snapshot "${page.snapshotId}" has no revision ${String(revision)}`);
-      return ok({ pageId, snapshotId: page.snapshotId, revision: wanted, envelope: (await this.readObject(hash)) as Envelope });
-    });
-  }
+  getView(key: ViewKey): Promise<Result<StoredView>> { return this.snapshot().then((read) => read.getView(key)); }
+  listViews(): Promise<ViewKey[]> { return this.snapshot().then((read) => read.listViews()); }
+  listViewIndex(snapshotId?: string): Promise<ViewIndexEntry[]> { return this.snapshot().then((read) => read.listViewIndex(snapshotId)); }
+  getEntity(entity: EntityRef, snapshotId: string): Promise<Result<Entity>> { return this.snapshot().then((read) => read.getEntity(entity, snapshotId)); }
+  listEntities(snapshotId?: string): Promise<Entity[]> { return this.snapshot().then((read) => read.listEntities(snapshotId)); }
+  listDefinitions(): Promise<{ revision: number; definitions: ViewDefinition[] }> { return this.snapshot().then((read) => read.listDefinitions()); }
+  repositories(): Promise<RepositoryRegistration[]> { return this.snapshot().then((read) => read.repositories()); }
+  snapshotInfo(snapshotId: string): Promise<Result<SnapshotInfo>> { return this.snapshot().then((read) => read.snapshotInfo(snapshotId)); }
+  exportBundle(): Promise<Bundle> { return this.snapshot().then((read) => read.exportBundle()); }
+  listRuns(key: ViewKey): Promise<Result<RecordedRun[]>> { return this.snapshot().then((read) => read.listRuns(key)); }
+  recordedRunOutputs(key: ViewKey): Promise<Result<Array<{ run: RecordedRun; output: unknown }>>> { return this.snapshot().then((read) => read.recordedRunOutputs(key)); }
+  notebookGet(pageId: string, revision?: number, snapshotId?: string): Promise<Result<NotebookPage>> { return this.snapshot().then((read) => read.notebookGet(pageId, revision, snapshotId)); }
 
   async registerRepository(registration: RepositoryRegistration): Promise<Result<void>> {
     if (typeof registration?.id !== "string" || registration.id === "" || typeof registration.root !== "string" || registration.root === "") {
@@ -524,7 +621,7 @@ class DirectorySession implements Session {
     // everything is decided; only now touch the disk
     for (const { envelope, hash } of toStore) {
       await stage(envelope);
-      views.push({ viewId: envelope.id, snapshotId: envelope.snapshotId, hash, component: envelope.component });
+      views.push({ viewId: envelope.id, snapshotId: envelope.snapshotId, hash, component: envelope.component, ...indexFieldsOf(envelope) });
       if (envelope.component === "notebook") pages.push({ pageId: envelope.id, snapshotId: envelope.snapshotId, revisions: [hash] });
     }
     const snapshots = { ...manifest.snapshots };
@@ -569,13 +666,16 @@ class DirectorySession implements Session {
   }
 
   async preflight(input: unknown, options: { predecessorSnapshotId?: string } = {}): Promise<Result<{ kind: "envelope" | "bundle"; notes: ValidationNote[] }>> {
-    return this.withReads(async () => {
+    try {
       const manifest = await this.readManifest();
       const isBundle = typeof input === "object" && input !== null && (input as { schemaVersion?: unknown }).schemaVersion === "paneweft.bundle/1";
       const dry = async (value: unknown): Promise<string> => canonicalSha256(value); // names the object, writes nothing
       const admitted = isBundle ? await this.admitBundle(manifest, input, options.predecessorSnapshotId, dry) : await this.admitView(manifest, input, options.predecessorSnapshotId, dry);
       return "error" in admitted ? admitted.error : ok({ kind: isBundle ? "bundle" as const : "envelope" as const, notes: admitted.value.notes });
-    });
+    } catch (error) {
+      if (error instanceof SessionStorageError) return failure(error.code, error.message);
+      throw error;
+    }
   }
 
   // -- registry ---------------------------------------------------------------------------------------------------------
@@ -628,7 +728,7 @@ class DirectorySession implements Session {
       if (!report.ok) return { error: validationFailure("the notebook page", report.errors) };
       const hash = await stage(envelope);
       const pages = manifest.pages.map((entry, position) => (position === index ? { ...entry, revisions: [...entry.revisions, hash] } : entry));
-      const views = manifest.views.map((view) => (view.viewId === pageId && view.snapshotId === page.snapshotId ? { ...view, hash } : view));
+      const views = manifest.views.map((view) => (view.viewId === pageId && view.snapshotId === page.snapshotId ? { ...view, hash, ...indexFieldsOf(envelope) } : view));
       return { manifest: { ...manifest, pages, views }, value: { pageId, snapshotId: page.snapshotId, revision: currentRevision + 1, envelope } };
     });
   }

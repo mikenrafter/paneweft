@@ -147,14 +147,9 @@ export async function startViewer(options: ViewerServerOptions): Promise<Result<
   async function readRoute(path: string, query: URLSearchParams): Promise<Reply> {
     switch (path) {
       case "/api/index": {
-        const views = [];
-        for (const key of await session.listViews()) {
-          const stored = await session.getView(key);
-          if (!stored.ok) continue;
-          const view = stored.value.envelope;
-          views.push({ viewId: key.viewId, snapshotId: key.snapshotId, component: view.component, title: view.title, viewDefinitionId: view.viewDefinitionId, entity: view.entity });
-        }
-        return jsonReply(200, { entities: await session.listEntities(), views });
+        const read = await session.snapshot(); // one manifest read; no stored object is opened (T5)
+        const views = (await read.listViewIndex()).map((view) => ({ viewId: view.viewId, snapshotId: view.snapshotId, component: view.component, title: view.title, viewDefinitionId: view.viewDefinitionId, entity: view.entity }));
+        return jsonReply(200, { entities: await read.listEntities(), views });
       }
       case "/api/registry":
         return jsonReply(200, await session.listDefinitions());

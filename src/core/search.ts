@@ -1,7 +1,7 @@
 // Search over a session (design section 4): entities, views, example scenarios and notebook claims, ranked exact > prefix > substring,
 // then by kind, id and snapshot. Shared by the agent operation (paged) and the viewer source so both rank identically.
 import type { EntityRef } from "./wire.ts";
-import type { Session } from "./session.ts";
+import type { SessionReader } from "./session.ts";
 import { viewItems } from "./items.ts";
 import { compareCodeUnits } from "./canonical.ts";
 
@@ -10,7 +10,7 @@ export interface SearchScope { entity: EntityRef; snapshotId: string }
 export interface SearchDocument { type: (typeof SEARCH_TYPES)[number]; id: string; snapshotId: string; texts: string[]; text: string; extra: Record<string, unknown> }
 
 /** The matching documents, best first. */
-export async function searchSession(session: Session, query: string, scope?: SearchScope): Promise<SearchDocument[]> {
+export async function searchSession(session: SessionReader, query: string, scope?: SearchScope): Promise<SearchDocument[]> {
   const documents: SearchDocument[] = [];
   const entities = await session.listEntities();
   const inScope = (snapshotId: string, ref: EntityRef): boolean => {

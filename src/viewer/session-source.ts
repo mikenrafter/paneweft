@@ -7,21 +7,16 @@ import { resolveItemSource } from "../core/links.ts";
 import { rankViews, type RankOutput } from "../core/registry.ts";
 import { viewItems } from "../core/items.ts";
 import { searchSession } from "../core/search.ts";
-import type { Session, ViewKey } from "../core/session.ts";
+import type { Session, SessionReader, ViewKey } from "../core/session.ts";
 import type { SearchHit, ViewerSource, ViewModel } from "./source.ts";
 
 const sameEntity = (a: EntityRef, b: EntityRef): boolean => a.repository === b.repository && a.kind === b.kind && a.id === b.id;
 
 export function createSessionSource(session: Session): ViewerSource {
-  const viewsOf = async (entity: EntityRef, snapshotId: string) => {
-    const found: Array<{ key: ViewKey; definitionId: string; completeness: ViewModel["envelope"]["completeness"] }> = [];
-    for (const key of await session.listViews()) {
-      if (key.snapshotId !== snapshotId) continue;
-      const stored = await session.getView(key);
-      if (stored.ok && sameEntity(stored.value.envelope.entity, entity)) found.push({ key, definitionId: stored.value.envelope.viewDefinitionId, completeness: stored.value.envelope.completeness });
-    }
-    return found;
-  };
+  const viewsOf = async (read: SessionReader, entity: EntityRef, snapshotId: string) =>
+    (await read.listViewIndex(snapshotId))
+      .filter((view) => sameEntity(view.entity, entity))
+      .map((view) => ({ key: { viewId: view.viewId, snapshotId: view.snapshotId }, definitionId: view.viewDefinitionId, completeness: view.completeness }));
 
   const getView = async (key: ViewKey): Promise<Result<ViewModel>> => {
     const read = await readEffectiveView(session, key);
@@ -40,14 +35,15 @@ export function createSessionSource(session: Session): ViewerSource {
   return {
     getEntity: (entity, snapshotId) => session.getEntity(entity, snapshotId),
     async applicableViews(entity, snapshotId, preferredViewDefinitionId): Promise<Result<RankOutput>> {
-      const found: Result<Entity> = await session.getEntity(entity, snapshotId);
+      const read = await session.snapshot(); // one manifest read for the entity, the definitions and the views
+      const found: Result<Entity> = await read.getEntity(entity, snapshotId);
       if (!found.ok) return found;
-      const { definitions } = await session.listDefinitions();
-      const instances = (await viewsOf(entity, snapshotId)).map(({ definitionId, completeness }) => ({ definitionId, completeness }));
+      const { definitions } = await read.listDefinitions();
+      const instances = (await viewsOf(read, entity, snapshotId)).map(({ definitionId, completeness }) => ({ definitionId, completeness }));
       return ok(rankViews({ entity: found.value, definitions, instances, ...(preferredViewDefinitionId === undefined ? {} : { preferredViewDefinitionId }) }));
     },
     async getViewFor(entity, snapshotId, definitionId) {
-      const match = (await viewsOf(entity, snapshotId)).find((view) => view.definitionId === definitionId);
+      const match = (await viewsOf(await session.snapshot(), entity, snapshotId)).find((view) => view.definitionId === definitionId);
       if (match === undefined) return err("NOT_FOUND", `no view of definition "${definitionId}" for ${entity.kind}/${entity.id} in snapshot "${snapshotId}"`);
       return getView(match.key);
     },

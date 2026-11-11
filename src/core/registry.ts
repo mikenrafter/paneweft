@@ -24,7 +24,9 @@ export interface RankedView {
   /** true for the built-in `*` views */
   fallback: boolean;
 }
-export interface ViewInstanceInfo { definitionId: string; completeness: Envelope["completeness"] }
+/** All the ranking needs of a stored view's completeness: whether it is unsupported, and why. The full completeness of an envelope is accepted too. */
+export type InstanceCompleteness = Envelope["completeness"] | { status: "complete" | "partial" } | { status: "unsupported"; reason: string };
+export interface ViewInstanceInfo { definitionId: string; completeness: InstanceCompleteness }
 export interface RankInput {
   entity: Entity;
   definitions: ViewDefinition[];

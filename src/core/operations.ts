@@ -19,7 +19,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Entity, EntityRef, Envelope } from "./wire.ts";
 import type { OperationError, ValidationIssue } from "./errors.ts";
-import type { Session, ViewKey } from "./session.ts";
+import { SessionStorageError, type Session, type SessionReader, type ViewCompleteness, type ViewKey } from "./session.ts";
 import { TOOL_NAMES } from "../schemas/index.ts";
 import { validateAgainstOwnerSchema, validateSubmission, validateToolArguments, type ValidationNote } from "./validate.ts";
 import { COMPONENT_CATALOGUE } from "./catalogue.ts";
@@ -276,7 +276,7 @@ async function registerView(session: Session, args: { definition: unknown; expec
 
 // -- views ---------------------------------------------------------------------------------------------------------------------
 
-async function embedsOf(session: Session, envelope: Envelope): Promise<Map<string, EmbedInfo>> {
+async function embedsOf(session: SessionReader, envelope: Envelope): Promise<Map<string, EmbedInfo>> {
   const embeds = new Map<string, EmbedInfo>();
   for (const block of viewItems(envelope)) {
     if (block.kind !== "view" || typeof block.viewId !== "string" || block.viewId === envelope.id) continue; // an embed of itself is cut
@@ -291,7 +291,7 @@ async function embedsOf(session: Session, envelope: Envelope): Promise<Map<strin
 
 interface Loaded { envelope: Envelope; summary: ViewSummary }
 
-async function loadView(session: Session, key: ViewKey, query: ViewQuery, format: ReplyFormat): Promise<Loaded | OperationOutcome> {
+async function loadView(session: SessionReader, key: ViewKey, query: ViewQuery, format: ReplyFormat): Promise<Loaded | OperationOutcome> {
   const snapshot = await session.snapshotInfo(key.snapshotId);
   if (!snapshot.ok) return snapshot.error.code === "NOT_FOUND" ? unresolved(format, `snapshot "${key.snapshotId}" does not exist`) : failedFrom(format, snapshot.error);
   const stored = await readEffectiveView(session, key);
@@ -316,7 +316,7 @@ function inspectDigest(key: ViewKey, query: ViewQuery, order: ViewOrder | null):
   return queryDigest({ tool: "inspect_view", viewId: key.viewId, snapshotId: key.snapshotId, filter: query.filter, order, embedDepth: query.embedDepth, focus: query.focus ?? null });
 }
 
-async function inspectView(session: Session, args: { viewId: string; snapshotId: string; filter?: ViewFilter; order?: ViewOrder; focus?: { itemId: string; expand?: boolean }; embedDepth?: number }, context: Context): Promise<OperationOutcome> {
+async function inspectView(session: SessionReader, args: { viewId: string; snapshotId: string; filter?: ViewFilter; order?: ViewOrder; focus?: { itemId: string; expand?: boolean }; embedDepth?: number }, context: Context): Promise<OperationOutcome> {
   const key = { viewId: args.viewId, snapshotId: args.snapshotId };
   const query: ViewQuery = { filter: args.filter ?? {}, embedDepth: args.embedDepth ?? 0, ...(args.order === undefined ? {} : { order: args.order }), ...(args.focus === undefined ? {} : { focus: args.focus }) };
   const loaded = await loadView(session, key, query, context.format);
@@ -327,18 +327,13 @@ async function inspectView(session: Session, args: { viewId: string; snapshotId:
 
 // -- panes ---------------------------------------------------------------------------------------------------------------------
 
-interface PaneView { viewId: string; definitionId: string; envelope: Envelope }
+interface PaneView { viewId: string; definitionId: string; completeness: ViewCompleteness }
 
-async function viewsOfEntity(session: Session, entity: EntityRef, snapshotId: string): Promise<PaneView[]> {
-  const found: PaneView[] = [];
-  for (const key of await session.listViews()) {
-    if (key.snapshotId !== snapshotId) continue;
-    const stored = await session.getView(key);
-    if (!stored.ok) continue;
-    const view = stored.value.envelope;
-    if (view.entity.repository === entity.repository && view.entity.kind === entity.kind && view.entity.id === entity.id) found.push({ viewId: key.viewId, definitionId: view.viewDefinitionId, envelope: view });
-  }
-  return found;
+/** The stored views of `entity` in `snapshotId`, from the view index: no stored object is opened (T5). */
+async function viewsOfEntity(session: SessionReader, entity: EntityRef, snapshotId: string): Promise<PaneView[]> {
+  return (await session.listViewIndex(snapshotId))
+    .filter((view) => view.entity.repository === entity.repository && view.entity.kind === entity.kind && view.entity.id === entity.id)
+    .map((view) => ({ viewId: view.viewId, definitionId: view.viewDefinitionId, completeness: view.completeness }));
 }
 
 /** The built-in `*` views, answered from the entity record itself. */
@@ -373,7 +368,7 @@ function builtinSummary(entity: Entity, which: "builtin:metadata" | "builtin:raw
 
 interface Opened { summary: ViewSummary; pane: Record<string, unknown>; extras: ReplyExtras; digest: string }
 
-async function openEntity(session: Session, entityRef: EntityRef, snapshotId: string, preferred: string | undefined, format: ReplyFormat): Promise<Opened | OperationOutcome> {
+async function openEntity(session: SessionReader, entityRef: EntityRef, snapshotId: string, preferred: string | undefined, format: ReplyFormat): Promise<Opened | OperationOutcome> {
   const snapshot = await session.snapshotInfo(snapshotId);
   if (!snapshot.ok) return snapshot.error.code === "NOT_FOUND" ? unresolved(format, `snapshot "${snapshotId}" does not exist`) : failedFrom(format, snapshot.error);
   const entity = await session.getEntity(entityRef, snapshotId);
@@ -381,7 +376,7 @@ async function openEntity(session: Session, entityRef: EntityRef, snapshotId: st
   const instances = await viewsOfEntity(session, entityRef, snapshotId);
   const { definitions } = await session.listDefinitions();
   const ranked: RankOutput = rankViews({
-    entity: entity.value, definitions, instances: instances.map((instance) => ({ definitionId: instance.definitionId, completeness: instance.envelope.completeness })),
+    entity: entity.value, definitions, instances: instances.map((instance) => ({ definitionId: instance.definitionId, completeness: instance.completeness })),
     ...(preferred === undefined ? {} : { preferredViewDefinitionId: preferred }),
   });
   if (ranked.selected === null) return unresolved(format, `entity ${entityRef.id} has no available view in snapshot "${snapshotId}"`);
@@ -416,7 +411,7 @@ async function openEntity(session: Session, entityRef: EntityRef, snapshotId: st
 }
 const isOpened = (value: Opened | OperationOutcome): value is Opened => "pane" in value;
 
-async function openEntityOperation(session: Session, args: { entity: EntityRef; snapshotId: string; preferredViewDefinitionId?: string }, context: Context): Promise<OperationOutcome> {
+async function openEntityOperation(session: SessionReader, args: { entity: EntityRef; snapshotId: string; preferredViewDefinitionId?: string }, context: Context): Promise<OperationOutcome> {
   const opened = await openEntity(session, args.entity, args.snapshotId, args.preferredViewDefinitionId, context.format);
   if (!isOpened(opened)) return opened;
   return serve(layoutOf(opened.summary, cursorAtFor(opened.digest), opened.extras), opened.digest, context);
@@ -431,7 +426,7 @@ const PANE_SCHEMA = {
   },
 };
 
-async function navigate(session: Session, args: { pane: Record<string, unknown>; itemId: string; action?: "open-entity" | "open-source" }, context: Context): Promise<OperationOutcome> {
+async function navigate(session: SessionReader, args: { pane: Record<string, unknown>; itemId: string; action?: "open-entity" | "open-source" }, context: Context): Promise<OperationOutcome> {
   const { format } = context;
   const paneIssues = validateAgainstOwnerSchema(PANE_SCHEMA, args.pane, "/pane");
   if (paneIssues.length > 0) return failed(format, "INVALID_ARGUMENT", `the pane is not a pane state: ${paneIssues[0]?.code} at "${paneIssues[0]?.pointer}"`, { errors: paneIssues });
@@ -528,14 +523,16 @@ async function render(session: Session, args: { input: Record<string, unknown> }
     const payload = { schemaVersion: "paneweft.render/1", ...jsonHead, entities: summaryOfStore.entities, definitions: summaryOfStore.definitions, cursor: null };
     return { ok: true, format, body: format === "json" ? JSON.stringify(payload) : `paneweft.render/1\nstored: nothing (${summaryOfStore.entities} entities, ${summaryOfStore.definitions} definitions)\nviewer: ${url ?? "none"}\n${noteLines.map((line) => `${line}\n`).join("")}`, payload, cursor: null };
   }
-  const loaded = await loadView(session, first, DEFAULT_QUERY, format);
+  const read = await snapshotOf(session, format);
+  if ("ok" in read) return read;
+  const loaded = await loadView(read, first, DEFAULT_QUERY, format);
   if (isOutcome(loaded)) return loaded;
   const digest = inspectDigest(first, DEFAULT_QUERY, loaded.summary.order);
   const preamble = [`stored: ${storedList.join(", ")}${more > 0 ? ` (+${more} more)` : ""}`, `viewer: ${url ?? "none"}`, ...noteLines];
   return serve(layoutOf(loaded.summary, cursorAtFor(digest), { preamble, json: jsonHead }), digest, context);
 }
 
-async function notebookReply(session: Session, pageId: string, revision: number | undefined, snapshotId: string | undefined, context: Context): Promise<OperationOutcome> {
+async function notebookReply(session: SessionReader, pageId: string, revision: number | undefined, snapshotId: string | undefined, context: Context): Promise<OperationOutcome> {
   const page = await session.notebookGet(pageId, revision, snapshotId);
   if (!page.ok) return page.error.code === "NOT_FOUND" ? unresolved(context.format, page.error.message) : failedFrom(context.format, page.error);
   const freshness = await checkFreshness(page.value.envelope.freshness, await session.repositories());
@@ -547,13 +544,13 @@ async function notebookReply(session: Session, pageId: string, revision: number 
 async function notebookCreate(session: Session, args: { input: unknown }, context: Context): Promise<OperationOutcome> {
   const created = await session.notebookCreate(args.input);
   if (!created.ok) return failedFrom(context.format, created.error);
-  return notebookReply(session, created.value.pageId, created.value.revision, created.value.snapshotId, context);
+  return withSnapshot(session, context, (read) => notebookReply(read, created.value.pageId, created.value.revision, created.value.snapshotId, context));
 }
 
 async function notebookUpdate(session: Session, args: { pageId: string; snapshotId?: string; expectedRevision: number; blocks: unknown[]; sources?: unknown[] }, context: Context): Promise<OperationOutcome> {
   const updated = await session.notebookUpdate(args.pageId, args.expectedRevision, { blocks: args.blocks, ...(args.sources === undefined ? {} : { sources: args.sources }) }, args.snapshotId);
   if (!updated.ok) return failedFrom(context.format, updated.error);
-  return notebookReply(session, updated.value.pageId, updated.value.revision, updated.value.snapshotId, context);
+  return withSnapshot(session, context, (read) => notebookReply(read, updated.value.pageId, updated.value.revision, updated.value.snapshotId, context));
 }
 
 async function exampleRecord(session: Session, args: { viewId: string; snapshotId: string; output: unknown }, context: Context): Promise<OperationOutcome> {
@@ -567,7 +564,7 @@ async function exampleRecord(session: Session, args: { viewId: string; snapshotI
 
 // -- search ----------------------------------------------------------------------------------------------------------------------
 
-async function search(session: Session, args: { query: string; scope?: { entity: EntityRef; snapshotId: string } }, context: Context): Promise<OperationOutcome> {
+async function search(session: SessionReader, args: { query: string; scope?: { entity: EntityRef; snapshotId: string } }, context: Context): Promise<OperationOutcome> {
   const ranked = await searchSession(session, args.query, args.scope);
   const entries: Entry[] = ranked.map((document) => ({
     id: `${document.type}:${document.id}@${document.snapshotId}`, kind: "item", countable: true,
@@ -584,6 +581,21 @@ async function search(session: Session, args: { query: string; scope?: { entity:
     entries,
   }, cursorAtFor(query));
   return serve(layout, query, context);
+}
+
+const withSnapshot = async (session: Session, context: Context, run: (read: SessionReader) => Promise<OperationOutcome>): Promise<OperationOutcome> => {
+  const read = await snapshotOf(session, context.format);
+  return "ok" in read ? read : run(read);
+};
+
+/** One manifest read for a compound operation (T5); a manifest that cannot be read is the operation's storage error, as the first read used to report it. */
+async function snapshotOf(session: Session, format: ReplyFormat): Promise<SessionReader | OperationOutcome> {
+  try {
+    return await session.snapshot();
+  } catch (error) {
+    if (error instanceof SessionStorageError) return failed(format, error.code, error.message);
+    throw error;
+  }
 }
 
 // ---- entry point -----------------------------------------------------------------------------------------------------------------
@@ -622,12 +634,12 @@ async function dispatchOperation(session: Session | null, name: string, args: un
       case "validate": return await validateOperation(session, input as { input: unknown }, context);
       case "register_view": return await registerView(live, input as { definition: unknown; expectedRevision: number }, context);
       case "render": return await render(live, input as { input: Record<string, unknown> }, context);
-      case "open_entity": return await openEntityOperation(live, input as { entity: EntityRef; snapshotId: string }, context);
-      case "navigate": return await navigate(live, input as { pane: Record<string, unknown>; itemId: string }, context);
-      case "inspect_view": return await inspectView(live, input as { viewId: string; snapshotId: string }, context);
-      case "search": return await search(live, input as { query: string }, context);
+      case "open_entity": return await withSnapshot(live, context, (read) => openEntityOperation(read, input as { entity: EntityRef; snapshotId: string }, context));
+      case "navigate": return await withSnapshot(live, context, (read) => navigate(read, input as { pane: Record<string, unknown>; itemId: string }, context));
+      case "inspect_view": return await withSnapshot(live, context, (read) => inspectView(read, input as { viewId: string; snapshotId: string }, context));
+      case "search": return await withSnapshot(live, context, (read) => search(read, input as { query: string }, context));
       case "notebook_create": return await notebookCreate(live, input as { input: unknown }, context);
-      case "notebook_get": return await notebookReply(live, input.pageId as string, input.revision as number | undefined, input.snapshotId as string | undefined, context);
+      case "notebook_get": return await withSnapshot(live, context, (read) => notebookReply(read, input.pageId as string, input.revision as number | undefined, input.snapshotId as string | undefined, context));
       case "notebook_update": return await notebookUpdate(live, input as { pageId: string; snapshotId?: string; expectedRevision: number; blocks: unknown[] }, context);
       case "example_record": return await exampleRecord(live, input as { viewId: string; snapshotId: string; output: unknown }, context);
       default: return failed(requestedFormat, "UNKNOWN_OPERATION", `unknown operation "${name}"`);

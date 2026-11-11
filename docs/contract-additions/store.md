@@ -67,3 +67,12 @@ Failures that are about the lock never mutate:
 * `STORAGE_FAILED`, `details.cause: "flock-missing"`: no `flock` program on PATH (util-linux is a runtime dependency; see README).
 * `STORAGE_FAILED`, `details.cause: "flock-failed"`: the helper could not start, was killed, or exited with an error other than the timeout.
 * `STORAGE_FAILED`, `details.cause: "lock-file-unavailable"`: `.write.lock` could not be opened.
+
+## Read snapshots and the view index (T5)
+* `Session.snapshot()` is one manifest read; the returned `SessionSnapshot` answers every read method (and `generation`, `registryRevision`) from it. A compound
+  operation (`open_entity`, `navigate`, `inspect_view`, `render`'s reply, `notebook_get`, `search`, the viewer's `/api/entity` and `/api/index`) takes one and passes
+  it through all its steps, so its steps cannot see two registry revisions. `Session`'s own read methods are `snapshot()` plus one call.
+* A manifest view row records `entity`, `title`, `viewDefinitionId` and `completeness` (`{status}` or `{status: "unsupported", reason}`) beside `component`, so
+  `listViewIndex(snapshotId?)` answers without opening any stored object. A row written before this has none of them and the reader derives them from the
+  verified object, once per content hash per handle; `paneweft.session/1` is unchanged (an older reader ignores the extra members). An unreadable object of such a
+  row is not listed, as before; the object of any row is verified when it is opened, not when it is listed.

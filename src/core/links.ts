@@ -11,7 +11,7 @@
 //   `registered-root`; in every other case the answer is UNRESOLVED_TARGET naming the missing excerpt, why the file was not read, and the fix
 //   [navigate.registered-root.test.ts, #19].
 import type { EntityRef, Source } from "./wire.ts";
-import type { Session, ViewKey } from "./session.ts";
+import type { SessionReader, ViewKey } from "./session.ts";
 import type { NumberedLine } from "./anchors.ts";
 import { rankViews } from "./registry.ts";
 import { currentFileHash } from "./freshness.ts";
@@ -42,7 +42,7 @@ const unresolved = (missing: "snapshot" | "view" | "item" | "entity", message: s
 /** The entity an item opens: its own `entity`, or for an example run the `result` it produced. */
 const entityOfItem = (item: AnyItem): EntityRef | undefined => (item.entity ?? (item.result as EntityRef | undefined));
 
-export async function resolveLink(session: Session, target: LinkTarget): Promise<LinkResolution> {
+export async function resolveLink(session: SessionReader, target: LinkTarget): Promise<LinkResolution> {
   const snapshot = await session.snapshotInfo(target.snapshotId);
   if (!snapshot.ok) return unresolved("snapshot", `snapshot "${target.snapshotId}" does not exist`);
   if ("viewId" in target) {
@@ -65,16 +65,9 @@ export async function resolveLink(session: Session, target: LinkTarget): Promise
 
   const entity = await session.getEntity(target.entity, target.snapshotId);
   if (!entity.ok) return unresolved("entity", `entity ${target.entity.repository}/${target.entity.kind}/${target.entity.id} does not exist in snapshot "${target.snapshotId}"`);
-  const instances: Array<{ viewId: string; definitionId: string; completeness: Parameters<typeof rankViews>[0]["instances"][number]["completeness"] }> = [];
-  for (const key of await session.listViews()) {
-    if (key.snapshotId !== target.snapshotId) continue;
-    const stored = await session.getView(key);
-    if (!stored.ok) continue;
-    const view = stored.value.envelope;
-    if (view.entity.repository === target.entity.repository && view.entity.kind === target.entity.kind && view.entity.id === target.entity.id) {
-      instances.push({ viewId: key.viewId, definitionId: view.viewDefinitionId, completeness: view.completeness });
-    }
-  }
+  const instances = (await session.listViewIndex(target.snapshotId))
+    .filter((view) => view.entity.repository === target.entity.repository && view.entity.kind === target.entity.kind && view.entity.id === target.entity.id)
+    .map((view) => ({ viewId: view.viewId, definitionId: view.viewDefinitionId, completeness: view.completeness }));
   const { definitions } = await session.listDefinitions();
   const ranked = rankViews({
     entity: entity.value,
@@ -125,7 +118,7 @@ function storedLines(source: { anchor: { lines: [number, number] }; text: string
  * them only when the bytes read hash to what the view recorded. The hash is taken from the very bytes the lines come from, so there is no
  * window between "checked" and "read". Otherwise the answer says what is missing, why the file was not used, and how to fix it.
  */
-async function openFromRegisteredRoot(session: Session, key: ViewKey, envelope: { freshness: { repositories: Array<{ id: string; gitRev?: string | null; files: Record<string, string> }> } }, itemId: string, anchor: { repository: string; path: string; lines: [number, number] }): Promise<SourceOpening> {
+async function openFromRegisteredRoot(session: SessionReader, key: ViewKey, envelope: { freshness: { repositories: Array<{ id: string; gitRev?: string | null; files: Record<string, string> }> } }, itemId: string, anchor: { repository: string; path: string; lines: [number, number] }): Promise<SourceOpening> {
   const where = `${anchor.path}:${anchor.lines[0]}-${anchor.lines[1]}`;
   const missing = `item "${itemId}" is anchored at ${where}, which no stored source excerpt of snapshot "${key.snapshotId}" covers`;
   const fix = `submit a source view whose excerpt covers lines ${anchor.lines[0]}-${anchor.lines[1]} of ${anchor.path}`;
@@ -161,7 +154,7 @@ async function openFromRegisteredRoot(session: Session, key: ViewKey, envelope: 
  * Opens the stored excerpt that covers the item's anchor (an item with an `anchor`, or a source
  * view's annotation). `currency` compares the recorded file hash with the registered root's bytes.
  */
-export async function resolveItemSource(session: Session, key: ViewKey, itemId: string): Promise<SourceOpening> {
+export async function resolveItemSource(session: SessionReader, key: ViewKey, itemId: string): Promise<SourceOpening> {
   const stored = await readEffectiveView(session, key); // the view as inspect shows it: an example's recorded runs included (review round 2, S12)
   if (!stored.ok) return cannotOpen(`view "${key.viewId}" does not exist in snapshot "${key.snapshotId}"`);
   const envelope = stored.value.envelope;
@@ -178,7 +171,7 @@ export async function resolveItemSource(session: Session, key: ViewKey, itemId: 
   }
   if (anchor === undefined) return cannotOpen(`item "${itemId}" has no source anchor to open`);
   if (excerptView === undefined) {
-    for (const candidate of (await session.listViews()).filter((other) => other.snapshotId === key.snapshotId)) {
+    for (const candidate of (await session.listViewIndex(key.snapshotId)).filter((other) => other.component === "source")) { // only a source view holds an excerpt
       const other = await session.getView(candidate);
       if (!other.ok || other.value.envelope.component !== "source") continue;
       const data = other.value.envelope.data as { excerpt: { text: string; anchor: { repository: string; path: string; lines: [number, number] } } };
@@ -218,7 +211,7 @@ export type EvidenceStep =
  * Resolves every supports/contradicts target of a notebook claim block, in declared order (source ids and
  * `{viewId,itemId}` targets interleaved exactly as the claim lists them; supports first, then contradicts).
  */
-export async function resolveClaimEvidence(session: Session, key: ViewKey, claimBlockId: string): Promise<EvidenceStep[]> {
+export async function resolveClaimEvidence(session: SessionReader, key: ViewKey, claimBlockId: string): Promise<EvidenceStep[]> {
   const stored = await session.getView(key);
   if (!stored.ok || stored.value.envelope.component !== "notebook") return [];
   const envelope = stored.value.envelope;

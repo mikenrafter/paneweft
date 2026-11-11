@@ -14,7 +14,7 @@
 // Mating parts: summaries.ts (RecordedRuns), viewer/session-source.ts (ViewModel.recordedRuns), operations.ts loadView.
 import type { Envelope, Source } from "./wire.ts";
 import type { Result } from "./errors.ts";
-import type { Session, StoredView, ViewKey } from "./session.ts";
+import type { SessionReader, StoredView, ViewKey } from "./session.ts";
 import type { RecordedRuns } from "./summaries.ts";
 import { canonicalJson } from "./canonical.ts";
 import { viewItems } from "./items.ts";
@@ -110,7 +110,7 @@ function withRun(envelope: Envelope, output: Json, contentHash: string): { envel
 }
 
 /** The stored view of `key`, and for an example view its effective envelope (see the header). Other components pass through untouched. */
-export async function readEffectiveView(session: Session, key: ViewKey): Promise<Result<EffectiveView>> {
+export async function readEffectiveView(session: SessionReader, key: ViewKey): Promise<Result<EffectiveView>> {
   const stored = await session.getView(key);
   if (!stored.ok) return stored;
   const base = stored.value.envelope;
