@@ -1,0 +1,47 @@
+{
+  "why": "Literal cross-language fixtures for the tagged value encoding (docs/v1-red-contract.md section 2; spec decision 9, amendment S11). `input` is a language-neutral description each SDK test turns into a native value; `expected` is the paneweft.object-graph/1 Value. Reviewed by hand against the section, independent of either encoder. Floats here are never integral, so JSON number identity is the same in Rust and JavaScript.",
+  "limits": { "stringBytes": 16384 },
+  "cases": [
+    { "name": "null", "input": { "kind": "null" }, "expected": null },
+    { "name": "bool", "input": { "kind": "bool", "value": true }, "expected": true },
+    { "name": "small-int", "input": { "kind": "int", "decimal": "42" }, "expected": 42 },
+    { "name": "negative-int", "input": { "kind": "int", "decimal": "-7" }, "expected": -7 },
+    { "name": "max-safe-int", "input": { "kind": "int", "decimal": "9007199254740991" }, "expected": 9007199254740991 },
+    { "name": "min-safe-int", "input": { "kind": "int", "decimal": "-9007199254740991" }, "expected": -9007199254740991 },
+    { "name": "first-unsafe-int", "input": { "kind": "int", "decimal": "9007199254740992" }, "expected": { "$paneweft": "bigint", "decimal": "9007199254740992" } },
+    { "name": "unsafe-int-odd", "input": { "kind": "int", "decimal": "9007199254740993" }, "expected": { "$paneweft": "bigint", "decimal": "9007199254740993" } },
+    { "name": "first-unsafe-negative", "input": { "kind": "int", "decimal": "-9007199254740992" }, "expected": { "$paneweft": "bigint", "decimal": "-9007199254740992" } },
+    { "name": "u64-max", "input": { "kind": "int", "decimal": "18446744073709551615" }, "expected": { "$paneweft": "bigint", "decimal": "18446744073709551615" } },
+    { "name": "finite-float", "input": { "kind": "float", "number": 0.5 }, "expected": 0.5 },
+    { "name": "nan", "input": { "kind": "float", "special": "NaN" }, "expected": { "$paneweft": "float", "value": "NaN" } },
+    { "name": "positive-infinity", "input": { "kind": "float", "special": "Infinity" }, "expected": { "$paneweft": "float", "value": "Infinity" } },
+    { "name": "negative-infinity", "input": { "kind": "float", "special": "-Infinity" }, "expected": { "$paneweft": "float", "value": "-Infinity" } },
+    { "name": "negative-zero", "input": { "kind": "float", "special": "-0" }, "expected": { "$paneweft": "float", "value": "-0" } },
+    { "name": "bytes", "input": { "kind": "bytes", "base64": "AAEC" }, "expected": { "$paneweft": "bytes", "base64": "AAEC", "length": 3 } },
+    { "name": "empty-bytes", "input": { "kind": "bytes", "base64": "" }, "expected": { "$paneweft": "bytes", "base64": "", "length": 0 } },
+    { "name": "absent", "input": { "kind": "absent" }, "expected": { "$paneweft": "absent" } },
+    { "name": "redacted-with-reason", "input": { "kind": "redacted", "reason": "log content" }, "expected": { "$paneweft": "redacted", "reason": "log content" } },
+    { "name": "unsupported", "input": { "kind": "unsupported", "reason": "closure" }, "expected": { "$paneweft": "unsupported", "reason": "closure" } },
+    { "name": "string-multibyte", "input": { "kind": "string", "text": "héllo" }, "expected": "héllo" },
+    { "name": "string-at-limit", "limits": { "stringBytes": 8 }, "input": { "kind": "string", "repeat": { "unit": "é", "count": 4 } }, "expected": "éééé" },
+    { "name": "string-truncated-on-boundary", "limits": { "stringBytes": 8 }, "input": { "kind": "string", "repeat": { "unit": "é", "count": 10 } }, "expected": { "$paneweft": "truncated", "text": "éééé", "keptBytes": 8, "omittedBytes": 12 } },
+    { "name": "string-truncated-never-splits-a-code-point", "limits": { "stringBytes": 7 }, "input": { "kind": "string", "repeat": { "unit": "é", "count": 10 } }, "expected": { "$paneweft": "truncated", "text": "ééé", "keptBytes": 6, "omittedBytes": 14 } },
+    { "name": "list-with-nested-bigint", "input": { "kind": "list", "items": [{ "kind": "int", "decimal": "1" }, { "kind": "int", "decimal": "9007199254740993" }, { "kind": "float", "special": "NaN" }] }, "expected": [1, { "$paneweft": "bigint", "decimal": "9007199254740993" }, { "$paneweft": "float", "value": "NaN" }] },
+    { "name": "plain-map", "input": { "kind": "map", "entries": [["b", { "kind": "int", "decimal": "1" }], ["a", { "kind": "string", "text": "x" }]] }, "expected": { "b": 1, "a": "x" } },
+    { "name": "map-with-the-reserved-key-is-wrapped", "input": { "kind": "map", "entries": [["$paneweft", { "kind": "string", "text": "bigint" }], ["decimal", { "kind": "string", "text": "12" }]] }, "expected": { "$paneweft": "map", "entries": [["$paneweft", "bigint"], ["decimal", "12"]] } }
+  ],
+  "display": {
+    "why": "How a tagged value reads in a shape example or a list cell (section 2). Object records keep the tag; only display formats it.",
+    "cases": [
+      { "input": { "kind": "int", "decimal": "9007199254740993" }, "text": "9007199254740993" },
+      { "input": { "kind": "float", "special": "NaN" }, "text": "NaN" },
+      { "input": { "kind": "float", "special": "-0" }, "text": "-0" },
+      { "input": { "kind": "bytes", "base64": "AAEC" }, "text": "<3 bytes>" },
+      { "input": { "kind": "absent" }, "text": "<absent>" },
+      { "input": { "kind": "redacted", "reason": "log content" }, "text": "<redacted: log content>" },
+      { "input": { "kind": "unsupported", "reason": "closure" }, "text": "<unsupported: closure>" },
+      { "input": { "kind": "string", "text": "plain" }, "text": "plain" },
+      { "input": { "kind": "null" }, "text": "null" }
+    ]
+  }
+}

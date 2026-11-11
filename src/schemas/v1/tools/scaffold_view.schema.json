@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:tool:scaffold_view:1",
+  "title": "scaffold_view",
+  "description": "Read-only generation, writes nothing and never overwrites a file. Returns a bounded source patch for a new view of a type, an output-test template that FAILS on an assertion until the view is implemented, the registration or manifest change and the collection recipe. Apply the patch with your normal code editor. Next: edit, then collect.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "repo",
+    "type",
+    "question"
+  ],
+  "properties": {
+    "repo": {
+      "$ref": "urn:paneweft:schema:common:1#/$defs/Id",
+      "description": "Repository id registered with `paneweft repo add`."
+    },
+    "type": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "question": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "component": {
+      "enum": [
+        "shape",
+        "list"
+      ]
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "symbol"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "symbol": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    },
+    "cursor": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "description": "Continuation cursor from a previous reply of the same query."
+    },
+    "format": {
+      "enum": [
+        "text",
+        "json"
+      ],
+      "default": "text",
+      "description": "Reply format."
+    },
+    "maxBytes": {
+      "type": "integer",
+      "minimum": 2048,
+      "maximum": 32768,
+      "default": 8192,
+      "description": "UTF-8 byte budget of the whole serialized reply (design section 4)."
+    }
+  }
+}

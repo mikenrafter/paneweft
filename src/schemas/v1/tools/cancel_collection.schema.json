@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:tool:cancel_collection:1",
+  "title": "cancel_collection",
+  "description": "Cancels a job through qex (qex cancel when queued, qex kill when starting or running) and reports cancelled only after qex shows a terminal state. During import it lets the atomic import finish and says cancel-too-late. Preserves valid diagnostic artifacts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "job"
+  ],
+  "properties": {
+    "job": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "cursor": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "description": "Continuation cursor from a previous reply of the same query."
+    },
+    "format": {
+      "enum": [
+        "text",
+        "json"
+      ],
+      "default": "text",
+      "description": "Reply format."
+    },
+    "maxBytes": {
+      "type": "integer",
+      "minimum": 2048,
+      "maximum": 32768,
+      "default": 8192,
+      "description": "UTF-8 byte budget of the whole serialized reply (design section 4)."
+    }
+  }
+}

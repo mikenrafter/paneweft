@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:v1:reply:1",
+  "title": "v1 tool reply",
+  "description": "JSON form of a v1 tool reply. The text form opens with the same header (docs/v1-red-contract.md section 11). Every reply fits maxBytes; `cursor` is null iff nothing follows.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "tool",
+    "completeness",
+    "freshness",
+    "counts",
+    "items",
+    "notices",
+    "cursor"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "paneweft.reply/2"
+    },
+    "tool": {
+      "type": "string"
+    },
+    "completeness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "complete",
+            "partial",
+            "unsupported"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "freshness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "fresh",
+            "stale",
+            "unverified",
+            "not-applicable"
+          ]
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "catalogueDigest": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        }
+      }
+    },
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unit",
+        "total",
+        "matched",
+        "returned",
+        "omitted",
+        "truncated"
+      ],
+      "properties": {
+        "unit": {
+          "type": "string"
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "matched": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "returned": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "omitted": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      }
+    },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "notices": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "cursor": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "details": {
+      "type": "object"
+    }
+  }
+}

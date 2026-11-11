@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:v1:component:custom:1",
+  "title": "Custom renderer view",
+  "description": "The data of component 'custom' (envelope paneweft.view/2). A repo-owned renderer is named by id, API version and digests; the payload is validated against the locally registered renderer schema (no network schema loading); a standard-component fallback is REQUIRED so agents and humans can always read the same facts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["renderer", "payload", "objects", "fallback"],
+  "properties": {
+    "renderer": { "type": "object", "additionalProperties": false, "required": ["id", "apiVersion", "payloadSchemaDigest", "assetDigest"], "properties": { "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$" }, "apiVersion": { "type": "integer", "minimum": 1 }, "payloadSchemaDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "assetDigest": { "type": "string", "pattern": "^[0-9a-f]{64}$" } } },
+    "payload": { "type": "object" },
+    "objects": { "type": "array", "items": { "type": "string", "pattern": "^o[1-9][0-9]*$" }, "description": "Object ids the renderer may name in select_item and open_object. Anything else is refused by the host." },
+    "fallback": { "type": "object", "additionalProperties": false, "required": ["component", "data"], "properties": { "component": { "enum": ["list", "tree", "graph", "source", "shape", "notebook", "example"] }, "data": { "type": "object" } } }
+  }
+}

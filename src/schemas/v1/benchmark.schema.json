@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:v1:benchmark:1",
+  "title": "Teaching benchmark",
+  "description": "Questions, answer keys, answers, confidence and scores for the deterministic harness (spec S9; docs: research note 13). Confidence is an integer 0-100.",
+  "oneOf": [{ "$ref": "#/$defs/Question" }, { "$ref": "#/$defs/AnswerKey" }, { "$ref": "#/$defs/Answer" }, { "$ref": "#/$defs/Score" }, { "$ref": "#/$defs/Topic" }],
+  "$defs": {
+    "Id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "Kind": { "enum": ["recall", "trace", "locate", "causal", "counterfactual", "boundary", "why-not"] },
+    "Topic": {
+      "type": "object", "additionalProperties": false, "required": ["schemaVersion", "id", "title", "questionIds", "plantedErrors"],
+      "properties": { "schemaVersion": { "const": "paneweft.benchmark-topic/1" }, "id": { "$ref": "#/$defs/Id" }, "title": { "type": "string" }, "pinnedCommit": { "type": "string" }, "questionIds": { "type": "array", "items": { "$ref": "#/$defs/Id" } }, "plantedErrors": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["id", "claim", "contradictedBy"], "properties": { "id": { "$ref": "#/$defs/Id" }, "claim": { "type": "string" }, "contradictedBy": { "type": "array", "items": { "type": "string" }, "minItems": 1, "description": "Evidence supplied in the same student material that contradicts the planted claim: a planted error must be detectable from what the student receives." } } } } }
+    },
+    "Question": {
+      "type": "object", "additionalProperties": false, "required": ["schemaVersion", "id", "topic", "kind", "text", "author"],
+      "properties": { "schemaVersion": { "const": "paneweft.benchmark-question/1" }, "id": { "$ref": "#/$defs/Id" }, "topic": { "$ref": "#/$defs/Id" }, "kind": { "$ref": "#/$defs/Kind" }, "text": { "type": "string", "minLength": 1 }, "author": { "type": "object", "additionalProperties": false, "required": ["role", "sawViews"], "properties": { "role": { "const": "question-author" }, "sawViews": { "const": false } } } }
+    },
+    "AnswerKey": {
+      "type": "object", "additionalProperties": false, "required": ["schemaVersion", "questionId", "answer", "citations"],
+      "properties": { "schemaVersion": { "const": "paneweft.benchmark-key/1" }, "questionId": { "$ref": "#/$defs/Id" }, "answer": { "type": "string", "minLength": 1 }, "citations": { "type": "array", "minItems": 1, "items": { "type": "object", "additionalProperties": false, "required": ["kind", "ref"], "properties": { "kind": { "enum": ["code", "trail", "recorded-evidence"] }, "ref": { "type": "string" } } } } }
+    },
+    "Answer": {
+      "type": "object", "additionalProperties": false, "required": ["schemaVersion", "questionId", "text", "confidence"],
+      "properties": { "schemaVersion": { "const": "paneweft.benchmark-answer/1" }, "questionId": { "$ref": "#/$defs/Id" }, "text": { "type": "string" }, "confidence": { "type": "integer", "minimum": 0, "maximum": 100 }, "declaredGap": { "type": "boolean", "description": "The student says the supplied material does not cover the question." }, "flaggedErrors": { "type": "array", "items": { "type": "string" } } }
+    },
+    "Score": {
+      "type": "object", "additionalProperties": false, "required": ["schemaVersion", "questionId", "kind", "correct", "confidence"],
+      "properties": { "schemaVersion": { "const": "paneweft.benchmark-score/1" }, "questionId": { "$ref": "#/$defs/Id" }, "kind": { "$ref": "#/$defs/Kind" }, "correct": { "type": "boolean" }, "confidence": { "type": "integer", "minimum": 0, "maximum": 100 }, "grader": { "type": "string" } }
+    }
+  }
+}

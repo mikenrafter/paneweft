@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:v1:adapter:1",
+  "title": "Collection adapter",
+  "description": "An owner-registered adapter record (design section 6, Execution authorization). Registering one is CLI-only. The checked-in manifest and any submitted payload can select declarations and tests; they can never replace the executable, add shell fragments, change the root or install a runner.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "kind", "grammar", "repo", "executable", "workspaceRoot", "entry", "features", "supportedVersions", "limits", "queue"],
+  "properties": {
+    "schemaVersion": { "const": "paneweft.adapter/1" },
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$" },
+    "kind": { "enum": ["cargo", "vitest"] },
+    "grammar": { "enum": ["cargo-test/1", "vitest-run/1"], "description": "Pins the argv shape. The selectors are data; the grammar is code." },
+    "repo": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "executable": { "type": "string", "pattern": "^/", "description": "Absolute path; the identity of the executable is part of the record." },
+    "executableSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "workspaceRoot": { "type": "string", "pattern": "^/" },
+    "entry": { "type": "string", "minLength": 1, "description": "Manifest directory (cargo) or package directory (vitest), relative to workspaceRoot." },
+    "features": { "type": "array", "items": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" } },
+    "supportedVersions": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+    "limits": { "type": "object", "additionalProperties": false, "required": ["timeoutMs", "logBytes"], "properties": { "timeoutMs": { "type": "integer", "minimum": 1 }, "logBytes": { "type": "integer", "minimum": 1024 } } },
+    "queue": { "type": "object", "additionalProperties": false, "required": ["wrapper", "cpu", "mem"], "properties": { "wrapper": { "const": "qex" }, "cpu": { "type": "string" }, "mem": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } } } }
+  }
+}

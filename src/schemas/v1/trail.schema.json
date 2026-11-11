@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:v1:trail:1",
+  "title": "Decision trail",
+  "description": "Ordered entries: question, options tried, outcome, evidence, decision. Abandoned options stay visible with a reason (spec S8). Lowered to existing notebook blocks in week one.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "title", "entries"],
+  "properties": {
+    "schemaVersion": { "const": "paneweft.trail/1" },
+    "id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "title": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "entries": { "type": "array", "items": { "$ref": "#/$defs/Entry" } }
+  },
+  "$defs": {
+    "Id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "Evidence": { "type": "object", "additionalProperties": false, "required": ["provenance", "source"], "properties": { "provenance": { "enum": ["read", "parsed", "compiled", "observed", "inferred"] }, "source": { "type": "string", "minLength": 1 }, "reason": { "type": "string" } } },
+    "Link": { "type": "object", "additionalProperties": false, "required": ["kind", "id", "snapshotId"], "properties": { "kind": { "enum": ["type", "view", "example", "source"] }, "id": { "type": "string" }, "snapshotId": { "type": "string" }, "anchor": { "type": "object", "additionalProperties": false, "required": ["repository", "path", "lines"], "properties": { "repository": { "type": "string" }, "path": { "type": "string" }, "lines": { "type": "array", "items": { "type": "integer", "minimum": 1 }, "minItems": 2, "maxItems": 2 } } } } },
+    "Option": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "reason", "evidence"],
+      "properties": { "id": { "$ref": "#/$defs/Id" }, "label": { "type": "string" }, "status": { "enum": ["chosen", "abandoned", "superseded", "failed"] }, "reason": { "type": "string", "minLength": 1 }, "evidence": { "type": "array", "items": { "$ref": "#/$defs/Evidence" } }, "supersededBy": { "$ref": "#/$defs/Id" } }
+    },
+    "Entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "order", "question", "options", "decision", "links"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" }, "order": { "type": "integer", "minimum": 1 }, "question": { "type": "string", "minLength": 1 },
+        "options": { "type": "array", "items": { "$ref": "#/$defs/Option" }, "minItems": 1 },
+        "decision": { "type": "string", "minLength": 1 },
+        "links": { "type": "array", "items": { "$ref": "#/$defs/Link" } },
+        "supersedes": { "$ref": "#/$defs/Id" },
+        "deadEndExample": { "$ref": "#/$defs/Id" }
+      }
+    }
+  }
+}

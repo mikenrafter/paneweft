@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:tool:list_views_for_type:1",
+  "title": "list_views_for_type",
+  "description": "Discovery, reads the catalogue and never executes code. For one type id: view definitions, questions, source locations, components, renderer requirements, example ids, last capture and stale reasons. Next: list_examples, scaffold_view or collect.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "repo",
+    "type"
+  ],
+  "properties": {
+    "repo": {
+      "$ref": "urn:paneweft:schema:common:1#/$defs/Id",
+      "description": "Repository id registered with `paneweft repo add`."
+    },
+    "type": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "target": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "cursor": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "description": "Continuation cursor from a previous reply of the same query."
+    },
+    "format": {
+      "enum": [
+        "text",
+        "json"
+      ],
+      "default": "text",
+      "description": "Reply format."
+    },
+    "maxBytes": {
+      "type": "integer",
+      "minimum": 2048,
+      "maximum": 32768,
+      "default": 8192,
+      "description": "UTF-8 byte budget of the whole serialized reply (design section 4)."
+    }
+  }
+}

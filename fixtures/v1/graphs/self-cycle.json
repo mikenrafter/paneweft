@@ -1,0 +1,50 @@
+{
+  "name": "self-cycle",
+  "why": "A node that references itself is the smallest cycle (IV9).",
+  "nodes": {
+    "a": {
+      "type": "fx::Node",
+      "key": null,
+      "label": "a",
+      "fields": {},
+      "links": [
+        {
+          "name": "me",
+          "to": "a"
+        }
+      ]
+    }
+  },
+  "publish": [
+    "a"
+  ],
+  "expected": {
+    "roots": [
+      "o1"
+    ],
+    "objects": [
+      {
+        "id": "o1",
+        "typeId": "fx::Node",
+        "domainKey": null,
+        "label": "a",
+        "fields": {},
+        "edges": [
+          {
+            "name": "me",
+            "kind": "cycle",
+            "target": "o1"
+          }
+        ],
+        "views": [
+          "node.details"
+        ],
+        "contentHash": "db6c2a870c69ffef113921a7dc154232c972e7b1a56dc5d329b48deece3cc19b",
+        "hashInput": "{\"domainKey\":null,\"fields\":{},\"label\":\"a\",\"typeId\":\"fx::Node\"}"
+      }
+    ],
+    "completeness": {
+      "status": "complete"
+    }
+  }
+}

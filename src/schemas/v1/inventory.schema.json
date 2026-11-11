@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:v1:inventory:1",
+  "title": "View inventory",
+  "description": "The small checked-in list of stable view and example ids and their owning modules (design section 6, Keeping views current). It stores definitions, never generated runtime facts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "views", "examples"],
+  "properties": {
+    "schemaVersion": { "const": "paneweft.inventory/1" },
+    "views": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["id", "module"], "properties": { "id": { "type": "string" }, "module": { "type": "string" } } } },
+    "examples": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["id", "module", "typeId"], "properties": { "id": { "type": "string" }, "module": { "type": "string" }, "typeId": { "type": "string" } } } }
+  }
+}

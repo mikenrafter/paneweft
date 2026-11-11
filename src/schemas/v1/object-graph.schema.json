@@ -1,0 +1,962 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:v1:object-graph:1",
+  "title": "Object graph",
+  "description": "What an SDK emits for one invocation: immutable, capture-scoped object records, the views computed over them, stored child pages and diagnostics (docs/v1-red-contract.md section 3). Self-contained on purpose so the TypeScript declarations can be generated from this file alone.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "captureId",
+    "runId",
+    "invocationId",
+    "roots",
+    "objects",
+    "views",
+    "pages",
+    "diagnostics",
+    "limits",
+    "completeness"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "paneweft.object-graph/1"
+    },
+    "captureId": {
+      "$ref": "#/$defs/Id"
+    },
+    "runId": {
+      "$ref": "#/$defs/Id"
+    },
+    "invocationId": {
+      "$ref": "#/$defs/Id"
+    },
+    "roots": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ObjectId"
+      },
+      "maxItems": 100
+    },
+    "objects": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ObjectRecord"
+      },
+      "maxItems": 1000
+    },
+    "views": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/ViewRecord"
+      }
+    },
+    "pages": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/PageRecord"
+      }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/Diagnostic"
+      }
+    },
+    "limits": {
+      "$ref": "#/$defs/Limits"
+    },
+    "completeness": {
+      "$ref": "#/$defs/CaptureCompleteness"
+    }
+  },
+  "$defs": {
+    "Id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "ObjectId": {
+      "type": "string",
+      "pattern": "^o[1-9][0-9]*$",
+      "description": "Capture-scoped and opaque: assigned in registration order, never derived from an address."
+    },
+    "Sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "Value": {
+      "description": "A JSON value in which every state that JSON cannot carry is an explicit tagged object (section 2). A plain object never has the key $paneweft; a data object that does is wrapped in the map tag.",
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Value"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "not": {
+              "const": "$paneweft"
+            }
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/Value"
+          }
+        },
+        {
+          "$ref": "#/$defs/TaggedValue"
+        }
+      ]
+    },
+    "TaggedValue": {
+      "type": "object",
+      "required": [
+        "$paneweft"
+      ],
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "$paneweft",
+            "decimal"
+          ],
+          "properties": {
+            "$paneweft": {
+              "const": "bigint"
+            },
+            "decimal": {
+              "type": "string",
+              "pattern": "^-?(0|[1-9][0-9]*)$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "$paneweft",
+            "value"
+          ],
+          "properties": {
+            "$paneweft": {
+              "const": "float"
+            },
+            "value": {
+              "enum": [
+                "NaN",
+                "Infinity",
+                "-Infinity",
+                "-0"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "$paneweft",
+            "base64",
+            "length"
+          ],
+          "properties": {
+            "$paneweft": {
+              "const": "bytes"
+            },
+            "base64": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9+/]*={0,2}$"
+            },
+            "length": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "$paneweft"
+          ],
+          "properties": {
+            "$paneweft": {
+              "const": "absent"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "$paneweft"
+          ],
+          "properties": {
+            "$paneweft": {
+              "const": "redacted"
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 256
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "$paneweft",
+            "reason"
+          ],
+          "properties": {
+            "$paneweft": {
+              "const": "unsupported"
+            },
+            "reason": {
+              "type": "string",
+              "maxLength": 256
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "$paneweft",
+            "text",
+            "keptBytes",
+            "omittedBytes"
+          ],
+          "properties": {
+            "$paneweft": {
+              "const": "truncated"
+            },
+            "text": {
+              "type": "string"
+            },
+            "keptBytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "omittedBytes": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "description": "null when the original length is unknown."
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "$paneweft",
+            "reason"
+          ],
+          "properties": {
+            "$paneweft": {
+              "const": "not-captured"
+            },
+            "reason": {
+              "enum": [
+                "depth-limit",
+                "object-limit",
+                "reference-limit",
+                "root-bytes-limit",
+                "collection-limit",
+                "not-requested",
+                "budget"
+              ]
+            },
+            "selector": {
+              "$ref": "#/$defs/RecollectSelector"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "$paneweft",
+            "entries"
+          ],
+          "properties": {
+            "$paneweft": {
+              "const": "map"
+            },
+            "entries": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 2,
+                "prefixItems": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "$ref": "#/$defs/Value"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    },
+    "RecollectSelector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "examples"
+      ],
+      "description": "How to recollect a branch into a NEW snapshot: data for the collect tool, never a callback.",
+      "properties": {
+        "examples": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Id"
+          },
+          "minItems": 1
+        },
+        "views": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "objectKey": {
+          "type": "string"
+        },
+        "limits": {
+          "$ref": "#/$defs/LimitOverrides"
+        }
+      }
+    },
+    "ObjectRef": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "object"
+          ],
+          "properties": {
+            "object": {
+              "$ref": "#/$defs/ObjectId"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "notCaptured"
+          ],
+          "properties": {
+            "notCaptured": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "reason"
+              ],
+              "properties": {
+                "reason": {
+                  "type": "string"
+                },
+                "selector": {
+                  "$ref": "#/$defs/RecollectSelector"
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "kind"
+      ],
+      "description": "child: first discovery of the target through this edge. alias: a later reference to an object that is already captured and is not an ancestor. cycle: a reference back to an ancestor on the active traversal path. not-captured: the reference was refused by a bound; there is no target, only the reason and a recollection selector.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "kind": {
+          "enum": [
+            "child",
+            "alias",
+            "cycle",
+            "not-captured"
+          ]
+        },
+        "target": {
+          "$ref": "#/$defs/ObjectId"
+        },
+        "reason": {
+          "enum": [
+            "depth-limit",
+            "object-limit",
+            "reference-limit",
+            "root-bytes-limit",
+            "collection-limit",
+            "not-requested",
+            "budget"
+          ]
+        },
+        "selector": {
+          "$ref": "#/$defs/RecollectSelector"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "not-captured"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "then": {
+            "required": [
+              "reason"
+            ],
+            "properties": {
+              "target": false
+            }
+          },
+          "else": {
+            "required": [
+              "target"
+            ],
+            "properties": {
+              "reason": false,
+              "selector": false
+            }
+          }
+        }
+      ]
+    },
+    "ObjectRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "typeId",
+        "domainKey",
+        "label",
+        "fields",
+        "edges",
+        "views",
+        "contentHash"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/ObjectId"
+        },
+        "typeId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "domainKey": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 256,
+          "description": "Optional logical identity for comparison across captures. Never replaces the object id or the content hash."
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "fields": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/Value"
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Edge"
+          }
+        },
+        "views": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Id"
+          }
+        },
+        "contentHash": {
+          "$ref": "#/$defs/Sha256"
+        }
+      }
+    },
+    "OmissionCount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "known",
+        "count"
+      ],
+      "properties": {
+        "known": {
+          "type": "boolean"
+        },
+        "count": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      }
+    },
+    "ViewCompleteness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "complete",
+            "partial",
+            "unsupported"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "omitted": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/OmissionCount"
+          }
+        },
+        "consistency": {
+          "enum": [
+            "snapshot",
+            "best-effort"
+          ],
+          "description": "best-effort when the view made separate reads without a consistent domain snapshot (section 4)."
+        }
+      }
+    },
+    "ViewRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "viewId",
+        "objectId",
+        "title",
+        "question",
+        "component",
+        "priority",
+        "completeness",
+        "evidence",
+        "pages"
+      ],
+      "properties": {
+        "viewId": {
+          "$ref": "#/$defs/Id"
+        },
+        "objectId": {
+          "$ref": "#/$defs/ObjectId"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "question": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "component": {
+          "enum": [
+            "list",
+            "tree",
+            "graph",
+            "source",
+            "shape",
+            "notebook",
+            "example",
+            "custom"
+          ]
+        },
+        "priority": {
+          "type": "integer"
+        },
+        "completeness": {
+          "$ref": "#/$defs/ViewCompleteness"
+        },
+        "evidence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "provenance",
+            "runId"
+          ],
+          "properties": {
+            "provenance": {
+              "enum": [
+                "read",
+                "parsed",
+                "compiled",
+                "observed"
+              ]
+            },
+            "runId": {
+              "$ref": "#/$defs/Id"
+            }
+          }
+        },
+        "data": {
+          "type": "object",
+          "description": "The v0 component data of the view (src/schemas/components), first page only. Absent when the view is unsupported."
+        },
+        "unsupportedReason": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "pages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "index",
+              "pageId",
+              "rowCount"
+            ],
+            "properties": {
+              "index": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "pageId": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$"
+              },
+              "rowCount": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "description": "Further stored pages; page 0 is the data above."
+        },
+        "rowsTotal": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "renderer": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "apiVersion",
+            "payloadSchemaDigest",
+            "assetDigest"
+          ],
+          "properties": {
+            "id": {
+              "$ref": "#/$defs/Id"
+            },
+            "apiVersion": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "payloadSchemaDigest": {
+              "$ref": "#/$defs/Sha256"
+            },
+            "assetDigest": {
+              "$ref": "#/$defs/Sha256"
+            }
+          }
+        }
+      }
+    },
+    "PageRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pageId",
+        "viewId",
+        "objectId",
+        "index",
+        "rows"
+      ],
+      "properties": {
+        "pageId": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "sha256 of the canonical JSON of rows: content addressed, so a page can be read after the process exited and cannot change."
+        },
+        "viewId": {
+          "$ref": "#/$defs/Id"
+        },
+        "objectId": {
+          "$ref": "#/$defs/ObjectId"
+        },
+        "index": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          },
+          "maxItems": 100
+        }
+      }
+    },
+    "Diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "category",
+        "message",
+        "nextAction"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/Id"
+        },
+        "category": {
+          "enum": [
+            "compiler",
+            "typecheck",
+            "assertion",
+            "view-exception",
+            "output-schema",
+            "reference",
+            "limit",
+            "registration",
+            "renderer",
+            "runner"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 2048
+        },
+        "viewId": {
+          "$ref": "#/$defs/Id"
+        },
+        "exampleId": {
+          "$ref": "#/$defs/Id"
+        },
+        "source": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "line"
+          ],
+          "properties": {
+            "path": {
+              "type": "string"
+            },
+            "line": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "column": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "pointer": {
+          "type": "string",
+          "description": "RFC 6901 pointer when the fault is in a document."
+        },
+        "invariant": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "expected": {
+          "$ref": "#/$defs/Value"
+        },
+        "actual": {
+          "$ref": "#/$defs/Value"
+        },
+        "stderrSlice": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "nextAction": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      }
+    },
+    "LimitOverrides": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "depth": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "objects": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "references": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rootBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "stringBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pageRows": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "collectionBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "roots": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "viewRows": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "viewBudgetMs": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "Limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "depth",
+        "objects",
+        "references",
+        "rootBytes",
+        "stringBytes",
+        "pageRows",
+        "collectionBytes",
+        "roots",
+        "viewRows",
+        "viewBudgetMs"
+      ],
+      "properties": {
+        "depth": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "objects": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "references": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rootBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "stringBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "pageRows": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "collectionBytes": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "roots": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "viewRows": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "viewBudgetMs": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "CaptureCompleteness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "complete",
+            "partial"
+          ]
+        },
+        "omitted": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/OmissionCount"
+          },
+          "description": "Named gaps, e.g. objects, references, strings, rows. Never silent: a limit that bit is always here."
+        }
+      }
+    }
+  }
+}

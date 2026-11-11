@@ -1,0 +1,126 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:v1:test-run:1",
+  "title": "Test run",
+  "description": "The outcome model of one collection run (spec S6): invocation (one attempt), example (all attempts retained; the final attempt decides), suite (setup and teardown, attached to the suite and shown on its examples), collection (exit status, timeouts, cancellation). Native outcome and capture outcome are separate (section 6 of docs/v1-red-contract.md). `meta.origin` is host metadata and is never accepted in a submitted payload.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "runId", "runner", "inputFingerprint", "collection", "suites", "examples", "invocations"],
+  "properties": {
+    "schemaVersion": { "const": "paneweft.test-run/1" },
+    "runId": { "$ref": "#/$defs/Id" },
+    "collectionId": { "type": ["string", "null"], "maxLength": 128, "description": "The job id of a host-collected run; null for an external recording." },
+    "runner": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "features"],
+      "properties": { "id": { "enum": ["cargo", "vitest"] }, "version": { "type": "string", "minLength": 1, "maxLength": 64 }, "target": { "type": "string", "maxLength": 256 }, "features": { "type": "array", "items": { "type": "string" } } }
+    },
+    "inputFingerprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["digest", "memberCount", "sampledConsistency"],
+      "properties": {
+        "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "memberCount": { "type": "integer", "minimum": 0 },
+        "sampledConsistency": { "enum": ["consistent-sampled", "mixed-input", "unverified"], "description": "Before/after hashing is a sample, not proof that the inputs never changed mid-run (S10)." }
+      }
+    },
+    "collection": { "$ref": "#/$defs/CollectionOutcome" },
+    "suites": { "type": "array", "items": { "$ref": "#/$defs/Suite" } },
+    "examples": { "type": "array", "items": { "$ref": "#/$defs/Example" } },
+    "invocations": { "type": "array", "items": { "$ref": "#/$defs/Invocation" } },
+    "meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["origin"],
+      "description": "Stamped by the host at import. A submitted payload that carries it is refused.",
+      "properties": { "origin": { "enum": ["host_collected", "external_recorded", "agent_submitted"] }, "importedAt": { "type": "string" }, "jobId": { "type": ["string", "null"] } }
+    }
+  },
+  "$defs": {
+    "Id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "NativeOutcome": { "enum": ["passed", "failed", "error", "skipped", "filtered", "cancelled", "blocked"], "description": "failed: an assertion or check failed. error: a panic, a thrown non-assertion, or Result::Err. blocked: a child example failed and this parent could not run on." },
+    "Invocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "exampleId", "attempt", "parent", "native", "capture", "checks", "verified"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "exampleId": { "$ref": "#/$defs/Id" },
+        "attempt": { "type": "integer", "minimum": 1 },
+        "parent": { "type": ["string", "null"], "description": "The invoking example's invocation, or null for a top-level run." },
+        "native": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["outcome"],
+          "properties": { "outcome": { "$ref": "#/$defs/NativeOutcome" }, "message": { "type": "string", "maxLength": 2048 }, "blockedBy": { "$ref": "#/$defs/Id" } }
+        },
+        "capture": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["outcome", "diagnostics"],
+          "properties": { "outcome": { "enum": ["captured", "failed", "none"] }, "captureId": { "$ref": "#/$defs/Id" }, "diagnostics": { "type": "array", "items": { "$ref": "#/$defs/Id" } } }
+        },
+        "checks": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["claim", "passed"], "properties": { "claim": { "$ref": "#/$defs/Id" }, "passed": { "type": "boolean" }, "message": { "type": "string", "maxLength": 1024 } } } },
+        "verified": { "type": "boolean", "description": "True only for a passed invocation with at least one executed recorded domain check, a captured result and a completed runner record. A zero-check invocation is exploratory (verified false)." },
+        "expectedFailure": { "type": "object", "additionalProperties": false, "required": ["matched", "diagnosticId"], "properties": { "matched": { "type": "boolean" }, "diagnosticId": { "type": ["string", "null"] } } },
+        "result": { "type": ["object", "null"], "additionalProperties": false, "required": ["captureId", "object"], "properties": { "captureId": { "$ref": "#/$defs/Id" }, "object": { "type": "string", "pattern": "^o[1-9][0-9]*$" } } },
+        "startedAt": { "type": "string" },
+        "finishedAt": { "type": ["string", "null"], "description": "null: a started record with no completion record (the worker aborted or was killed)." }
+      }
+    },
+    "Example": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "attempts", "final", "outcome", "verified", "priorFailures", "suiteFailedAfter"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "attempts": { "type": "array", "items": { "$ref": "#/$defs/Id" }, "minItems": 1 },
+        "final": { "$ref": "#/$defs/Id" },
+        "outcome": { "$ref": "#/$defs/NativeOutcome" },
+        "verified": { "type": "boolean" },
+        "priorFailures": { "type": "array", "items": { "$ref": "#/$defs/Id" } },
+        "suiteFailedAfter": { "type": "array", "items": { "$ref": "#/$defs/Id" }, "description": "Suites whose setup or teardown failed after this example ran. Shown as 'suite failed after'; never changes `outcome`." }
+      }
+    },
+    "Suite": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "phase", "outcome", "examples"],
+      "properties": {
+        "id": { "$ref": "#/$defs/Id" },
+        "phase": { "enum": ["setup", "teardown", "binary", "run"] },
+        "outcome": { "enum": ["passed", "failed", "aborted"] },
+        "message": { "type": "string", "maxLength": 2048 },
+        "examples": { "type": "array", "items": { "$ref": "#/$defs/Id" } }
+      }
+    },
+    "CollectionOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "exitCode", "signal", "timedOut", "cancelled", "compile", "complete", "missingInvocations", "counts"],
+      "properties": {
+        "status": { "enum": ["succeeded", "failed", "cancelled", "timed-out", "incomplete"], "description": "succeeded only when the runner exited 0, every selected example ran, and no capture or suite failed." },
+        "exitCode": { "type": ["integer", "null"] },
+        "signal": { "type": ["string", "null"] },
+        "timedOut": { "type": "boolean" },
+        "cancelled": { "type": "boolean" },
+        "compile": { "enum": ["ok", "failed", "skipped"] },
+        "complete": { "type": "boolean" },
+        "missingInvocations": { "type": "integer", "minimum": 0 },
+        "counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["selected", "passed", "failed", "error", "skipped", "filtered", "cancelled", "blocked", "verified", "exploratory"],
+          "properties": {
+            "selected": { "type": "integer", "minimum": 0 }, "passed": { "type": "integer", "minimum": 0 }, "failed": { "type": "integer", "minimum": 0 },
+            "error": { "type": "integer", "minimum": 0 }, "skipped": { "type": "integer", "minimum": 0 }, "filtered": { "type": "integer", "minimum": 0 },
+            "cancelled": { "type": "integer", "minimum": 0 }, "blocked": { "type": "integer", "minimum": 0 }, "verified": { "type": "integer", "minimum": 0 },
+            "exploratory": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    }
+  }
+}

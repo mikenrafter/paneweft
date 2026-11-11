@@ -16,7 +16,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "check": "npm run typecheck && npm test",
-    "gen:types": "node scripts/gen-types.mjs"
+    "gen:types": "node scripts/gen-types.mjs",
+    "gen:types:v1": "node scripts/gen-types-v1.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",
