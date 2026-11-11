@@ -4,6 +4,19 @@
 // Ergonomic flags are sugar for the same arguments. docs/red-contract.md "CLI" is normative.
 //
 // Exit codes: 0 ok; 1 operation error (error body on stdout); 2 usage error (message on stderr).
+//
+// CLAIM(cli-is-an-adapter): this file only turns argv into the tool's argument object and prints the operation's body; validation,
+//   budgets, cursors and errors all come from executeOperation, so CLI and MCP bodies for one request are byte-identical
+//   [test/parity.test.ts, MC11]. The two exceptions are `example run` (it executes an owner runner, which only the CLI may do) and the
+//   long-running `serve` / `mcp` commands.
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { executeOperation, type OperationOutcome } from "../core/operations.ts";
+import { openSession, type Session } from "../core/session.ts";
+import { runExample } from "../core/runner.ts";
+import type { OperationError } from "../core/errors.ts";
+import type { ToolName } from "../schemas/index.ts";
+
 export interface CliIo {
   stdin: string | null;
   stdout: (text: string) => void;
@@ -12,8 +25,308 @@ export interface CliIo {
   cwd: string;
 }
 
-/** STUB: reports a usage error. */
-export async function runCli(_argv: string[], io: CliIo): Promise<number> {
-  io.stderr("paneweft: not implemented\n");
-  return 2;
+class UsageError extends Error {}
+
+type Sugar = (value: string, args: Record<string, unknown>) => void;
+interface Command {
+  words: string[];
+  summary: string;
+  tool?: ToolName;
+  /** value flags besides the common ones */
+  flags: Record<string, Sugar>;
+  /** repeatable value flags (collected by name) */
+  repeatable?: string[];
+  positional?: { name: string };
 }
+
+const COMMON_FLAGS = ["--args", "--args-file", "--format", "--max-bytes", "--cursor"] as const;
+
+function setOnce(args: Record<string, unknown>, key: string, value: unknown, flag: string): void {
+  if (key in args) throw new UsageError(`${flag} sets "${key}", which --args already gives; use one of them`);
+  args[key] = value;
+}
+
+const COMMANDS: Command[] = [
+  { words: ["components"], summary: "list the supported components and their questions", tool: "list_components", flags: { "--capability": (v, a) => setOnce(a, "capability", v, "--capability") } },
+  { words: ["describe"], summary: "describe one component: schema, limits, a valid example", tool: "describe_component", flags: { "--component": (v, a) => setOnce(a, "component", v, "--component") } },
+  { words: ["validate"], summary: "validate an envelope or bundle without storing it", tool: "validate", flags: { "--file": () => undefined } },
+  { words: ["render"], summary: "validate, store and summarise an envelope or bundle", tool: "render", flags: { "--file": () => undefined } },
+  { words: ["register"], summary: "register a view definition against an expected registry revision", tool: "register_view", flags: { "--file": () => undefined, "--expected-revision": () => undefined } },
+  { words: ["open"], summary: "open an entity at a snapshot: pane state, views and a bounded answer", tool: "open_entity", flags: {} },
+  { words: ["navigate"], summary: "follow an item of a pane to its target", tool: "navigate", flags: {} },
+  { words: ["inspect"], summary: "a bounded slice of a stored view (filter, order, focus, cursor)", tool: "inspect_view", flags: { "--view": (v, a) => setOnce(a, "viewId", v, "--view"), "--snapshot": (v, a) => setOnce(a, "snapshotId", v, "--snapshot") } },
+  { words: ["search"], summary: "search entities, view titles, examples and claims", tool: "search", flags: { "--query": (v, a) => setOnce(a, "query", v, "--query") } },
+  { words: ["notebook", "create"], summary: "create a notebook page", tool: "notebook_create", flags: { "--file": () => undefined } },
+  { words: ["notebook", "get"], summary: "read a notebook page", tool: "notebook_get", flags: { "--page": (v, a) => setOnce(a, "pageId", v, "--page"), "--revision": () => undefined } },
+  { words: ["notebook", "update"], summary: "replace a notebook page's blocks against an expected revision", tool: "notebook_update", flags: {} },
+  { words: ["example", "record"], summary: "record one run of an example with its result bundle", tool: "example_record", flags: {} },
+  { words: ["example", "run"], summary: "run an owner-registered runner and record its result", flags: { "--runners": () => undefined, "--view": () => undefined, "--snapshot": () => undefined }, repeatable: ["--param"], positional: { name: "RUNNER_ID" } },
+  { words: ["serve"], summary: "serve the local viewer for a session", flags: { "--host": () => undefined, "--port": () => undefined, "--assets": () => undefined }, repeatable: ["--repo"] },
+  { words: ["mcp"], summary: "serve the tools over stdio MCP", flags: {} },
+];
+const TOP_LEVEL = ["components", "describe", "validate", "render", "register", "open", "navigate", "inspect", "search", "notebook", "example", "serve", "mcp"];
+
+function helpText(): string {
+  const width = Math.max(...TOP_LEVEL.map((word) => word.length));
+  const lines = TOP_LEVEL.map((word) => {
+    const first = COMMANDS.find((command) => command.words[0] === word) as Command;
+    const summary = first.words.length === 1 ? first.summary : word === "notebook" ? "create, get and update notebook pages" : "record or run examples";
+    return `  ${word.padEnd(width)}  ${summary}`;
+  });
+  return [
+    "paneweft - portable moldable views for coding agents",
+    "",
+    "usage: paneweft [--session DIR] <command> [options]",
+    "",
+    "commands:",
+    ...lines,
+    "",
+    "common options: --args JSON | --args-file FILE|-  --format text|json  --max-bytes N  --cursor TOKEN",
+    "The session directory defaults to $PANEWEFT_SESSION. Run `paneweft <command> --help` for a command.",
+    "",
+  ].join("\n");
+}
+
+function commandHelp(words: string[]): string {
+  const subcommands = COMMANDS.filter((command) => command.words.length === 2 && command.words[0] === words[0]);
+  if (words.length === 1 && subcommands.length > 0) {
+    return [`usage: paneweft ${words[0]} <subcommand> [options]`, "", "subcommands:", ...subcommands.map((command) => `  ${command.words[1]}  ${command.summary}`), ""].join("\n");
+  }
+  const command = COMMANDS.find((candidate) => candidate.words.join(" ") === words.join(" ")) as Command;
+  const flags = [...(command.tool === undefined ? [] : COMMON_FLAGS), ...Object.keys(command.flags), ...(command.repeatable ?? [])];
+  const lines = [`usage: paneweft ${command.words.join(" ")}${command.positional ? ` ${command.positional.name}` : ""} [options]`, "", command.summary];
+  if (flags.length > 0) lines.push("", `options: ${flags.join(" ")}`);
+  return lines.join("\n") + "\n";
+}
+
+interface Parsed {
+  session: string | undefined;
+  command: Command;
+  values: Map<string, string>;
+  repeated: Map<string, string[]>;
+  positional: string[];
+}
+
+function parseArguments(argv: string[]): Parsed | { help: string } {
+  let session: string | undefined;
+  let index = 0;
+  const valueOf = (flag: string): string => {
+    const value = argv[index + 1];
+    if (value === undefined) throw new UsageError(`${flag} needs a value`);
+    index++;
+    return value;
+  };
+  // 1. global options, then the command word
+  let first: string | undefined;
+  for (; index < argv.length; index++) {
+    const token = argv[index] as string;
+    if (token === "--help" || token === "-h") return { help: helpText() };
+    if (token === "--session") { session = valueOf("--session"); continue; }
+    if (token.startsWith("-")) throw new UsageError(`unknown option ${token}`);
+    first = token;
+    index++;
+    break;
+  }
+  if (first === undefined) throw new UsageError("no command given; run `paneweft --help`");
+  const group = COMMANDS.filter((command) => command.words[0] === first);
+  if (group.length === 0) throw new UsageError(`unknown command "${first}"; run \`paneweft --help\``);
+  // 2. the subcommand of a two-level command
+  let words = [first];
+  if ((group[0] as Command).words.length === 2) {
+    const next = argv[index];
+    if (next === "--help" || next === "-h") return { help: commandHelp([first]) };
+    if (next === undefined || next.startsWith("-")) throw new UsageError(`${first} needs a subcommand: ${group.map((command) => command.words[1]).join(", ")}`);
+    if (!group.some((command) => command.words[1] === next)) throw new UsageError(`unknown subcommand "${next}" of ${first}; expected ${group.map((command) => command.words[1]).join(", ")}`);
+    words = [first, next];
+    index++;
+  }
+  const command = COMMANDS.find((candidate) => candidate.words.join(" ") === words.join(" ")) as Command;
+  // 3. the command's own options and positionals
+  const values = new Map<string, string>();
+  const repeated = new Map<string, string[]>();
+  const positional: string[] = [];
+  const allowed = new Set<string>([...(command.tool !== undefined ? COMMON_FLAGS : []), ...Object.keys(command.flags), ...(command.repeatable ?? [])]);
+  for (; index < argv.length; index++) {
+    const token = argv[index] as string;
+    if (token === "--help" || token === "-h") return { help: commandHelp(command.words) };
+    if (token === "--session") { session = valueOf("--session"); continue; }
+    if (token.startsWith("-")) {
+      if (!allowed.has(token)) throw new UsageError(`unknown option ${token} for ${command.words.join(" ")}`);
+      const value = valueOf(token);
+      if ((command.repeatable ?? []).includes(token)) repeated.set(token, [...(repeated.get(token) ?? []), value]);
+      else values.set(token, value);
+      continue;
+    }
+    if (command.positional !== undefined && positional.length === 0) { positional.push(token); continue; }
+    throw new UsageError(`unexpected argument "${token}" for ${command.words.join(" ")}`);
+  }
+  return { session, command, values, repeated, positional };
+}
+
+async function readJson(source: string, label: string, io: CliIo, path: string | null): Promise<unknown> {
+  let text: string;
+  if (path === "-") text = io.stdin ?? "";
+  else if (path !== null) {
+    try {
+      text = await readFile(resolve(io.cwd, path), "utf8");
+    } catch {
+      throw new UsageError(`${label} cannot read ${path}`);
+    }
+  } else text = source;
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new UsageError(`${label}${path === null ? "" : ` ${path}`} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+async function buildArguments(parsed: Parsed, io: CliIo): Promise<Record<string, unknown>> {
+  const { command, values } = parsed;
+  if (values.has("--args") && values.has("--args-file")) throw new UsageError("--args and --args-file both give the request; use one of them");
+  let args: Record<string, unknown> = {};
+  if (values.has("--args")) {
+    const parsedArgs = await readJson(values.get("--args") as string, "--args", io, null);
+    if (parsedArgs === null || typeof parsedArgs !== "object" || Array.isArray(parsedArgs)) throw new UsageError("--args must be a JSON object");
+    args = parsedArgs as Record<string, unknown>;
+  } else if (values.has("--args-file")) {
+    const parsedArgs = await readJson("", "--args-file", io, values.get("--args-file") as string);
+    if (parsedArgs === null || typeof parsedArgs !== "object" || Array.isArray(parsedArgs)) throw new UsageError("--args-file must contain a JSON object");
+    args = parsedArgs as Record<string, unknown>;
+  }
+  for (const [flag, sugar] of Object.entries(command.flags)) {
+    const value = values.get(flag);
+    if (value === undefined) continue;
+    if (flag === "--file") {
+      const document = await readJson("", "--file", io, value);
+      if (command.tool === "register_view") setOnce(args, "definition", document, "--file");
+      else setOnce(args, "input", document, "--file");
+    } else if (flag === "--expected-revision") {
+      if (!/^\d+$/.test(value)) throw new UsageError("--expected-revision must be a non-negative integer");
+      setOnce(args, "expectedRevision", Number(value), "--expected-revision");
+    } else if (flag === "--revision") {
+      if (!/^[1-9]\d*$/.test(value)) throw new UsageError("--revision must be a positive integer");
+      setOnce(args, "revision", Number(value), "--revision");
+    } else sugar(value, args);
+  }
+  if (command.tool === "register_view" && !values.has("--args") && !values.has("--args-file")) {
+    if (!values.has("--file")) throw new UsageError("register needs --file DEFINITION.json (or --args)");
+    if (!values.has("--expected-revision")) throw new UsageError("register needs --expected-revision N (or --args)");
+  }
+  if (values.has("--format")) {
+    const format = values.get("--format") as string;
+    if (format !== "text" && format !== "json") throw new UsageError(`--format must be text or json, not "${format}"`);
+    setOnce(args, "format", format, "--format");
+  }
+  if (values.has("--max-bytes")) {
+    const text = values.get("--max-bytes") as string;
+    if (!/^-?\d+$/.test(text)) throw new UsageError(`--max-bytes must be a base-10 integer, not "${text}"`);
+    setOnce(args, "maxBytes", Number(text), "--max-bytes");
+  }
+  if (values.has("--cursor")) setOnce(args, "cursor", values.get("--cursor"), "--cursor");
+  return args;
+}
+
+function print(io: CliIo, outcome: OperationOutcome): number {
+  io.stdout(outcome.body);
+  return outcome.ok ? 0 : 1;
+}
+
+function errorBody(code: OperationError["code"], message: string, io: CliIo): number {
+  const error: OperationError = { schemaVersion: "paneweft.error/1", code, message, errors: [], retryable: false };
+  io.stdout(JSON.stringify(error));
+  return 1;
+}
+
+async function runExampleCommand(parsed: Parsed, session: Session | null, io: CliIo): Promise<number> {
+  const runnerId = parsed.positional[0];
+  if (runnerId === undefined) throw new UsageError("example run needs a runner id");
+  const view = parsed.values.get("--view");
+  const snapshot = parsed.values.get("--snapshot");
+  if (view === undefined) throw new UsageError("example run needs --view VIEW_ID");
+  if (snapshot === undefined) throw new UsageError("example run needs --snapshot SNAPSHOT_ID");
+  const parameters: Record<string, string | number | boolean | null> = {};
+  for (const entry of parsed.repeated.get("--param") ?? []) {
+    const at = entry.indexOf("=");
+    if (at <= 0) throw new UsageError(`--param needs name=value, not "${entry}"`);
+    const raw = entry.slice(at + 1);
+    let value: string | number | boolean | null = raw;
+    try {
+      const parsedValue = JSON.parse(raw) as unknown;
+      if (parsedValue === null || ["string", "number", "boolean"].includes(typeof parsedValue)) value = parsedValue as string | number | boolean | null;
+    } catch { /* a plain string */ }
+    parameters[entry.slice(0, at)] = value;
+  }
+  const format = parsed.values.get("--format") === "json" ? "json" : "text";
+  if (session === null) return errorBody("SESSION_REQUIRED", "example run needs a session; pass --session DIR (or set PANEWEFT_SESSION)", io);
+  const registry = parsed.values.get("--runners") ?? io.env.PANEWEFT_RUNNERS;
+  if (registry === undefined) return errorBody("RUNNER_NOT_FOUND", "no runner registry is configured; pass --runners FILE (or set PANEWEFT_RUNNERS)", io);
+  const result = await runExample(session, { runnerRegistryFile: resolve(io.cwd, registry), runnerId, parameters, key: { viewId: view, snapshotId: snapshot } });
+  if (!result.ok) { io.stdout(JSON.stringify(result.error)); return 1; }
+  const run = result.value;
+  io.stdout(format === "json" ? JSON.stringify({ schemaVersion: "paneweft.example_run/1", recorded: run }) : `recorded run ${run.runId}: ${run.status}\nview: ${run.viewId}@${run.snapshotId}\n`);
+  return 0;
+}
+
+async function serveCommand(parsed: Parsed, session: Session | null, io: CliIo): Promise<number> {
+  if (session === null) throw new UsageError("serve needs --session DIR (or PANEWEFT_SESSION)");
+  for (const entry of parsed.repeated.get("--repo") ?? []) {
+    const at = entry.indexOf("=");
+    if (at <= 0) throw new UsageError(`--repo needs id=ROOT, not "${entry}"`);
+    const registered = await session.registerRepository({ id: entry.slice(0, at), root: resolve(io.cwd, entry.slice(at + 1)) });
+    if (!registered.ok) return errorBody(registered.error.code, registered.error.message, io);
+  }
+  const port = parsed.values.get("--port");
+  if (port !== undefined && !/^\d+$/.test(port)) throw new UsageError(`--port must be an integer, not "${port}"`);
+  const { startViewer } = await import("../viewer/server.ts");
+  const started = await startViewer({
+    session,
+    ...(parsed.values.has("--host") ? { host: parsed.values.get("--host") as string } : {}),
+    ...(port === undefined ? {} : { port: Number(port) }),
+    ...(parsed.values.has("--assets") ? { assetsDirectory: resolve(io.cwd, parsed.values.get("--assets") as string) } : {}),
+  });
+  if (!started.ok) { io.stdout(JSON.stringify(started.error)); return 1; }
+  const server = started.value;
+  io.stdout(`paneweft viewer: ${server.urlFor()}\n`);
+  await new Promise<void>((resolveStop) => {
+    const stop = () => resolveStop();
+    process.once("SIGINT", stop);
+    process.once("SIGTERM", stop);
+  });
+  await server.close();
+  return 0;
+}
+
+export async function runCli(argv: string[], io: CliIo): Promise<number> {
+  try {
+    const parsed = parseArguments(argv);
+    if ("help" in parsed) { io.stdout(parsed.help); return 0; }
+    const { command } = parsed;
+    const dir = parsed.session ?? io.env.PANEWEFT_SESSION;
+    const needsSession = command.tool === undefined || !["list_components", "describe_component", "validate"].includes(command.tool);
+    const args = command.tool === undefined ? {} : await buildArguments(parsed, io);
+    const session: Session | null = dir !== undefined && dir !== "" && needsSession
+      ? await (async () => { const opened = await openSession(resolve(io.cwd, dir)); return opened.ok ? opened.value : null; })()
+      : null;
+    try {
+      const word = command.words.join(" ");
+      if (word === "example run") return await runExampleCommand(parsed, session, io);
+      if (word === "serve") return await serveCommand(parsed, session, io);
+      if (word === "mcp") {
+        const { runMcpStdio } = await import("../mcp/server.ts");
+        await runMcpStdio(dir === undefined || dir === "" ? null : resolve(io.cwd, dir), session);
+        return 0;
+      }
+      return print(io, await executeOperation(session, command.tool as ToolName, args));
+    } finally {
+      await session?.close();
+    }
+  } catch (error) {
+    if (error instanceof UsageError) {
+      io.stderr(`paneweft: ${error.message}\n`);
+      return 2;
+    }
+    io.stderr(`paneweft: unexpected failure: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+    return 70;
+  }
+}
+
