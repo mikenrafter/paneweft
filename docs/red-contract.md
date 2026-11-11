@@ -1,5 +1,8 @@
 # Red-phase contract
 
+Round 2's [S1-S11 amendments](contract-additions/round2.md) supersede conflicting
+defaults below, including clipping, process-lock tests, geometry, and registration.
+
 `docs/design.md` is the product contract. This file is the **normative interpretation** the red tests
 pin where the design leaves a decision open. Every choice here is a proposal the owner can overturn; the
 ambiguities are listed in the red report with the reason for each default. A test that asserts something

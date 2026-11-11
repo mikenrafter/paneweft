@@ -53,7 +53,7 @@ const FILES_USED: Record<string, string[]> = {
   "residual-selection-shape": ["web/src/nkp-landscape.ts", "web/src/landscape-selection.ts"],
   "residual-selection-switch": ["web/src/nkp-landscape.test.ts"],
   "residual-key-union": ["web/src/landscape-selection.ts"],
-  [STORY_VIEW_ID]: ["src/mcp.rs", "web/src/nkp-landscape.test.ts", "docs/design.md"],
+  [STORY_VIEW_ID]: ["src/mcp.rs", "tests/mcp_e2e.rs", "web/src/nkp-landscape.test.ts", "docs/design.md"],
 };
 describe("scaffold demos: the committed bundles are valid against the raw schemas", () => {
   for (const name of ["vigil", "residual", "story"] as const) {
@@ -190,6 +190,22 @@ describe("scaffold demos: independent semantic checker (cheap rules of red-contr
 });
 
 describe("scaffold demos: facts the red tests rely on", () => {
+  // why: the design overstates residual's tests and cites the wrong file for vigil's example.
+  // These independent literals pin the corrected evidence without requiring sibling repos on Boat.
+  // proves: CLAIM(round2-demo-evidence)
+  it("round 2: separate residual cases assert sidebar text; vigil example blocks cite the e2e file", () => {
+    const scenario = viewOf({ id: "residual-selection-switch" }).data.scenario;
+    expect(scenario.parameters).toEqual({ testRunner: "bun:test", leaf: "auth", viewSequence: "bundle,heatmap,regions", filterToggle: "data-hide-filtered-graph-toggle", separateCases: true, assertion: "sidebar text contains auth" });
+    const story = viewOf({ id: STORY_VIEW_ID });
+    const blocks = story.data.blocks as AnyJson[];
+    expect(blocks.find((b) => b.id === "D2")).toMatchObject({ statement: "The tests check that the sidebar still contains auth after switching to heatmap and regions, and in a separate test after enabling hide-filtered." });
+    for (const id of ["v3", "ex1"]) expect(blocks.find((b) => b.id === id)).toMatchObject({ evidence: ["sv-e2e"] });
+    expect(story.sources.find((s: AnyJson) => s.id === "sv-e2e")).toMatchObject({ kind: "file", repository: "vigil", path: "tests/mcp_e2e.rs", sha256: "1d0cd2cd40f8e156b3f0b9333c6d6c403b52400be5b17fd288a5d276b0c67e1f" });
+    const entry = viewOf({ id: "residual-view-entrypoints" });
+    expect(entry.data.rows.map((r: AnyJson) => r.anchor.lines)).toEqual([[245, 246], [247, 248], [249, 255]]);
+    const cancelled = viewOf({ id: "vigil-delivery-path" }).data.nodes.find((n: AnyJson) => n.id === "n-cancelled-result");
+    expect(cancelled.label).toBe('cancelled_result(): the tool replies with the text "cancelled" flagged as an error (src/mcp.rs:188-190)');
+  });
   it("the two example views have runs [] and name the missing observed run as their first gap", () => {
     for (const id of ["vigil-one-write", "residual-selection-switch"]) {
       const view = viewOf({ id });

@@ -4,6 +4,7 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { FIXTURES } from "./fixtures.ts";
 
 export const API_TOKEN = "tok-s7-0123456789abcdef";
@@ -57,7 +58,7 @@ export async function startFixtureServer(): Promise<FixtureServer> {
           if (request === null || typeof request !== "object") return error(400, "INVALID_ARGUMENT", "malformed body");
           if (request.expectedRevision !== state.notebookRevision) return error(409, "CONFLICT", "stale revision", { currentRevision: state.notebookRevision });
           // The server accepts exactly the write the fixture describes; any other body is a browser bug, reported as such.
-          if (JSON.stringify(request) !== JSON.stringify(read("notebook.request.json"))) return error(400, "INVALID_ARGUMENT", "unexpected notebook body");
+          if (!isDeepStrictEqual(request, read("notebook.request.json"))) return error(400, "INVALID_ARGUMENT", "unexpected notebook body");
           state.notebookRevision = 2;
           state.view = read("view.cancellation-notebook.rev2.json");
           return json(200, read("notebook.rev2.json"));

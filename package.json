@@ -15,7 +15,8 @@
     "build:viewer": "node scripts/build-viewer.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check": "npm run typecheck && npm test"
+    "check": "npm run typecheck && npm test",
+    "gen:types": "node scripts/gen-types.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",
@@ -32,6 +33,7 @@
     "tsx": "4.23.15",
     "typescript": "5.9.3",
     "vite": "8.3.8",
-    "vitest": "5.1.0"
+    "vitest": "5.1.0",
+    "json-schema-to-typescript": "16.0.0"
   }
 }

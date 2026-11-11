@@ -91,7 +91,7 @@ export const DEMO_EXPECT: Record<string, { unit: string; total: number; items: n
     completeness: "completeness: complete (the cited lines 1-15 of web/src/landscape-selection.ts, quoted verbatim; nothing outside them is claimed)",
   },
   [STORY_VIEW_ID]: {
-    unit: "blocks", total: 12, items: 12, sources: ["sv", "sr", "sd"], // the design's ten blocks + ex1 + ex2
+    unit: "blocks", total: 12, items: 12, sources: ["sv", "sv-e2e", "sr", "sd"], // the design's ten blocks + ex1 + ex2
     completeness: "completeness: partial (2 gaps; first: vigil-run-missing: Does the vigil one-write scenario pass in this checkout?)",
   },
 };

@@ -84,6 +84,15 @@
           "method": "read: full file bytes of the cited path at vigil revision d064373a15139b969599ee05bc7b156b1d5b8ed7 (the vigil directory is unmodified); nothing was built, executed or observed"
         },
         {
+          "id": "sv-e2e",
+          "kind": "file",
+          "repository": "vigil",
+          "path": "tests/mcp_e2e.rs",
+          "sha256": "1d0cd2cd40f8e156b3f0b9333c6d6c403b52400be5b17fd288a5d276b0c67e1f",
+          "capturedAt": "2026-11-11T12:00:00Z",
+          "method": "read: the one-write scenario assertions at tests/mcp_e2e.rs:112-156; no run was observed"
+        },
+        {
           "id": "sr",
           "kind": "file",
           "repository": "residual-web",
@@ -111,7 +120,8 @@
             "gitRev": "d064373a15139b969599ee05bc7b156b1d5b8ed7",
             "dirty": false,
             "files": {
-              "src/mcp.rs": "1f627598551a007472cacecb61f4a649b8f60bb089ed16f67ce6f1145d415c25"
+              "src/mcp.rs": "1f627598551a007472cacecb61f4a649b8f60bb089ed16f67ce6f1145d415c25",
+              "tests/mcp_e2e.rs": "1d0cd2cd40f8e156b3f0b9333c6d6c403b52400be5b17fd288a5d276b0c67e1f"
             }
           },
           {
@@ -257,7 +267,7 @@
             "viewId": "vigil-one-write",
             "provenance": "read",
             "evidence": [
-              "sv"
+              "sv-e2e"
             ]
           },
           {
@@ -304,7 +314,7 @@
           {
             "id": "D2",
             "kind": "claim",
-            "statement": "The tests specify selection persistence across view and filter changes.",
+            "statement": "The tests check that the sidebar still contains auth after switching to heatmap and regions, and in a separate test after enabling hide-filtered.",
             "status": "supported",
             "supports": [
               "sr"
@@ -333,7 +343,7 @@
             "exampleId": "vigil-one-write",
             "provenance": "read",
             "evidence": [
-              "sv"
+              "sv-e2e"
             ]
           },
           {

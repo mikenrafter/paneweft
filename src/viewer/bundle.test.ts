@@ -99,7 +99,9 @@ describe("[MC15] the shipped viewer bundle", () => {
 //   `notebook-revision` (`data-revision`).
 describe("[S7] the shipped viewer bundle over successful HTTP responses", () => {
   const servers: FixtureServer[] = [];
+  const windows: JSDOM["window"][] = [];
   afterEach(async () => {
+    for (const window of windows.splice(0)) window.close();
     for (const server of servers.splice(0)) await server.close();
   });
   async function bootOver(server: FixtureServer, view: string): Promise<JSDOM["window"]> {
@@ -108,6 +110,7 @@ describe("[S7] the shipped viewer bundle over successful HTTP responses", () => 
     (dom.window as unknown as { fetch: typeof fetch }).fetch = (input, init) =>
       fetch(new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url, dom.window.location.href), init);
     dom.window.eval(appJs());
+    windows.push(dom.window);
     return dom.window;
   }
   const pw = (window: JSDOM["window"], name: string): HTMLElement[] => Array.from(window.document.querySelectorAll<HTMLElement>(`[data-pw="${name}"]`));

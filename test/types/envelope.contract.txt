@@ -1,0 +1,26 @@
+// Compile-time consumer contract, compiled inside types.test.ts so red is an assertion on diagnostics.
+// A consumer must narrow the actual public Envelope by component, and unsupported payloads cannot exist.
+import type { Envelope } from "../../src/core/wire.ts";
+declare const view: Envelope;
+if (view.data !== undefined && view.component === "list") {
+  const id: string = view.data.rows[0]!.id;
+  // @ts-expect-error list data has no graph edges
+  view.data.edges;
+}
+if (view.data !== undefined && view.component === "graph") {
+  const endpoint: string = view.data.edges[0]!.from;
+  // @ts-expect-error graph data has no list rows
+  view.data.rows;
+}
+if (view.data !== undefined && view.component === "notebook") {
+  const blockId: string = view.data.blocks[0]!.id;
+}
+declare const metadata: Omit<Envelope, "component" | "completeness" | "data">;
+// @ts-expect-error an unsupported envelope cannot carry data
+const unsupported: Envelope = { ...metadata, component: "list", completeness: { status: "unsupported", reason: "absent", missingCapabilities: [] }, data: { columns: [{ key: "name", title: "Name", format: "text" }], rows: [], order: { key: "name", direction: "asc" } } };
+// @ts-expect-error complete views need the component's payload
+const missing: Envelope = { ...metadata, component: "list", completeness: { status: "complete", criterion: "all" } };
+// @ts-expect-error graph data cannot be substituted for list data
+const wrong: Envelope = { ...metadata, component: "list", completeness: { status: "complete", criterion: "all" }, data: { nodes: [], edges: [], layout: "grid" } };
+// @ts-expect-error unsupported component
+const matrix: Envelope = { ...metadata, component: "matrix", completeness: { status: "complete", criterion: "all" }, data: {} };

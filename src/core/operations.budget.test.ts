@@ -323,7 +323,16 @@ describe("[MC3] no match, one huge item, minimum budget", () => {
         ? fragmentsOfJson(reply).length + plainItemsOfJson(reply).length
         : fragmentsOfText(reply.body).length + entityIdsOfLines(reply.body).length;
     };
-    pages.forEach((page, index) => expect(delivered(page), `page ${index + 1} delivers a whole item or a fragment`).toBeGreaterThan(0));
+    pages.forEach((page, index) => {
+      expect(delivered(page), `page ${index + 1} delivers a whole item or a fragment`).toBeGreaterThan(0);
+      const reply = (page as { reply: any }).reply;
+      const pieces = format === "json" ? fragmentsOfJson(reply) : fragmentsOfText(reply.body);
+      for (const piece of pieces) {
+        // These two rows have ASCII-only payloads, so there is no code-point alignment loss.
+        // A terminal fragment can have less than the 64-byte reserve left.
+        expect(piece.length, `${piece.item_id}@${piece.offset}: use all 64 reserved payload bytes`).toBeGreaterThanOrEqual(Math.min(64, piece.total - piece.offset));
+      }
+    });
     const content = rows.reduce((sum, r) => sum + utf8Length(JSON.stringify(r)), 0);
     expect(pages.length, `terminates in at most ceil(${content}/61) + 2 + 1 pages`).toBeLessThanOrEqual(Math.ceil(content / 61) + 3);
     if (format === "json") {

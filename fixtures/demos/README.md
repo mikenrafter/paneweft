@@ -280,3 +280,17 @@ Completeness: partial - gaps: vigil-run-missing, residual-run-missing. Sources: 
 | `D3` | block claim | `(no anchor: composed from the cited sources)` | Does this checkout satisfy both runnable scenarios? |
 | `ex1` | block example | `(no anchor: composed from the cited sources)` |  |
 | `ex2` | block example | `(no anchor: composed from the cited sources)` |  |
+
+## Round 2 evidence corrections
+
+D2 records the actual assertions in residual's two separate bun:test cases.
+They check sidebar text containing auth after heatmap/regions switches, and
+after enabling hide-filtered in another case. They do not assert selected-key
+identity. The scenario parameters name that assertion and the separate cases.
+The entrypoint rows already cite factory calls inside mountLandscape at
+245-255; the parser note includes lines 43-45.
+
+Story blocks v3 and ex1 now cite sv-e2e, the declared tests/mcp_e2e.rs source,
+whose hash is also in story freshness. D1 retains sv for src/mcp.rs. The
+cancelled_result node already says the returned text is flagged as an error.
+All examples retain empty runs and read provenance.

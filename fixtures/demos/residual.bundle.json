@@ -835,7 +835,7 @@
       "data": {
         "scenario": {
           "id": "scenario-selection-switch",
-          "label": "web/src/nkp-landscape.test.ts:336-364 clicks the auth bundle leaf, then picks heatmap and regions (selection survives a view switch), then flips the hide-filtered toggle (selection survives a filter change); clicking a leaf is :270-277",
+          "label": "Two separate bun:test cases click auth: one switches to heatmap then regions; the other enables hide-filtered. Each asserts only that sidebar text contains auth (web/src/nkp-landscape.test.ts:336-364).",
           "anchor": {
             "repository": "residual-web",
             "path": "web/src/nkp-landscape.test.ts",
@@ -858,7 +858,9 @@
             "testRunner": "bun:test",
             "leaf": "auth",
             "viewSequence": "bundle,heatmap,regions",
-            "filterToggle": "data-hide-filtered-graph-toggle"
+            "filterToggle": "data-hide-filtered-graph-toggle",
+            "separateCases": true,
+            "assertion": "sidebar text contains auth"
           }
         },
         "runs": []

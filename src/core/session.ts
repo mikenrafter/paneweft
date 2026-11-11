@@ -26,6 +26,12 @@ export interface RecordedRun { runId: string; viewId: string; snapshotId: string
 
 /** Failure injection for tests of atomicity (MC16, MC20). Never set in production code paths. */
 export interface SessionTestHooks {
+  /** S5: immediately before trying the process lock, before reading mutable manifest state. */
+  beforeLockAcquire?: (info: { operation: string }) => void | Promise<void>;
+  /** S5: a lock attempt found another process holding it, before waiting or returning CONFLICT. */
+  onLockContended?: (info: { operation: string }) => void | Promise<void>;
+  /** S5: after reading the manifest INSIDE the lock; held until the hook resolves. */
+  afterManifestRead?: (info: { operation: string }) => void | Promise<void>;
   /** Called immediately before the manifest swap of a mutation; throwing simulates a failed save. */
   beforeManifestSwap?: (info: { operation: string }) => void | Promise<void>;
   /** Called after each file written while staging a mutation. */

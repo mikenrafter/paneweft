@@ -1,7 +1,8 @@
 // Envelope-level wire types, hand-written for the red phase.
-// TODO(green): design section 5 asks for declarations generated from the JSON
-// Schema. Until then the schema files win on any disagreement, and component
-// `data` stays `unknown` so the TypeScript types are not a second authority.
+// S10: npm run gen:types produces schema-derived declarations in src/generated.
+// TODO(green): use the generated Envelope at this public boundary. The compiler
+// consumer test in src/schemas/types.test.ts stays red until that wiring exists.
+// This compile-only stub keeps data unknown; schemas win on any disagreement.
 
 export type Provenance = "read" | "parsed" | "compiled" | "observed" | "inferred";
 export type Scalar = string | number | boolean | null;

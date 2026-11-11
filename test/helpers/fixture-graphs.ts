@@ -28,15 +28,16 @@ export function fixtureGraphs(): FixtureGraph[] {
     } catch {
       continue;
     }
-    const views: any[] =
-      document?.schemaVersion === "paneweft.bundle/1" ? document.views
-        : document?.schemaVersion === "paneweft.view/1" ? [document]
-          : Array.isArray(document?.bundle?.views) ? document.bundle.views : [];
-    for (const view of views) {
-      if (view?.component === "graph" && view.data !== undefined) {
-        found.push({ file: relative(FIXTURES, path), viewId: view.id, nodes: view.data.nodes, edges: view.data.edges });
+    // Also visit HTTP ViewModel.envelope and tool input wrappers. New fixtures must be covered
+    // regardless of their transport wrapper; only actual view envelopes count.
+    const visit = (node: any): void => {
+      if (node === null || typeof node !== "object") return;
+      if (node.schemaVersion === "paneweft.view/1" && node.component === "graph" && node.data !== undefined) {
+        found.push({ file: relative(FIXTURES, path), viewId: node.id, nodes: node.data.nodes, edges: node.data.edges });
       }
-    }
+      for (const child of Object.values(node)) visit(child);
+    };
+    visit(document);
   }
   return found;
 }
