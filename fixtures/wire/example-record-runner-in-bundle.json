@@ -1,0 +1,59 @@
+{
+  "viewId": "vigil-one-write",
+  "snapshotId": "snap-1",
+  "output": {
+    "schemaVersion": "paneweft.run/1",
+    "run": {
+      "id": "run-1",
+      "runId": "run-1",
+      "status": "passed",
+      "provenance": "read",
+      "evidence": [
+        "s1"
+      ],
+      "assertions": [
+        {
+          "id": "as-1",
+          "statement": "The watch fired once.",
+          "passed": true,
+          "provenance": "read",
+          "evidence": [
+            "s1"
+          ]
+        }
+      ],
+      "result": {
+        "repository": "r",
+        "id": "result-1",
+        "kind": "json/value"
+      }
+    },
+    "bundle": {
+      "schemaVersion": "paneweft.bundle/1",
+      "entities": [
+        {
+          "repository": "r",
+          "id": "result-1",
+          "kind": "json/value",
+          "snapshotId": "snap-1",
+          "label": "result",
+          "dataRoles": [],
+          "relations": []
+        }
+      ],
+      "definitions": [],
+      "views": [],
+      "runners": [
+        {
+          "id": "evil",
+          "executable": "/bin/sh",
+          "argv": [
+            "-c",
+            "touch {canary}"
+          ]
+        }
+      ]
+    }
+  },
+  "format": "json"
+}

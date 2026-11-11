@@ -1,0 +1,326 @@
+{
+  "schemaVersion": "paneweft.bundle/1",
+  "entities": [
+    {
+      "repository": "r",
+      "id": "subject",
+      "kind": "demo/subject",
+      "snapshotId": "snap-1",
+      "label": "Subject",
+      "dataRoles": [
+        "layout"
+      ],
+      "relations": []
+    },
+    {
+      "repository": "r",
+      "id": "dir-src",
+      "kind": "code/dir",
+      "snapshotId": "snap-1",
+      "label": "src",
+      "dataRoles": [],
+      "relations": []
+    },
+    {
+      "repository": "r",
+      "id": "mod-mcp",
+      "kind": "code/module",
+      "snapshotId": "snap-1",
+      "label": "mcp.rs",
+      "dataRoles": [],
+      "relations": []
+    },
+    {
+      "repository": "r",
+      "id": "dir-engine",
+      "kind": "code/dir",
+      "snapshotId": "snap-1",
+      "label": "engine",
+      "dataRoles": [],
+      "relations": []
+    },
+    {
+      "repository": "r",
+      "id": "mod-tick",
+      "kind": "code/module",
+      "snapshotId": "snap-1",
+      "label": "tick.rs",
+      "dataRoles": [],
+      "relations": []
+    },
+    {
+      "repository": "r",
+      "id": "mod-core",
+      "kind": "code/module",
+      "snapshotId": "snap-1",
+      "label": "core.rs",
+      "dataRoles": [],
+      "relations": []
+    },
+    {
+      "repository": "r",
+      "id": "dir-queue",
+      "kind": "code/dir",
+      "snapshotId": "snap-1",
+      "label": "queue",
+      "dataRoles": [],
+      "relations": []
+    },
+    {
+      "repository": "r",
+      "id": "dir-tests",
+      "kind": "code/dir",
+      "snapshotId": "snap-1",
+      "label": "tests",
+      "dataRoles": [],
+      "relations": []
+    }
+  ],
+  "definitions": [
+    {
+      "id": "d-tree",
+      "entityKind": "demo/subject",
+      "title": "Layout",
+      "priority": 10,
+      "component": "tree",
+      "requires": [],
+      "dataRole": "layout"
+    }
+  ],
+  "views": [
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "v-tree",
+      "title": "Layout",
+      "question": "How is this entity composed?",
+      "entity": {
+        "repository": "r",
+        "id": "subject",
+        "kind": "demo/subject"
+      },
+      "snapshotId": "snap-1",
+      "component": "tree",
+      "viewDefinitionId": "d-tree",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/check.ts",
+          "sha256": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        },
+        {
+          "id": "s2",
+          "kind": "command",
+          "sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "cargo test one_write",
+          "runId": "run-1",
+          "argv": [
+            "cargo",
+            "test",
+            "one_write"
+          ],
+          "exitCode": 0
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": null,
+            "dirty": false,
+            "files": {
+              "src/check.ts": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "all directory entries of the fixture"
+      },
+      "data": {
+        "columns": [
+          {
+            "key": "name",
+            "title": "Name",
+            "format": "text"
+          }
+        ],
+        "roots": [
+          "n-src",
+          "n-tests"
+        ],
+        "nodes": [
+          {
+            "id": "n-src",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "src"
+            },
+            "children": [
+              "n-mcp",
+              "n-engine",
+              "n-queue"
+            ],
+            "childrenState": "complete",
+            "entity": {
+              "repository": "r",
+              "id": "dir-src",
+              "kind": "code/dir"
+            }
+          },
+          {
+            "id": "n-mcp",
+            "provenance": "compiled",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "mcp.rs"
+            },
+            "children": [],
+            "childrenState": "complete",
+            "entity": {
+              "repository": "r",
+              "id": "mod-mcp",
+              "kind": "code/module"
+            }
+          },
+          {
+            "id": "n-engine",
+            "provenance": "parsed",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "engine"
+            },
+            "children": [
+              "n-tick",
+              "n-core"
+            ],
+            "childrenState": "complete",
+            "entity": {
+              "repository": "r",
+              "id": "dir-engine",
+              "kind": "code/dir"
+            }
+          },
+          {
+            "id": "n-tick",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "tick.rs"
+            },
+            "children": [],
+            "childrenState": "complete",
+            "entity": {
+              "repository": "r",
+              "id": "mod-tick",
+              "kind": "code/module"
+            }
+          },
+          {
+            "id": "n-core",
+            "provenance": "inferred",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "core.rs"
+            },
+            "children": [],
+            "childrenState": "complete",
+            "entity": {
+              "repository": "r",
+              "id": "mod-core",
+              "kind": "code/module"
+            },
+            "reason": "listed by the engine manifest",
+            "basis": [
+              "s1"
+            ]
+          },
+          {
+            "id": "n-queue",
+            "provenance": "observed",
+            "evidence": [
+              "s2"
+            ],
+            "cells": {
+              "name": "queue"
+            },
+            "children": [],
+            "childrenState": "not_loaded",
+            "entity": {
+              "repository": "r",
+              "id": "dir-queue",
+              "kind": "code/dir"
+            }
+          },
+          {
+            "id": "n-tests",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "tests"
+            },
+            "children": [
+              "n-t-mcp"
+            ],
+            "childrenState": "complete",
+            "entity": {
+              "repository": "r",
+              "id": "dir-tests",
+              "kind": "code/dir"
+            }
+          },
+          {
+            "id": "n-t-mcp",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "mcp.rs"
+            },
+            "children": [],
+            "childrenState": "complete",
+            "entity": {
+              "repository": "r",
+              "id": "mod-mcp",
+              "kind": "code/module"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

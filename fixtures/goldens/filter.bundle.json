@@ -1,0 +1,160 @@
+{
+  "schemaVersion": "paneweft.bundle/1",
+  "entities": [
+    {
+      "repository": "r",
+      "id": "subject",
+      "kind": "demo/subject",
+      "snapshotId": "snap-1",
+      "label": "Subject",
+      "dataRoles": [
+        "files"
+      ],
+      "relations": []
+    }
+  ],
+  "definitions": [
+    {
+      "id": "d-filter",
+      "entityKind": "demo/subject",
+      "title": "Files",
+      "priority": 10,
+      "component": "list",
+      "requires": [],
+      "dataRole": "files"
+    }
+  ],
+  "views": [
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "v-filter",
+      "title": "Files",
+      "question": "Which files exist?",
+      "entity": {
+        "repository": "r",
+        "id": "subject",
+        "kind": "demo/subject"
+      },
+      "snapshotId": "snap-1",
+      "component": "list",
+      "viewDefinitionId": "d-filter",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/check.ts",
+          "sha256": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": null,
+            "dirty": false,
+            "files": {
+              "src/check.ts": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "all files in the fixture"
+      },
+      "data": {
+        "columns": [
+          {
+            "key": "name",
+            "title": "Name",
+            "format": "text"
+          },
+          {
+            "key": "kind",
+            "title": "Kind",
+            "format": "text"
+          }
+        ],
+        "rows": [
+          {
+            "id": "f1",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "alpha.rs",
+              "kind": "lib"
+            }
+          },
+          {
+            "id": "f2",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "beta.rs",
+              "kind": "bin"
+            }
+          },
+          {
+            "id": "f3",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "gamma.rs",
+              "kind": "lib"
+            }
+          },
+          {
+            "id": "f4",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "delta.rs",
+              "kind": "bin"
+            }
+          },
+          {
+            "id": "f5",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "epsilon.rs",
+              "kind": "lib"
+            }
+          }
+        ],
+        "order": {
+          "key": "name",
+          "direction": "asc"
+        }
+      }
+    }
+  ]
+}

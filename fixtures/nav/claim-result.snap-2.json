@@ -1,0 +1,125 @@
+{
+  "schemaVersion": "paneweft.bundle/1",
+  "entities": [
+    {
+      "repository": "r",
+      "id": "probe",
+      "kind": "exp/probe",
+      "snapshotId": "snap-2",
+      "label": "probe",
+      "dataRoles": [
+        "example"
+      ],
+      "relations": []
+    },
+    {
+      "repository": "r",
+      "id": "result-2",
+      "kind": "json/value",
+      "snapshotId": "snap-2",
+      "label": "result-2",
+      "dataRoles": [
+        "shape"
+      ],
+      "relations": []
+    }
+  ],
+  "definitions": [],
+  "views": [
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "one-write",
+      "title": "One change fires",
+      "question": "Can I rerun this scenario and inspect its tested result?",
+      "entity": {
+        "repository": "r",
+        "id": "probe",
+        "kind": "exp/probe"
+      },
+      "snapshotId": "snap-2",
+      "component": "example",
+      "viewDefinitionId": "def-probe-example",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "tests/probe.rs",
+          "sha256": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": "0123456789abcdef0123456789abcdef01234567",
+            "dirty": false,
+            "files": {
+              "tests/probe.rs": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "all recorded runs"
+      },
+      "data": {
+        "scenario": {
+          "id": "once",
+          "label": "One change fires",
+          "runnerId": "probe-one-write",
+          "parameters": {},
+          "evidence": [
+            "s1"
+          ],
+          "provenance": "read"
+        },
+        "runs": [
+          {
+            "id": "run-1",
+            "runId": "r-1b",
+            "status": "passed",
+            "assertions": [
+              {
+                "id": "as1",
+                "statement": "The watch fired",
+                "passed": true,
+                "evidence": [
+                  "s1"
+                ],
+                "provenance": "read"
+              }
+            ],
+            "evidence": [
+              "s1"
+            ],
+            "provenance": "read",
+            "result": {
+              "repository": "r",
+              "id": "result-2",
+              "kind": "json/value"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

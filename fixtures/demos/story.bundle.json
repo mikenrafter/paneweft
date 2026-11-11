@@ -1,0 +1,352 @@
+{
+  "schemaVersion": "paneweft.bundle/1",
+  "entities": [
+    {
+      "repository": "paneweft",
+      "id": "context-story",
+      "kind": "notes/page",
+      "snapshotId": "story-1",
+      "label": "What survives a change of context?",
+      "dataRoles": [
+        "story"
+      ],
+      "relations": [
+        {
+          "name": "examines",
+          "target": {
+            "repository": "vigil",
+            "id": "one-write",
+            "kind": "vigil/watch"
+          }
+        },
+        {
+          "name": "examines",
+          "target": {
+            "repository": "residual-web",
+            "id": "selection-switch",
+            "kind": "residual/selection"
+          }
+        }
+      ]
+    }
+  ],
+  "definitions": [
+    {
+      "id": "def-context-story",
+      "entityKind": "notes/page",
+      "title": "How do the evidence and views answer what survives a change of context?",
+      "component": "notebook",
+      "requires": [],
+      "dataRole": "story"
+    }
+  ],
+  "views": [
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "story-context-change",
+      "title": "What survives a change of context?",
+      "question": "Does changing the caller's context lose a result or a selection, and which evidence and views answer that?",
+      "entity": {
+        "repository": "paneweft",
+        "id": "context-story",
+        "kind": "notes/page"
+      },
+      "snapshotId": "story-1",
+      "component": "notebook",
+      "viewDefinitionId": "def-context-story",
+      "scope": {
+        "repositories": [
+          "vigil",
+          "residual-web",
+          "paneweft"
+        ],
+        "roots": [
+          "/home/mini/Documents/repos/phoe-nix/scout-modules/vigil",
+          "/home/mini/Documents/repos/residual-cli",
+          "/home/mini/Documents/repos/paneweft"
+        ],
+        "excludes": [],
+        "relation": "composes",
+        "limits": [
+          "Each embedded view keeps its own repository snapshot (vigil-d064373, residual-32c0836); no synthetic combined revision is claimed.",
+          "Source-inspected only: nothing was built, run or observed. D3 stays open until both scenarios have an observed run.",
+          "No conclusion about general productivity follows from these demos."
+        ]
+      },
+      "sources": [
+        {
+          "id": "sv",
+          "kind": "file",
+          "repository": "vigil",
+          "path": "src/mcp.rs",
+          "sha256": "1f627598551a007472cacecb61f4a649b8f60bb089ed16f67ce6f1145d415c25",
+          "capturedAt": "2026-11-11T12:00:00Z",
+          "method": "read: full file bytes of the cited path at vigil revision d064373a15139b969599ee05bc7b156b1d5b8ed7 (the vigil directory is unmodified); nothing was built, executed or observed"
+        },
+        {
+          "id": "sr",
+          "kind": "file",
+          "repository": "residual-web",
+          "path": "web/src/nkp-landscape.test.ts",
+          "sha256": "d1f9db2be5dffa209793da697ea7c971f4ed07d90a1ab9a15c3ce57f0d5ecd8b",
+          "capturedAt": "2026-11-11T12:00:00Z",
+          "method": "read: full file bytes of the cited path at residual-cli revision 32c0836283dad8c22431b3025ec910b4b5759e90 (clean checkout); nothing was built, executed or observed"
+        },
+        {
+          "id": "sd",
+          "kind": "document",
+          "repository": "paneweft",
+          "path": "docs/design.md",
+          "sha256": "87e3143fd01462f82d2d2c3aea39e7e35f52d88a09b99d750b465f837d01e68f",
+          "capturedAt": "2026-11-11T12:00:00Z",
+          "method": "read: the paneweft design note (section 6 poses the question and gives the demo tables), sha256 taken when this fixture was written, repository paneweft revision 31aae89198d5f0e1057a87848b38696e9ae155bf"
+        }
+      ],
+      "generatedAt": "2026-11-11T12:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "vigil",
+            "root": "/home/mini/Documents/repos/phoe-nix/scout-modules/vigil",
+            "gitRev": "d064373a15139b969599ee05bc7b156b1d5b8ed7",
+            "dirty": false,
+            "files": {
+              "src/mcp.rs": "1f627598551a007472cacecb61f4a649b8f60bb089ed16f67ce6f1145d415c25"
+            }
+          },
+          {
+            "id": "residual-web",
+            "root": "/home/mini/Documents/repos/residual-cli",
+            "gitRev": "32c0836283dad8c22431b3025ec910b4b5759e90",
+            "dirty": false,
+            "files": {
+              "web/src/nkp-landscape.test.ts": "d1f9db2be5dffa209793da697ea7c971f4ed07d90a1ab9a15c3ce57f0d5ecd8b"
+            }
+          },
+          {
+            "id": "paneweft",
+            "root": "/home/mini/Documents/repos/paneweft",
+            "gitRev": "31aae89198d5f0e1057a87848b38696e9ae155bf",
+            "dirty": false,
+            "files": {
+              "docs/design.md": "87e3143fd01462f82d2d2c3aea39e7e35f52d88a09b99d750b465f837d01e68f"
+            }
+          }
+        ]
+      },
+      "links": [
+        {
+          "id": "l-v1",
+          "relation": "embeds view",
+          "snapshotId": "vigil-d064373",
+          "viewId": "vigil-lifecycle"
+        },
+        {
+          "id": "l-v2",
+          "relation": "embeds view",
+          "snapshotId": "vigil-d064373",
+          "viewId": "vigil-delivery-path"
+        },
+        {
+          "id": "l-v3",
+          "relation": "embeds view",
+          "snapshotId": "vigil-d064373",
+          "viewId": "vigil-one-write"
+        },
+        {
+          "id": "l-r1",
+          "relation": "embeds view",
+          "snapshotId": "residual-32c0836",
+          "viewId": "residual-view-entrypoints"
+        },
+        {
+          "id": "l-r2",
+          "relation": "embeds view",
+          "snapshotId": "residual-32c0836",
+          "viewId": "residual-selection-shape"
+        },
+        {
+          "id": "l-r3",
+          "relation": "embeds view",
+          "snapshotId": "residual-32c0836",
+          "viewId": "residual-selection-switch"
+        },
+        {
+          "id": "l-D1-recheck",
+          "relation": "claim D1 is shown by source",
+          "snapshotId": "vigil-d064373",
+          "viewId": "vigil-cancel-guard",
+          "itemId": "a-recheck"
+        },
+        {
+          "id": "l-D1-commit",
+          "relation": "claim D1 is shown by source",
+          "snapshotId": "vigil-d064373",
+          "viewId": "vigil-cancel-guard",
+          "itemId": "a-commit"
+        },
+        {
+          "id": "l-D2-switch",
+          "relation": "claim D2 is specified by test scenario",
+          "snapshotId": "residual-32c0836",
+          "viewId": "residual-selection-switch",
+          "itemId": "scenario-selection-switch"
+        },
+        {
+          "id": "l-D3-ex1",
+          "relation": "open question examined by",
+          "snapshotId": "story-1",
+          "viewId": "story-context-change",
+          "itemId": "ex1"
+        },
+        {
+          "id": "l-D3-ex2",
+          "relation": "open question examined by",
+          "snapshotId": "story-1",
+          "viewId": "story-context-change",
+          "itemId": "ex2"
+        }
+      ],
+      "completeness": {
+        "status": "partial",
+        "gaps": [
+          {
+            "id": "vigil-run-missing",
+            "question": "Does the vigil one-write scenario pass in this checkout?",
+            "reason": "Not run: vigil-one-write has runs: [] and no observed run exists, so claim D3 stays open."
+          },
+          {
+            "id": "residual-run-missing",
+            "question": "Does the residual selection-switch scenario pass in this checkout?",
+            "reason": "Not run: residual-selection-switch has runs: [] and no observed run exists, so claim D3 stays open."
+          }
+        ]
+      },
+      "data": {
+        "blocks": [
+          {
+            "id": "intro",
+            "kind": "prose",
+            "markdown": "What survives a change of context?",
+            "provenance": "read",
+            "evidence": [
+              "sd"
+            ]
+          },
+          {
+            "id": "v1",
+            "kind": "view",
+            "viewId": "vigil-lifecycle",
+            "provenance": "read",
+            "evidence": [
+              "sv"
+            ]
+          },
+          {
+            "id": "v2",
+            "kind": "view",
+            "viewId": "vigil-delivery-path",
+            "provenance": "read",
+            "evidence": [
+              "sv"
+            ]
+          },
+          {
+            "id": "v3",
+            "kind": "view",
+            "viewId": "vigil-one-write",
+            "provenance": "read",
+            "evidence": [
+              "sv"
+            ]
+          },
+          {
+            "id": "D1",
+            "kind": "claim",
+            "statement": "The MCP wrapper checks cancellation before committing delivery.",
+            "status": "supported",
+            "supports": [
+              "sv"
+            ],
+            "contradicts": [],
+            "provenance": "read",
+            "evidence": [
+              "sv"
+            ]
+          },
+          {
+            "id": "r1",
+            "kind": "view",
+            "viewId": "residual-view-entrypoints",
+            "provenance": "read",
+            "evidence": [
+              "sr"
+            ]
+          },
+          {
+            "id": "r2",
+            "kind": "view",
+            "viewId": "residual-selection-shape",
+            "provenance": "read",
+            "evidence": [
+              "sr"
+            ]
+          },
+          {
+            "id": "r3",
+            "kind": "view",
+            "viewId": "residual-selection-switch",
+            "provenance": "read",
+            "evidence": [
+              "sr"
+            ]
+          },
+          {
+            "id": "D2",
+            "kind": "claim",
+            "statement": "The tests specify selection persistence across view and filter changes.",
+            "status": "supported",
+            "supports": [
+              "sr"
+            ],
+            "contradicts": [],
+            "provenance": "read",
+            "evidence": [
+              "sr"
+            ]
+          },
+          {
+            "id": "D3",
+            "kind": "claim",
+            "statement": "Does this checkout satisfy both runnable scenarios?",
+            "status": "open",
+            "supports": [],
+            "contradicts": [],
+            "provenance": "read",
+            "evidence": [
+              "sd"
+            ]
+          },
+          {
+            "id": "ex1",
+            "kind": "example",
+            "exampleId": "vigil-one-write",
+            "provenance": "read",
+            "evidence": [
+              "sv"
+            ]
+          },
+          {
+            "id": "ex2",
+            "kind": "example",
+            "exampleId": "residual-selection-switch",
+            "provenance": "read",
+            "evidence": [
+              "sr"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

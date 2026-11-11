@@ -1,0 +1,104 @@
+{
+  "schemaVersion": "paneweft.bundle/1",
+  "entities": [
+    {
+      "repository": "r",
+      "id": "subject",
+      "kind": "demo/subject",
+      "snapshotId": "snap-1",
+      "label": "Subject",
+      "dataRoles": [
+        "example"
+      ],
+      "relations": []
+    }
+  ],
+  "definitions": [
+    {
+      "id": "d-example",
+      "entityKind": "demo/subject",
+      "title": "One change fires",
+      "priority": 10,
+      "component": "example",
+      "requires": [],
+      "dataRole": "example"
+    }
+  ],
+  "views": [
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "v-example",
+      "title": "One change fires",
+      "question": "Can I rerun this scenario and inspect its tested result?",
+      "entity": {
+        "repository": "r",
+        "id": "subject",
+        "kind": "demo/subject"
+      },
+      "snapshotId": "snap-1",
+      "component": "example",
+      "viewDefinitionId": "d-example",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/check.ts",
+          "sha256": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": null,
+            "dirty": false,
+            "files": {
+              "src/check.ts": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "partial",
+        "gaps": [
+          {
+            "id": "g-not-run",
+            "question": "Does the scenario pass in this checkout?",
+            "reason": "No run has been recorded."
+          }
+        ]
+      },
+      "data": {
+        "scenario": {
+          "id": "once",
+          "provenance": "read",
+          "evidence": [
+            "s1"
+          ],
+          "label": "One change fires",
+          "runnerId": "vigil-one-write",
+          "parameters": {}
+        },
+        "runs": []
+      }
+    }
+  ]
+}

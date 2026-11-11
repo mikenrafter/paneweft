@@ -1,0 +1,352 @@
+{
+  "schemaVersion": "paneweft.bundle/1",
+  "entities": [
+    {
+      "repository": "r",
+      "id": "probe",
+      "kind": "exp/probe",
+      "snapshotId": "snap-1",
+      "label": "probe",
+      "dataRoles": [
+        "example"
+      ],
+      "relations": []
+    },
+    {
+      "repository": "r",
+      "id": "page",
+      "kind": "notes/page",
+      "snapshotId": "snap-1",
+      "label": "page",
+      "dataRoles": [
+        "story"
+      ],
+      "relations": []
+    },
+    {
+      "repository": "r",
+      "id": "result",
+      "kind": "json/value",
+      "snapshotId": "snap-1",
+      "label": "result",
+      "dataRoles": [
+        "shape"
+      ],
+      "relations": []
+    }
+  ],
+  "definitions": [
+    {
+      "id": "def-probe-example",
+      "entityKind": "exp/probe",
+      "title": "One change fires",
+      "priority": 10,
+      "component": "example",
+      "requires": [],
+      "dataRole": "example"
+    },
+    {
+      "id": "def-page-story",
+      "entityKind": "notes/page",
+      "title": "Probe notebook",
+      "priority": 10,
+      "component": "notebook",
+      "requires": [],
+      "dataRole": "story"
+    },
+    {
+      "id": "def-result-shape",
+      "entityKind": "json/value",
+      "title": "Result shape",
+      "priority": 10,
+      "component": "shape",
+      "requires": [],
+      "dataRole": "shape"
+    }
+  ],
+  "views": [
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "one-write",
+      "title": "One change fires",
+      "question": "Can I rerun this scenario and inspect its tested result?",
+      "entity": {
+        "repository": "r",
+        "id": "probe",
+        "kind": "exp/probe"
+      },
+      "snapshotId": "snap-1",
+      "component": "example",
+      "viewDefinitionId": "def-probe-example",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "tests/probe.rs",
+          "sha256": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": "0123456789abcdef0123456789abcdef01234567",
+            "dirty": false,
+            "files": {
+              "tests/probe.rs": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "all recorded runs"
+      },
+      "data": {
+        "scenario": {
+          "id": "once",
+          "label": "One change fires",
+          "runnerId": "probe-one-write",
+          "parameters": {},
+          "evidence": [
+            "s1"
+          ],
+          "provenance": "read"
+        },
+        "runs": [
+          {
+            "id": "run-1",
+            "runId": "r-1",
+            "status": "passed",
+            "assertions": [
+              {
+                "id": "as1",
+                "statement": "The watch fired",
+                "passed": true,
+                "evidence": [
+                  "s1"
+                ],
+                "provenance": "read"
+              }
+            ],
+            "evidence": [
+              "s1"
+            ],
+            "provenance": "read",
+            "result": {
+              "repository": "r",
+              "id": "result",
+              "kind": "json/value"
+            }
+          },
+          {
+            "id": "run-2",
+            "runId": "r-2",
+            "status": "failed",
+            "assertions": [
+              {
+                "id": "as2",
+                "statement": "A second write fired",
+                "passed": false,
+                "evidence": [
+                  "s1"
+                ],
+                "provenance": "read"
+              }
+            ],
+            "evidence": [
+              "s1"
+            ],
+            "provenance": "read"
+          }
+        ]
+      }
+    },
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "result-shape",
+      "title": "Result shape",
+      "question": "What does this value or boundary payload contain?",
+      "entity": {
+        "repository": "r",
+        "id": "result",
+        "kind": "json/value"
+      },
+      "snapshotId": "snap-1",
+      "component": "shape",
+      "viewDefinitionId": "def-result-shape",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "tests/probe.rs",
+          "sha256": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": "0123456789abcdef0123456789abcdef01234567",
+            "dirty": false,
+            "files": {
+              "tests/probe.rs": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "the observed fields"
+      },
+      "data": {
+        "basis": "observed",
+        "root": "f",
+        "fields": [
+          {
+            "id": "f",
+            "path": "status",
+            "type": "string",
+            "presence": "required",
+            "children": [],
+            "evidence": [
+              "s1"
+            ],
+            "provenance": "read"
+          }
+        ]
+      }
+    },
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "story",
+      "title": "Probe notebook",
+      "question": "How do the evidence and views answer this investigation?",
+      "entity": {
+        "repository": "r",
+        "id": "page",
+        "kind": "notes/page"
+      },
+      "snapshotId": "snap-1",
+      "component": "notebook",
+      "viewDefinitionId": "def-page-story",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "tests/probe.rs",
+          "sha256": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": "0123456789abcdef0123456789abcdef01234567",
+            "dirty": false,
+            "files": {
+              "tests/probe.rs": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "the two blocks of the fixture"
+      },
+      "data": {
+        "blocks": [
+          {
+            "id": "intro",
+            "kind": "prose",
+            "markdown": "Does one write fire the watch?",
+            "evidence": [
+              "s1"
+            ],
+            "provenance": "read"
+          },
+          {
+            "id": "C1",
+            "kind": "claim",
+            "statement": "One write fires the watch and returns an inspectable result.",
+            "status": "supported",
+            "supports": [
+              {
+                "viewId": "one-write",
+                "itemId": "run-1"
+              },
+              {
+                "viewId": "result-shape",
+                "itemId": "f"
+              }
+            ],
+            "contradicts": [
+              {
+                "viewId": "one-write",
+                "itemId": "run-2"
+              }
+            ],
+            "evidence": [
+              "s1"
+            ],
+            "provenance": "read"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,283 @@
+{
+  "schemaVersion": "paneweft.bundle/1",
+  "entities": [
+    {
+      "repository": "r",
+      "id": "subject",
+      "kind": "demo/subject",
+      "snapshotId": "snap-1",
+      "label": "Subject",
+      "dataRoles": [
+        "shape"
+      ],
+      "relations": []
+    },
+    {
+      "repository": "r",
+      "id": "fld-msg",
+      "kind": "code/field",
+      "snapshotId": "snap-1",
+      "label": "msg",
+      "dataRoles": [],
+      "relations": []
+    },
+    {
+      "repository": "r",
+      "id": "fld-id",
+      "kind": "code/field",
+      "snapshotId": "snap-1",
+      "label": "id",
+      "dataRoles": [],
+      "relations": []
+    },
+    {
+      "repository": "r",
+      "id": "fld-note",
+      "kind": "code/field",
+      "snapshotId": "snap-1",
+      "label": "note",
+      "dataRoles": [],
+      "relations": []
+    },
+    {
+      "repository": "r",
+      "id": "fld-tag",
+      "kind": "code/field",
+      "snapshotId": "snap-1",
+      "label": "tag",
+      "dataRoles": [],
+      "relations": []
+    },
+    {
+      "repository": "r",
+      "id": "fld-parent",
+      "kind": "code/field",
+      "snapshotId": "snap-1",
+      "label": "parent",
+      "dataRoles": [],
+      "relations": []
+    },
+    {
+      "repository": "r",
+      "id": "fld-count",
+      "kind": "code/field",
+      "snapshotId": "snap-1",
+      "label": "count",
+      "dataRoles": [],
+      "relations": []
+    },
+    {
+      "repository": "r",
+      "id": "fld-flag",
+      "kind": "code/field",
+      "snapshotId": "snap-1",
+      "label": "flag",
+      "dataRoles": [],
+      "relations": []
+    }
+  ],
+  "definitions": [
+    {
+      "id": "d-shape",
+      "entityKind": "demo/subject",
+      "title": "Watch message",
+      "priority": 10,
+      "component": "shape",
+      "requires": [],
+      "dataRole": "shape"
+    }
+  ],
+  "views": [
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "v-shape",
+      "title": "Watch message",
+      "question": "What does this value or boundary payload contain?",
+      "entity": {
+        "repository": "r",
+        "id": "subject",
+        "kind": "demo/subject"
+      },
+      "snapshotId": "snap-1",
+      "component": "shape",
+      "viewDefinitionId": "d-shape",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/check.ts",
+          "sha256": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": null,
+            "dirty": false,
+            "files": {
+              "src/check.ts": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "the declared fields of the fixture"
+      },
+      "data": {
+        "basis": "declared",
+        "root": "f-msg",
+        "fields": [
+          {
+            "id": "f-msg",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "path": "msg",
+            "type": "object",
+            "presence": "required",
+            "children": [
+              "f-id",
+              "f-note",
+              "f-tag",
+              "f-parent",
+              "f-count",
+              "f-flag"
+            ],
+            "entity": {
+              "repository": "r",
+              "id": "fld-msg",
+              "kind": "code/field"
+            }
+          },
+          {
+            "id": "f-id",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "path": "msg.id",
+            "type": "string",
+            "presence": "required",
+            "example": "w-1",
+            "children": [],
+            "entity": {
+              "repository": "r",
+              "id": "fld-id",
+              "kind": "code/field"
+            }
+          },
+          {
+            "id": "f-note",
+            "provenance": "compiled",
+            "evidence": [
+              "s1"
+            ],
+            "path": "msg.note",
+            "type": "string",
+            "presence": "optional",
+            "example": null,
+            "children": [],
+            "entity": {
+              "repository": "r",
+              "id": "fld-note",
+              "kind": "code/field"
+            }
+          },
+          {
+            "id": "f-tag",
+            "provenance": "inferred",
+            "evidence": [
+              "s1"
+            ],
+            "path": "msg.tag",
+            "type": "string",
+            "presence": "unknown",
+            "example": "null",
+            "children": [],
+            "entity": {
+              "repository": "r",
+              "id": "fld-tag",
+              "kind": "code/field"
+            },
+            "reason": "seen in one log line",
+            "basis": [
+              "s1"
+            ]
+          },
+          {
+            "id": "f-parent",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "path": "msg.parent",
+            "type": "msg",
+            "presence": "optional",
+            "children": [],
+            "ref": "f-msg",
+            "entity": {
+              "repository": "r",
+              "id": "fld-parent",
+              "kind": "code/field"
+            }
+          },
+          {
+            "id": "f-count",
+            "provenance": "compiled",
+            "evidence": [
+              "s1"
+            ],
+            "path": "msg.count",
+            "type": "number",
+            "presence": "required",
+            "example": 3,
+            "children": [],
+            "entity": {
+              "repository": "r",
+              "id": "fld-count",
+              "kind": "code/field"
+            }
+          },
+          {
+            "id": "f-flag",
+            "provenance": "parsed",
+            "evidence": [
+              "s1"
+            ],
+            "path": "msg.flag",
+            "type": "boolean",
+            "presence": "optional",
+            "example": false,
+            "children": [],
+            "entity": {
+              "repository": "r",
+              "id": "fld-flag",
+              "kind": "code/field"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

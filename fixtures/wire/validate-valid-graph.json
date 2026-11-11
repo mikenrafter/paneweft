@@ -1,0 +1,100 @@
+{
+  "input": {
+    "schemaVersion": "paneweft.view/1",
+    "id": "delivery-path",
+    "title": "Delivery path",
+    "question": "What connects these entities, and by which relation?",
+    "entity": {
+      "repository": "r",
+      "id": "watch",
+      "kind": "vigil/watch"
+    },
+    "snapshotId": "snap-1",
+    "component": "graph",
+    "viewDefinitionId": "def-delivery",
+    "scope": {
+      "repositories": [
+        "r"
+      ],
+      "roots": [
+        "/work/r"
+      ],
+      "excludes": [],
+      "limits": [
+        "fixture"
+      ]
+    },
+    "sources": [
+      {
+        "id": "s1",
+        "kind": "file",
+        "repository": "r",
+        "path": "src/mcp.rs",
+        "sha256": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+        "capturedAt": "2026-11-11T00:00:00Z",
+        "method": "read"
+      }
+    ],
+    "generatedAt": "2026-11-11T00:00:00Z",
+    "freshness": {
+      "repositories": [
+        {
+          "id": "r",
+          "root": "/work/r",
+          "gitRev": "0123456789abcdef0123456789abcdef01234567",
+          "dirty": false,
+          "files": {
+            "src/mcp.rs": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+          }
+        }
+      ]
+    },
+    "links": [],
+    "completeness": {
+      "status": "complete",
+      "criterion": "all direct invocations in the fixture"
+    },
+    "data": {
+      "nodes": [
+        {
+          "id": "a",
+          "label": "MCP",
+          "provenance": "read",
+          "evidence": [
+            "s1"
+          ]
+        },
+        {
+          "id": "b",
+          "label": "Engine",
+          "provenance": "read",
+          "evidence": [
+            "s1"
+          ]
+        }
+      ],
+      "edges": [
+        {
+          "id": "e",
+          "from": "a",
+          "to": "b",
+          "relation": "invokes",
+          "provenance": "read",
+          "evidence": [
+            "s1"
+          ]
+        }
+      ],
+      "layout": "layered",
+      "paths": [
+        {
+          "id": "p",
+          "edgeIds": [
+            "e"
+          ]
+        }
+      ]
+    }
+  },
+  "format": "json"
+}

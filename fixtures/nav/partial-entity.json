@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "paneweft.bundle/1",
+  "entities": [
+    {
+      "repository": "r",
+      "id": "partial",
+      "kind": "vigil/watch",
+      "snapshotId": "snap-1",
+      "label": "partial",
+      "dataRoles": [
+        "modules"
+      ],
+      "relations": []
+    }
+  ],
+  "definitions": [],
+  "views": []
+}

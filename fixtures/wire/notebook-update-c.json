@@ -1,0 +1,25 @@
+{
+  "pageId": "wire-page",
+  "expectedRevision": 1,
+  "blocks": [
+    {
+      "id": "b1",
+      "kind": "prose",
+      "markdown": "Why does cancellation preserve a result? (c)",
+      "provenance": "read",
+      "evidence": [
+        "s1"
+      ]
+    },
+    {
+      "id": "b2",
+      "kind": "prose",
+      "markdown": "Edited by writer c.",
+      "provenance": "read",
+      "evidence": [
+        "s1"
+      ]
+    }
+  ],
+  "format": "json"
+}

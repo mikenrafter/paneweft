@@ -1,0 +1,5 @@
+{
+  "component": "graph",
+  "maxBytes": 2048,
+  "format": "json"
+}

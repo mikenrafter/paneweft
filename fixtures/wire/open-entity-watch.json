@@ -1,0 +1,9 @@
+{
+  "snapshotId": "snap-1",
+  "entity": {
+    "repository": "r",
+    "id": "watch",
+    "kind": "vigil/watch"
+  },
+  "format": "json"
+}

@@ -1,0 +1,248 @@
+{
+  "schemaVersion": "paneweft.bundle/1",
+  "entities": [
+    {
+      "repository": "r",
+      "id": "subject",
+      "kind": "demo/subject",
+      "snapshotId": "snap-1",
+      "label": "Subject",
+      "dataRoles": [
+        "modules"
+      ],
+      "relations": []
+    },
+    {
+      "repository": "r",
+      "id": "mod-alpha",
+      "kind": "code/module",
+      "snapshotId": "snap-1",
+      "label": "alpha.rs",
+      "dataRoles": [],
+      "relations": []
+    },
+    {
+      "repository": "r",
+      "id": "mod-beta",
+      "kind": "code/module",
+      "snapshotId": "snap-1",
+      "label": "beta.rs",
+      "dataRoles": [],
+      "relations": []
+    },
+    {
+      "repository": "r",
+      "id": "mod-gamma",
+      "kind": "code/module",
+      "snapshotId": "snap-1",
+      "label": "gamma.rs",
+      "dataRoles": [],
+      "relations": []
+    },
+    {
+      "repository": "r",
+      "id": "mod-epsilon",
+      "kind": "code/module",
+      "snapshotId": "snap-1",
+      "label": "epsilon.rs",
+      "dataRoles": [],
+      "relations": []
+    }
+  ],
+  "definitions": [
+    {
+      "id": "d-list",
+      "entityKind": "demo/subject",
+      "title": "Modules",
+      "priority": 10,
+      "component": "list",
+      "requires": [],
+      "dataRole": "modules"
+    }
+  ],
+  "views": [
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "v-list",
+      "title": "Modules",
+      "question": "Which modules matter?",
+      "entity": {
+        "repository": "r",
+        "id": "subject",
+        "kind": "demo/subject"
+      },
+      "snapshotId": "snap-1",
+      "component": "list",
+      "viewDefinitionId": "d-list",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/check.ts",
+          "sha256": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        },
+        {
+          "id": "s2",
+          "kind": "command",
+          "sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "cargo test one_write",
+          "runId": "run-1",
+          "argv": [
+            "cargo",
+            "test",
+            "one_write"
+          ],
+          "exitCode": 0
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": null,
+            "dirty": false,
+            "files": {
+              "src/check.ts": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "all modules in the fixture"
+      },
+      "data": {
+        "columns": [
+          {
+            "key": "name",
+            "title": "Module",
+            "format": "text"
+          },
+          {
+            "key": "size",
+            "title": "Size",
+            "format": "number"
+          }
+        ],
+        "rows": [
+          {
+            "id": "r1",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "alpha.rs",
+              "size": 7
+            },
+            "group": "core",
+            "entity": {
+              "repository": "r",
+              "id": "mod-alpha",
+              "kind": "code/module"
+            },
+            "anchor": {
+              "repository": "r",
+              "path": "src/check.ts",
+              "lines": [
+                10,
+                12
+              ]
+            }
+          },
+          {
+            "id": "r2",
+            "provenance": "compiled",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "beta.rs",
+              "size": 5
+            },
+            "group": "core",
+            "entity": {
+              "repository": "r",
+              "id": "mod-beta",
+              "kind": "code/module"
+            }
+          },
+          {
+            "id": "r3",
+            "provenance": "inferred",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "gamma.rs",
+              "size": 5
+            },
+            "group": "core",
+            "entity": {
+              "repository": "r",
+              "id": "mod-gamma",
+              "kind": "code/module"
+            },
+            "reason": "name matches the module path",
+            "basis": [
+              "s1"
+            ]
+          },
+          {
+            "id": "r4",
+            "provenance": "observed",
+            "evidence": [
+              "s2"
+            ],
+            "cells": {
+              "name": "delta.rs",
+              "size": 1234
+            },
+            "group": "core"
+          },
+          {
+            "id": "r5",
+            "provenance": "parsed",
+            "evidence": [
+              "s1",
+              "s2"
+            ],
+            "cells": {
+              "name": "epsilon.rs",
+              "size": 9
+            },
+            "group": "core",
+            "entity": {
+              "repository": "r",
+              "id": "mod-epsilon",
+              "kind": "code/module"
+            }
+          }
+        ],
+        "order": {
+          "key": "size",
+          "direction": "asc"
+        }
+      }
+    }
+  ]
+}

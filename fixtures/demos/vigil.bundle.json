@@ -1,0 +1,1345 @@
+{
+  "schemaVersion": "paneweft.bundle/1",
+  "entities": [
+    {
+      "repository": "vigil",
+      "id": "watch",
+      "kind": "vigil/watch",
+      "snapshotId": "vigil-d064373",
+      "label": "Watch (WatchStatus lifecycle)",
+      "dataRoles": [
+        "lifecycle"
+      ],
+      "relations": [
+        {
+          "name": "result delivered by",
+          "target": {
+            "repository": "vigil",
+            "id": "keepalive-delivery",
+            "kind": "vigil/delivery"
+          }
+        }
+      ]
+    },
+    {
+      "repository": "vigil",
+      "id": "keepalive-delivery",
+      "kind": "vigil/delivery",
+      "snapshotId": "vigil-d064373",
+      "label": "Keepalive delivery (run_keepalive)",
+      "dataRoles": [
+        "delivery-path",
+        "cancel-guard"
+      ],
+      "relations": [
+        {
+          "name": "exercised by",
+          "target": {
+            "repository": "vigil",
+            "id": "one-write",
+            "kind": "vigil/watch"
+          }
+        }
+      ]
+    },
+    {
+      "repository": "vigil",
+      "id": "one-write",
+      "kind": "vigil/watch",
+      "snapshotId": "vigil-d064373",
+      "label": "One write fires a watch (scenario)",
+      "dataRoles": [
+        "example"
+      ],
+      "relations": [
+        {
+          "name": "fires the lifecycle status",
+          "target": {
+            "repository": "vigil",
+            "id": "watch",
+            "kind": "vigil/watch"
+          }
+        }
+      ]
+    }
+  ],
+  "definitions": [
+    {
+      "id": "def-vigil-lifecycle",
+      "entityKind": "vigil/watch",
+      "title": "When does a watch stop, and what takes precedence?",
+      "priority": 10,
+      "component": "graph",
+      "requires": [],
+      "dataRole": "lifecycle"
+    },
+    {
+      "id": "def-vigil-one-write",
+      "entityKind": "vigil/watch",
+      "title": "Does one write after watch creation reach the first keepalive result?",
+      "component": "example",
+      "requires": [],
+      "dataRole": "example"
+    },
+    {
+      "id": "def-vigil-delivery-path",
+      "entityKind": "vigil/delivery",
+      "title": "Where can an MCP keepalive result stop being delivered?",
+      "priority": 10,
+      "component": "graph",
+      "requires": [],
+      "dataRole": "delivery-path"
+    },
+    {
+      "id": "def-vigil-cancel-guard",
+      "entityKind": "vigil/delivery",
+      "title": "Which exact code checks cancellation before the delivery is committed?",
+      "priority": 20,
+      "component": "source",
+      "requires": [],
+      "dataRole": "cancel-guard"
+    }
+  ],
+  "views": [
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "vigil-lifecycle",
+      "title": "When does a watch stop?",
+      "question": "When does a watch stop, and what takes precedence?",
+      "entity": {
+        "repository": "vigil",
+        "id": "watch",
+        "kind": "vigil/watch"
+      },
+      "snapshotId": "vigil-d064373",
+      "component": "graph",
+      "viewDefinitionId": "def-vigil-lifecycle",
+      "scope": {
+        "repositories": [
+          "vigil"
+        ],
+        "roots": [
+          "/home/mini/Documents/repos/phoe-nix/scout-modules/vigil"
+        ],
+        "excludes": [
+          "src/judge.rs",
+          "src/inputs.rs",
+          "src/attention.rs",
+          "src/keepalive.rs",
+          "src/store.rs"
+        ],
+        "relation": "status transition",
+        "limits": [
+          "Covers the WatchStatus transitions made by cancel, tick and status/list; not every firing rule, attention event or recovery path.",
+          "Source control flow as read; no run, trace or test result is claimed."
+        ]
+      },
+      "sources": [
+        {
+          "id": "s-watch",
+          "kind": "file",
+          "repository": "vigil",
+          "path": "src/watch.rs",
+          "sha256": "62f0229b71d3984a5187787780f9a2b26bfc592277281c8ed02b66802e451742",
+          "capturedAt": "2026-11-11T12:00:00Z",
+          "method": "read: full file bytes of the cited path at vigil revision d064373a15139b969599ee05bc7b156b1d5b8ed7 (the vigil directory is unmodified); nothing was built, executed or observed"
+        },
+        {
+          "id": "s-engine",
+          "kind": "file",
+          "repository": "vigil",
+          "path": "src/engine.rs",
+          "sha256": "79cf0ad0ec83d68638a8ce414bde91375b3e11b93d40e79b00dc1086079e65ca",
+          "capturedAt": "2026-11-11T12:00:00Z",
+          "method": "read: full file bytes of the cited path at vigil revision d064373a15139b969599ee05bc7b156b1d5b8ed7 (the vigil directory is unmodified); nothing was built, executed or observed"
+        },
+        {
+          "id": "s-tick",
+          "kind": "file",
+          "repository": "vigil",
+          "path": "src/tick.rs",
+          "sha256": "4355040b691eabbf6cbb367f69c1e583701dc5b8b41a421ffba7782fd48f6857",
+          "capturedAt": "2026-11-11T12:00:00Z",
+          "method": "read: full file bytes of the cited path at vigil revision d064373a15139b969599ee05bc7b156b1d5b8ed7 (the vigil directory is unmodified); nothing was built, executed or observed"
+        }
+      ],
+      "generatedAt": "2026-11-11T12:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "vigil",
+            "root": "/home/mini/Documents/repos/phoe-nix/scout-modules/vigil",
+            "gitRev": "d064373a15139b969599ee05bc7b156b1d5b8ed7",
+            "dirty": false,
+            "files": {
+              "src/watch.rs": "62f0229b71d3984a5187787780f9a2b26bfc592277281c8ed02b66802e451742",
+              "src/engine.rs": "79cf0ad0ec83d68638a8ce414bde91375b3e11b93d40e79b00dc1086079e65ca",
+              "src/tick.rs": "4355040b691eabbf6cbb367f69c1e583701dc5b8b41a421ffba7782fd48f6857"
+            }
+          }
+        ]
+      },
+      "links": [
+        {
+          "id": "l-to-delivery",
+          "relation": "next: how a keepalive result is delivered",
+          "snapshotId": "vigil-d064373",
+          "viewId": "vigil-delivery-path",
+          "itemId": "n-commit"
+        }
+      ],
+      "completeness": {
+        "status": "partial",
+        "gaps": [
+          {
+            "id": "firing-rules",
+            "question": "Which input changes make each fire rule (change, condition, judge) fire a tick?",
+            "reason": "src/tick.rs:163-173 only dispatches on FireRule; change_events, condition_events and judge_step were not read for this view."
+          },
+          {
+            "id": "attention-events",
+            "question": "Which attention events does a pending watch raise, and do they change its status?",
+            "reason": "src/attention.rs and the expect_s and stall_s arguments (src/mcp.rs:69-77) were not read for this view."
+          },
+          {
+            "id": "recovery",
+            "question": "How does a watch recover after a failed save, a killed server or a store fault?",
+            "reason": "Only status transitions are modeled; what persist (src/engine.rs:306-343) does after a failed write, and src/store.rs, are not modeled."
+          }
+        ]
+      },
+      "data": {
+        "nodes": [
+          {
+            "id": "n-pending",
+            "label": "pending: WatchStatus::Pending, the only unfinished status (is_finished is status != Pending, src/watch.rs:421-423)",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/watch.rs",
+              "lines": [
+                414,
+                414
+              ]
+            },
+            "evidence": [
+              "s-watch"
+            ],
+            "provenance": "read",
+            "entity": {
+              "repository": "vigil",
+              "id": "watch",
+              "kind": "vigil/watch"
+            },
+            "group": "open"
+          },
+          {
+            "id": "n-fired",
+            "label": "fired: WatchStatus::Fired (finished)",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/watch.rs",
+              "lines": [
+                415,
+                415
+              ]
+            },
+            "evidence": [
+              "s-watch"
+            ],
+            "provenance": "read",
+            "entity": {
+              "repository": "vigil",
+              "id": "watch",
+              "kind": "vigil/watch"
+            },
+            "group": "finished"
+          },
+          {
+            "id": "n-expired",
+            "label": "expired: WatchStatus::Expired (finished)",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/watch.rs",
+              "lines": [
+                416,
+                416
+              ]
+            },
+            "evidence": [
+              "s-watch"
+            ],
+            "provenance": "read",
+            "entity": {
+              "repository": "vigil",
+              "id": "watch",
+              "kind": "vigil/watch"
+            },
+            "group": "finished"
+          },
+          {
+            "id": "n-cancelled",
+            "label": "cancelled: WatchStatus::Cancelled (finished)",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/watch.rs",
+              "lines": [
+                417,
+                417
+              ]
+            },
+            "evidence": [
+              "s-watch"
+            ],
+            "provenance": "read",
+            "entity": {
+              "repository": "vigil",
+              "id": "watch",
+              "kind": "vigil/watch"
+            },
+            "group": "finished"
+          }
+        ],
+        "edges": [
+          {
+            "id": "e-tick-fires",
+            "label": "tick: when the fire rule produced events the tick finishes the watch with TerminalStatus::Fired (src/tick.rs:193-201)",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/tick.rs",
+              "lines": [
+                193,
+                201
+              ]
+            },
+            "evidence": [
+              "s-tick"
+            ],
+            "provenance": "read",
+            "from": "n-pending",
+            "to": "n-fired",
+            "relation": "tick fires"
+          },
+          {
+            "id": "e-tick-overdue-start",
+            "label": "tick: a pending watch whose deadline has passed is expired before any sensing; R5: no final tick, no event (src/tick.rs:132-141)",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/tick.rs",
+              "lines": [
+                132,
+                141
+              ]
+            },
+            "evidence": [
+              "s-tick"
+            ],
+            "provenance": "read",
+            "from": "n-pending",
+            "to": "n-expired",
+            "relation": "tick expires"
+          },
+          {
+            "id": "e-tick-over-budget",
+            "label": "tick: after sensing and judging, past the call budget nothing is written and the watch stays pending (C5, OutOfBudget, src/tick.rs:178-180)",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/tick.rs",
+              "lines": [
+                178,
+                180
+              ]
+            },
+            "evidence": [
+              "s-tick"
+            ],
+            "provenance": "read",
+            "from": "n-pending",
+            "to": "n-pending",
+            "relation": "tick writes nothing"
+          },
+          {
+            "id": "e-tick-overdue-after",
+            "label": "tick: after sensing and judging, a watch now past its deadline expires instead of firing on a late result (C6, R5, src/tick.rs:181-187)",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/tick.rs",
+              "lines": [
+                181,
+                187
+              ]
+            },
+            "evidence": [
+              "s-tick"
+            ],
+            "provenance": "read",
+            "from": "n-pending",
+            "to": "n-expired",
+            "relation": "tick expires"
+          },
+          {
+            "id": "e-cancel-expires",
+            "label": "cancel: a pending watch past its deadline is expired first (W5: expiry wins), never cancelled (src/engine.rs:286-289)",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/engine.rs",
+              "lines": [
+                286,
+                289
+              ]
+            },
+            "evidence": [
+              "s-engine"
+            ],
+            "provenance": "read",
+            "from": "n-pending",
+            "to": "n-expired",
+            "relation": "cancel expires"
+          },
+          {
+            "id": "e-cancel-cancels",
+            "label": "cancel: a pending watch not past its deadline is finished with TerminalStatus::Cancelled (src/engine.rs:290-298)",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/engine.rs",
+              "lines": [
+                290,
+                298
+              ]
+            },
+            "evidence": [
+              "s-engine"
+            ],
+            "provenance": "read",
+            "from": "n-pending",
+            "to": "n-cancelled",
+            "relation": "cancel cancels"
+          },
+          {
+            "id": "e-keep-fired",
+            "label": "cancel on a fired watch changes nothing: the stored result is returned (V4, doc src/engine.rs:277-279, guard :290)",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/engine.rs",
+              "lines": [
+                290,
+                290
+              ]
+            },
+            "evidence": [
+              "s-engine",
+              "s-watch"
+            ],
+            "provenance": "read",
+            "from": "n-fired",
+            "to": "n-fired",
+            "relation": "cancel keeps result"
+          },
+          {
+            "id": "e-keep-expired",
+            "label": "cancel on an expired watch changes nothing: the stored result is returned (V4, doc src/engine.rs:277-279, guard :290)",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/engine.rs",
+              "lines": [
+                290,
+                290
+              ]
+            },
+            "evidence": [
+              "s-engine",
+              "s-watch"
+            ],
+            "provenance": "read",
+            "from": "n-expired",
+            "to": "n-expired",
+            "relation": "cancel keeps result"
+          },
+          {
+            "id": "e-keep-cancelled",
+            "label": "cancel on a cancelled watch changes nothing: the stored result is returned (V4, doc src/engine.rs:277-279, guard :290)",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/engine.rs",
+              "lines": [
+                290,
+                290
+              ]
+            },
+            "evidence": [
+              "s-engine",
+              "s-watch"
+            ],
+            "provenance": "read",
+            "from": "n-cancelled",
+            "to": "n-cancelled",
+            "relation": "cancel keeps result"
+          },
+          {
+            "id": "e-status-reads-expired",
+            "label": "status: an overdue pending watch is read as expired by expired_if_overdue (V16); status() contains no save (src/engine.rs:248-254)",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/engine.rs",
+              "lines": [
+                248,
+                254
+              ]
+            },
+            "evidence": [
+              "s-engine"
+            ],
+            "provenance": "read",
+            "from": "n-pending",
+            "to": "n-expired",
+            "relation": "status reads expired"
+          }
+        ],
+        "layout": "layered"
+      }
+    },
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "vigil-delivery-path",
+      "title": "Where a keepalive result can stop",
+      "question": "Where can an MCP keepalive result stop being delivered?",
+      "entity": {
+        "repository": "vigil",
+        "id": "keepalive-delivery",
+        "kind": "vigil/delivery"
+      },
+      "snapshotId": "vigil-d064373",
+      "component": "graph",
+      "viewDefinitionId": "def-vigil-delivery-path",
+      "scope": {
+        "repositories": [
+          "vigil"
+        ],
+        "roots": [
+          "/home/mini/Documents/repos/phoe-nix/scout-modules/vigil"
+        ],
+        "excludes": [
+          "src/keepalive.rs",
+          "src/engine.rs",
+          "src/envelope.rs"
+        ],
+        "relation": "control flow in run_keepalive",
+        "limits": [
+          "Control flow of run_keepalive (src/mcp.rs:127-185) plus its caller's mapping (src/mcp.rs:188-190, :278-282).",
+          "Vigil::keepalive_uncommitted and Vigil::commit_delivery are named, not read.",
+          "Source control flow, not a Rust async execution trace."
+        ]
+      },
+      "sources": [
+        {
+          "id": "s-mcp",
+          "kind": "file",
+          "repository": "vigil",
+          "path": "src/mcp.rs",
+          "sha256": "1f627598551a007472cacecb61f4a649b8f60bb089ed16f67ce6f1145d415c25",
+          "capturedAt": "2026-11-11T12:00:00Z",
+          "method": "read: full file bytes of the cited path at vigil revision d064373a15139b969599ee05bc7b156b1d5b8ed7 (the vigil directory is unmodified); nothing was built, executed or observed"
+        }
+      ],
+      "generatedAt": "2026-11-11T12:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "vigil",
+            "root": "/home/mini/Documents/repos/phoe-nix/scout-modules/vigil",
+            "gitRev": "d064373a15139b969599ee05bc7b156b1d5b8ed7",
+            "dirty": false,
+            "files": {
+              "src/mcp.rs": "1f627598551a007472cacecb61f4a649b8f60bb089ed16f67ce6f1145d415c25"
+            }
+          }
+        ]
+      },
+      "links": [
+        {
+          "id": "l-cancel-recheck",
+          "relation": "cancellation check source",
+          "snapshotId": "vigil-d064373",
+          "viewId": "vigil-cancel-guard",
+          "itemId": "a-recheck"
+        },
+        {
+          "id": "l-cancel-commit",
+          "relation": "commit after the checks, source",
+          "snapshotId": "vigil-d064373",
+          "viewId": "vigil-cancel-guard",
+          "itemId": "a-commit"
+        },
+        {
+          "id": "l-to-example",
+          "relation": "exercised by example",
+          "snapshotId": "vigil-d064373",
+          "viewId": "vigil-one-write",
+          "itemId": "scenario-one-write",
+          "entity": {
+            "repository": "vigil",
+            "id": "one-write",
+            "kind": "vigil/watch"
+          }
+        }
+      ],
+      "completeness": {
+        "status": "partial",
+        "gaps": [
+          {
+            "id": "delivery-bookkeeping",
+            "question": "What does Vigil::commit_delivery record, and which failures can occur between the flush and the commit?",
+            "reason": "commit_delivery and keepalive_uncommitted live in the engine and were not read for this view; transport and delivery bookkeeping need their own evidence."
+          },
+          {
+            "id": "async-trace",
+            "question": "In what order do the select! branches actually run under tokio?",
+            "reason": "The graph records the source control flow of run_keepalive; it is not a Rust async execution trace and claims nothing about scheduling."
+          }
+        ]
+      },
+      "data": {
+        "nodes": [
+          {
+            "id": "n-run",
+            "label": "run_keepalive: runs the keepalive work, forwards progress, stops when cancel completes (src/mcp.rs:122-136)",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/mcp.rs",
+              "lines": [
+                122,
+                136
+              ]
+            },
+            "evidence": [
+              "s-mcp"
+            ],
+            "provenance": "read",
+            "entity": {
+              "repository": "vigil",
+              "id": "keepalive-delivery",
+              "kind": "vigil/delivery"
+            }
+          },
+          {
+            "id": "n-engine",
+            "label": "vigil.keepalive_uncommitted(request, &sink, &mut cancel): the work, run inside tokio::select! against the forwarder (biased, src/mcp.rs:140-154)",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/mcp.rs",
+              "lines": [
+                140,
+                154
+              ]
+            },
+            "evidence": [
+              "s-mcp"
+            ],
+            "provenance": "read"
+          },
+          {
+            "id": "n-forward",
+            "label": "progress forwarder: drains ChannelProgress updates into notify while the work runs; progress is best effort per the doc comment (C11, src/mcp.rs:122-126; forwarder :143-148)",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/mcp.rs",
+              "lines": [
+                143,
+                148
+              ]
+            },
+            "evidence": [
+              "s-mcp"
+            ],
+            "provenance": "read"
+          },
+          {
+            "id": "n-flush",
+            "label": "bounded flush: queued progress is sent for at most min(PROGRESS_FLUSH = 250 ms, rest of the call's max_s) while cancel is polled first (src/mcp.rs:158-173)",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/mcp.rs",
+              "lines": [
+                158,
+                173
+              ]
+            },
+            "evidence": [
+              "s-mcp"
+            ],
+            "provenance": "read"
+          },
+          {
+            "id": "n-recheck",
+            "label": "final cancel poll: cancelled = cancelled_in_flush || a biased select that sees cancel before an immediate ready (src/mcp.rs:175-180)",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/mcp.rs",
+              "lines": [
+                175,
+                180
+              ]
+            },
+            "evidence": [
+              "s-mcp"
+            ],
+            "provenance": "read"
+          },
+          {
+            "id": "n-commit",
+            "label": "vigil.commit_delivery(delivery): the only place the results count as returned (src/mcp.rs:184)",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/mcp.rs",
+              "lines": [
+                184,
+                184
+              ]
+            },
+            "evidence": [
+              "s-mcp"
+            ],
+            "provenance": "read",
+            "entity": {
+              "repository": "vigil",
+              "id": "keepalive-delivery",
+              "kind": "vigil/delivery"
+            }
+          },
+          {
+            "id": "n-return-some",
+            "label": "Ok(Some(envelope)): the result is returned to the caller (src/mcp.rs:185)",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/mcp.rs",
+              "lines": [
+                185,
+                185
+              ]
+            },
+            "evidence": [
+              "s-mcp"
+            ],
+            "provenance": "read"
+          },
+          {
+            "id": "n-return-none",
+            "label": "Ok(None): cancelled, nothing committed, the results stay for the next call (C2, src/mcp.rs:174, :181-183)",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/mcp.rs",
+              "lines": [
+                181,
+                183
+              ]
+            },
+            "evidence": [
+              "s-mcp"
+            ],
+            "provenance": "read"
+          },
+          {
+            "id": "n-error",
+            "label": "outcome? : an engine error propagates as Err(VigilError) before the flush (src/mcp.rs:164)",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/mcp.rs",
+              "lines": [
+                164,
+                164
+              ]
+            },
+            "evidence": [
+              "s-mcp"
+            ],
+            "provenance": "read"
+          },
+          {
+            "id": "n-cancelled-result",
+            "label": "cancelled_result(): the tool replies with the text \"cancelled\" flagged as an error (src/mcp.rs:188-190)",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/mcp.rs",
+              "lines": [
+                188,
+                190
+              ]
+            },
+            "evidence": [
+              "s-mcp"
+            ],
+            "provenance": "read"
+          }
+        ],
+        "edges": [
+          {
+            "id": "e-runs-work",
+            "label": "run_keepalive starts the work with the cancel future",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/mcp.rs",
+              "lines": [
+                140,
+                142
+              ]
+            },
+            "evidence": [
+              "s-mcp"
+            ],
+            "provenance": "read",
+            "from": "n-run",
+            "to": "n-engine",
+            "relation": "runs work"
+          },
+          {
+            "id": "e-forwards",
+            "label": "run_keepalive races the work against the progress forwarder",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/mcp.rs",
+              "lines": [
+                143,
+                153
+              ]
+            },
+            "evidence": [
+              "s-mcp"
+            ],
+            "provenance": "read",
+            "from": "n-run",
+            "to": "n-forward",
+            "relation": "forwards progress"
+          },
+          {
+            "id": "e-queues",
+            "label": "the engine reports progress into the channel sink that feeds the forwarder",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/mcp.rs",
+              "lines": [
+                141,
+                142
+              ]
+            },
+            "evidence": [
+              "s-mcp"
+            ],
+            "provenance": "read",
+            "from": "n-engine",
+            "to": "n-forward",
+            "relation": "queues progress"
+          },
+          {
+            "id": "e-engine-flush",
+            "label": "when the engine returns, what is queued is still sent, briefly, within the call's window (A20)",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/mcp.rs",
+              "lines": [
+                155,
+                164
+              ]
+            },
+            "evidence": [
+              "s-mcp"
+            ],
+            "provenance": "read",
+            "from": "n-engine",
+            "to": "n-flush",
+            "relation": "then flushes"
+          },
+          {
+            "id": "e-flush-recheck",
+            "label": "after the flush the cancel flag from the flush is combined with one more cancel poll",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/mcp.rs",
+              "lines": [
+                165,
+                175
+              ]
+            },
+            "evidence": [
+              "s-mcp"
+            ],
+            "provenance": "read",
+            "from": "n-flush",
+            "to": "n-recheck",
+            "relation": "then rechecks cancel"
+          },
+          {
+            "id": "e-recheck-none",
+            "label": "a cancel seen by either check returns Ok(None) without committing",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/mcp.rs",
+              "lines": [
+                181,
+                183
+              ]
+            },
+            "evidence": [
+              "s-mcp"
+            ],
+            "provenance": "read",
+            "from": "n-recheck",
+            "to": "n-return-none",
+            "relation": "cancel seen"
+          },
+          {
+            "id": "e-recheck-commit",
+            "label": "no cancel seen: commit_delivery runs after the cancellation checks",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/mcp.rs",
+              "lines": [
+                184,
+                184
+              ]
+            },
+            "evidence": [
+              "s-mcp"
+            ],
+            "provenance": "read",
+            "from": "n-recheck",
+            "to": "n-commit",
+            "relation": "no cancel, commits"
+          },
+          {
+            "id": "e-commit-return",
+            "label": "after the commit the envelope is returned",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/mcp.rs",
+              "lines": [
+                185,
+                185
+              ]
+            },
+            "evidence": [
+              "s-mcp"
+            ],
+            "provenance": "read",
+            "from": "n-commit",
+            "to": "n-return-some",
+            "relation": "then returns"
+          },
+          {
+            "id": "e-engine-none",
+            "label": "the engine returned no result (cancel completed during the work): early Ok(None)",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/mcp.rs",
+              "lines": [
+                174,
+                174
+              ]
+            },
+            "evidence": [
+              "s-mcp"
+            ],
+            "provenance": "read",
+            "from": "n-engine",
+            "to": "n-return-none",
+            "relation": "no result"
+          },
+          {
+            "id": "e-engine-error",
+            "label": "an engine error is returned before any flush or commit",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/mcp.rs",
+              "lines": [
+                164,
+                164
+              ]
+            },
+            "evidence": [
+              "s-mcp"
+            ],
+            "provenance": "read",
+            "from": "n-engine",
+            "to": "n-error",
+            "relation": "fails"
+          },
+          {
+            "id": "e-none-cancelled",
+            "label": "the tool handler maps Ok(None) to cancelled_result()",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/mcp.rs",
+              "lines": [
+                278,
+                279
+              ]
+            },
+            "evidence": [
+              "s-mcp"
+            ],
+            "provenance": "read",
+            "from": "n-return-none",
+            "to": "n-cancelled-result",
+            "relation": "reported as cancelled"
+          }
+        ],
+        "layout": "layered",
+        "paths": [
+          {
+            "id": "p-delivered",
+            "edgeIds": [
+              "e-runs-work",
+              "e-engine-flush",
+              "e-flush-recheck",
+              "e-recheck-commit",
+              "e-commit-return"
+            ]
+          },
+          {
+            "id": "p-cancelled-late",
+            "edgeIds": [
+              "e-runs-work",
+              "e-engine-flush",
+              "e-flush-recheck",
+              "e-recheck-none",
+              "e-none-cancelled"
+            ]
+          },
+          {
+            "id": "p-cancelled-in-work",
+            "edgeIds": [
+              "e-runs-work",
+              "e-engine-none",
+              "e-none-cancelled"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "vigil-one-write",
+      "title": "One write fires the first keepalive",
+      "question": "Does one write after watch creation reach the first keepalive result?",
+      "entity": {
+        "repository": "vigil",
+        "id": "one-write",
+        "kind": "vigil/watch"
+      },
+      "snapshotId": "vigil-d064373",
+      "component": "example",
+      "viewDefinitionId": "def-vigil-one-write",
+      "scope": {
+        "repositories": [
+          "vigil"
+        ],
+        "roots": [
+          "/home/mini/Documents/repos/phoe-nix/scout-modules/vigil"
+        ],
+        "excludes": [],
+        "relation": "scenario",
+        "limits": [
+          "Not run: runs is empty. The existing Rust test was read, not executed; its assertions say what it checks, not that it passes in this checkout.",
+          "The standalone scenario adapter that returns the received envelope as a vigil/watch-result entity does not exist yet."
+        ]
+      },
+      "sources": [
+        {
+          "id": "s-e2e",
+          "kind": "file",
+          "repository": "vigil",
+          "path": "tests/mcp_e2e.rs",
+          "sha256": "1d0cd2cd40f8e156b3f0b9333c6d6c403b52400be5b17fd288a5d276b0c67e1f",
+          "capturedAt": "2026-11-11T12:00:00Z",
+          "method": "read: full file bytes of the cited path at vigil revision d064373a15139b969599ee05bc7b156b1d5b8ed7 (the vigil directory is unmodified); nothing was built, executed or observed"
+        }
+      ],
+      "generatedAt": "2026-11-11T12:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "vigil",
+            "root": "/home/mini/Documents/repos/phoe-nix/scout-modules/vigil",
+            "gitRev": "d064373a15139b969599ee05bc7b156b1d5b8ed7",
+            "dirty": false,
+            "files": {
+              "tests/mcp_e2e.rs": "1d0cd2cd40f8e156b3f0b9333c6d6c403b52400be5b17fd288a5d276b0c67e1f"
+            }
+          }
+        ]
+      },
+      "links": [
+        {
+          "id": "l-to-lifecycle",
+          "relation": "the fired status in the lifecycle",
+          "snapshotId": "vigil-d064373",
+          "viewId": "vigil-lifecycle",
+          "itemId": "n-fired"
+        }
+      ],
+      "completeness": {
+        "status": "partial",
+        "gaps": [
+          {
+            "id": "observed-run-missing",
+            "question": "Does one write after watch creation reach the first keepalive result in this checkout?",
+            "reason": "Not run: runs is empty. The existing test was read, not executed, and no observed run exists."
+          },
+          {
+            "id": "adapter-missing",
+            "question": "Which adapter creates the fixture, performs the MCP exchange and returns the received envelope as a vigil/watch-result entity?",
+            "reason": "Design section 6 specifies it; the existing test create_then_one_write_then_keepalive_returns_the_fired_envelope asserts on the envelope and then drops it."
+          }
+        ]
+      },
+      "data": {
+        "scenario": {
+          "id": "scenario-one-write",
+          "label": "tests/mcp_e2e.rs:112-156 writes boot, creates watch build (fire change, interval_s 1, deadline_s 3600), appends one ERROR line, calls keepalive and asserts status fired, tick 1, next act on events, event_id build:1:0",
+          "anchor": {
+            "repository": "vigil",
+            "path": "tests/mcp_e2e.rs",
+            "lines": [
+              112,
+              156
+            ]
+          },
+          "evidence": [
+            "s-e2e"
+          ],
+          "provenance": "read",
+          "entity": {
+            "repository": "vigil",
+            "id": "one-write",
+            "kind": "vigil/watch"
+          },
+          "runnerId": "vigil-one-write",
+          "parameters": {
+            "watchId": "build",
+            "fire": "change",
+            "intervalS": 1,
+            "deadlineS": 3600,
+            "initialContent": "boot\n",
+            "appendedLine": "ERROR: linking failed"
+          }
+        },
+        "runs": []
+      }
+    },
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "vigil-cancel-guard",
+      "title": "Cancellation is checked before the commit",
+      "question": "Which exact code checks cancellation before the delivery is committed?",
+      "entity": {
+        "repository": "vigil",
+        "id": "keepalive-delivery",
+        "kind": "vigil/delivery"
+      },
+      "snapshotId": "vigil-d064373",
+      "component": "source",
+      "viewDefinitionId": "def-vigil-cancel-guard",
+      "scope": {
+        "repositories": [
+          "vigil"
+        ],
+        "roots": [
+          "/home/mini/Documents/repos/phoe-nix/scout-modules/vigil"
+        ],
+        "excludes": [],
+        "relation": "cancellation before commit",
+        "limits": [
+          "Verbatim excerpt of src/mcp.rs lines 155-185; Vigil::commit_delivery and keepalive_uncommitted are not shown."
+        ]
+      },
+      "sources": [
+        {
+          "id": "s-mcp",
+          "kind": "file",
+          "repository": "vigil",
+          "path": "src/mcp.rs",
+          "sha256": "1f627598551a007472cacecb61f4a649b8f60bb089ed16f67ce6f1145d415c25",
+          "capturedAt": "2026-11-11T12:00:00Z",
+          "method": "read: full file bytes of the cited path at vigil revision d064373a15139b969599ee05bc7b156b1d5b8ed7 (the vigil directory is unmodified); nothing was built, executed or observed"
+        }
+      ],
+      "generatedAt": "2026-11-11T12:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "vigil",
+            "root": "/home/mini/Documents/repos/phoe-nix/scout-modules/vigil",
+            "gitRev": "d064373a15139b969599ee05bc7b156b1d5b8ed7",
+            "dirty": false,
+            "files": {
+              "src/mcp.rs": "1f627598551a007472cacecb61f4a649b8f60bb089ed16f67ce6f1145d415c25"
+            }
+          }
+        ]
+      },
+      "links": [
+        {
+          "id": "l-to-delivery-path",
+          "relation": "control flow graph",
+          "snapshotId": "vigil-d064373",
+          "viewId": "vigil-delivery-path",
+          "itemId": "n-recheck"
+        },
+        {
+          "id": "l-to-example",
+          "relation": "exercised by example",
+          "snapshotId": "vigil-d064373",
+          "viewId": "vigil-one-write",
+          "itemId": "scenario-one-write",
+          "entity": {
+            "repository": "vigil",
+            "id": "one-write",
+            "kind": "vigil/watch"
+          }
+        }
+      ],
+      "completeness": {
+        "status": "complete",
+        "criterion": "the cited lines 155-185 of src/mcp.rs, quoted verbatim; nothing outside them is claimed"
+      },
+      "data": {
+        "excerpt": {
+          "id": "x-cancel-guard",
+          "label": "run_keepalive after the engine returns: flush, cancel checks, commit (src/mcp.rs:155-185)",
+          "anchor": {
+            "repository": "vigil",
+            "path": "src/mcp.rs",
+            "lines": [
+              155,
+              185
+            ]
+          },
+          "evidence": [
+            "s-mcp"
+          ],
+          "provenance": "read",
+          "language": "rust",
+          "text": "    // The sender went with `run`; what is queued can still be sent, briefly. A20: the\n    // bound is the window the call really used (the envelope's `max_s`), not\n    // the 270 s ceiling of an explicit request.\n    let window_s = outcome.as_ref().ok().and_then(|done| done.as_ref()).and_then(|(envelope, _)| envelope.max_s).unwrap_or(0);\n    let call_end = started + std::time::Duration::from_secs(window_s);\n    let flush = PROGRESS_FLUSH.min(call_end.saturating_duration_since(tokio::time::Instant::now()));\n    // C2: the results count as returned only once the flush is over and no\n    // cancel has arrived; a cancel during the flush makes the transport\n    // discard the response, so the results must stay for the next call.\n    let done = outcome?;\n    let cancelled_in_flush = tokio::select! {\n        biased;\n        () = &mut cancel, if done.is_some() => true,\n        _ = tokio::time::timeout(flush, async {\n            while let Some(update) = updates.recv().await {\n                notify(update).await;\n            }\n        }) => false,\n    };\n    let Some((envelope, delivery)) = done else { return Ok(None) };\n    let cancelled = cancelled_in_flush\n        || tokio::select! {\n            biased;\n            () = &mut cancel => true,\n            () = std::future::ready(()) => false,\n        };\n    if cancelled {\n        return Ok(None);\n    }\n    vigil.commit_delivery(delivery);\n    Ok(Some(envelope))"
+        },
+        "annotations": [
+          {
+            "id": "a-bound",
+            "label": "The flush is bounded: min(PROGRESS_FLUSH, what is left of the call's own max_s) (A20).",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/mcp.rs",
+              "lines": [
+                155,
+                160
+              ]
+            },
+            "evidence": [
+              "s-mcp"
+            ],
+            "provenance": "read",
+            "lines": [
+              155,
+              160
+            ],
+            "message": "The progress flush is bounded by min(250 ms, the rest of the call's max_s).",
+            "claimIds": []
+          },
+          {
+            "id": "a-flush-cancel",
+            "label": "Cancel is raced against the flush (C2).",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/mcp.rs",
+              "lines": [
+                161,
+                173
+              ]
+            },
+            "evidence": [
+              "s-mcp"
+            ],
+            "provenance": "read",
+            "lines": [
+              161,
+              173
+            ],
+            "message": "C2: results count as returned only once the flush is over and no cancel arrived; a cancel in the flush arm (line 167) wins over the timeout.",
+            "claimIds": [
+              "D1"
+            ]
+          },
+          {
+            "id": "a-recheck",
+            "label": "One more cancel poll after the flush.",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/mcp.rs",
+              "lines": [
+                175,
+                180
+              ]
+            },
+            "evidence": [
+              "s-mcp"
+            ],
+            "provenance": "read",
+            "lines": [
+              175,
+              180
+            ],
+            "message": "cancelled = cancelled_in_flush || a biased select that sees cancel before an immediate ready.",
+            "claimIds": [
+              "D1"
+            ]
+          },
+          {
+            "id": "a-return-none",
+            "label": "A cancel returns Ok(None).",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/mcp.rs",
+              "lines": [
+                181,
+                183
+              ]
+            },
+            "evidence": [
+              "s-mcp"
+            ],
+            "provenance": "read",
+            "lines": [
+              181,
+              183
+            ],
+            "message": "If cancelled, return Ok(None): nothing is committed and the results stay for the next call.",
+            "claimIds": [
+              "D1"
+            ]
+          },
+          {
+            "id": "a-commit",
+            "label": "commit_delivery follows both checks.",
+            "anchor": {
+              "repository": "vigil",
+              "path": "src/mcp.rs",
+              "lines": [
+                184,
+                185
+              ]
+            },
+            "evidence": [
+              "s-mcp"
+            ],
+            "provenance": "read",
+            "lines": [
+              184,
+              185
+            ],
+            "message": "Only after both cancellation checks does vigil.commit_delivery(delivery) run, and then Ok(Some(envelope)) is returned.",
+            "claimIds": [
+              "D1"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

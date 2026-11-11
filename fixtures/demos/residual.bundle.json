@@ -1,0 +1,1033 @@
+{
+  "schemaVersion": "paneweft.bundle/1",
+  "entities": [
+    {
+      "repository": "residual-web",
+      "id": "landscape",
+      "kind": "residual/landscape",
+      "snapshotId": "residual-32c0836",
+      "label": "Landscape card (mountLandscape)",
+      "dataRoles": [
+        "entrypoints"
+      ],
+      "relations": [
+        {
+          "name": "owns the selection",
+          "target": {
+            "repository": "residual-web",
+            "id": "selection",
+            "kind": "residual/selection"
+          }
+        }
+      ]
+    },
+    {
+      "repository": "residual-web",
+      "id": "selection",
+      "kind": "residual/selection",
+      "snapshotId": "residual-32c0836",
+      "label": "Cross-view selection (EntityKey)",
+      "dataRoles": [
+        "selection-shape",
+        "key-union"
+      ],
+      "relations": [
+        {
+          "name": "exercised by",
+          "target": {
+            "repository": "residual-web",
+            "id": "selection-switch",
+            "kind": "residual/selection"
+          }
+        }
+      ]
+    },
+    {
+      "repository": "residual-web",
+      "id": "selection-switch",
+      "kind": "residual/selection",
+      "snapshotId": "residual-32c0836",
+      "label": "Selection survives a view switch and a filter change (scenario)",
+      "dataRoles": [
+        "example"
+      ],
+      "relations": [
+        {
+          "name": "exercises",
+          "target": {
+            "repository": "residual-web",
+            "id": "selection",
+            "kind": "residual/selection"
+          }
+        }
+      ]
+    },
+    {
+      "repository": "residual-web",
+      "id": "nkp-bundle",
+      "kind": "code/module",
+      "snapshotId": "residual-32c0836",
+      "label": "web/src/nkp-bundle.ts (bundle view builder)",
+      "dataRoles": [],
+      "relations": []
+    },
+    {
+      "repository": "residual-web",
+      "id": "nkp-seriation",
+      "kind": "code/module",
+      "snapshotId": "residual-32c0836",
+      "label": "web/src/nkp-seriation.ts (heatmap view builder)",
+      "dataRoles": [],
+      "relations": []
+    },
+    {
+      "repository": "residual-web",
+      "id": "nkp-hypergraph",
+      "kind": "code/module",
+      "snapshotId": "residual-32c0836",
+      "label": "web/src/nkp-hypergraph.ts (regions view builder)",
+      "dataRoles": [],
+      "relations": []
+    }
+  ],
+  "definitions": [
+    {
+      "id": "def-residual-view-entrypoints",
+      "entityKind": "residual/landscape",
+      "title": "Which views exist, and which code owns them?",
+      "priority": 10,
+      "component": "list",
+      "requires": [],
+      "dataRole": "entrypoints"
+    },
+    {
+      "id": "def-residual-selection-shape",
+      "entityKind": "residual/selection",
+      "title": "What identity survives switching the drawing?",
+      "priority": 10,
+      "component": "shape",
+      "requires": [],
+      "dataRole": "selection-shape"
+    },
+    {
+      "id": "def-residual-key-union",
+      "entityKind": "residual/selection",
+      "title": "Which exact code declares the key variants of a selection?",
+      "priority": 20,
+      "component": "source",
+      "requires": [],
+      "dataRole": "key-union"
+    },
+    {
+      "id": "def-residual-selection-switch",
+      "entityKind": "residual/selection",
+      "title": "Does a selection survive a view switch and a filter change?",
+      "component": "example",
+      "requires": [],
+      "dataRole": "example"
+    }
+  ],
+  "views": [
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "residual-view-entrypoints",
+      "title": "Landscape views and their owners",
+      "question": "Which views exist, and which code owns them?",
+      "entity": {
+        "repository": "residual-web",
+        "id": "landscape",
+        "kind": "residual/landscape"
+      },
+      "snapshotId": "residual-32c0836",
+      "component": "list",
+      "viewDefinitionId": "def-residual-view-entrypoints",
+      "scope": {
+        "repositories": [
+          "residual-web"
+        ],
+        "roots": [
+          "/home/mini/Documents/repos/residual-cli"
+        ],
+        "excludes": [
+          "web/src/nkp-bundle.ts",
+          "web/src/nkp-seriation.ts",
+          "web/src/nkp-hypergraph.ts"
+        ],
+        "relation": "declares and creates",
+        "limits": [
+          "The three LandscapeView choices declared at web/src/nkp-landscape.ts:22-24, as read from that one file.",
+          "Dynamic behavior (what each view draws, event timing) and other UI panels are not claimed; the builder modules were not read."
+        ]
+      },
+      "sources": [
+        {
+          "id": "s-land",
+          "kind": "file",
+          "repository": "residual-web",
+          "path": "web/src/nkp-landscape.ts",
+          "sha256": "6eeb5997136297df81c28a9dfec1a4005a8d5560d61e5d0b914015d44523a9df",
+          "capturedAt": "2026-11-11T12:00:00Z",
+          "method": "read: full file bytes of the cited path at residual-cli revision 32c0836283dad8c22431b3025ec910b4b5759e90 (clean checkout); nothing was built, executed or observed"
+        }
+      ],
+      "generatedAt": "2026-11-11T12:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "residual-web",
+            "root": "/home/mini/Documents/repos/residual-cli",
+            "gitRev": "32c0836283dad8c22431b3025ec910b4b5759e90",
+            "dirty": false,
+            "files": {
+              "web/src/nkp-landscape.ts": "6eeb5997136297df81c28a9dfec1a4005a8d5560d61e5d0b914015d44523a9df"
+            }
+          }
+        ]
+      },
+      "links": [
+        {
+          "id": "l-to-selection-shape",
+          "relation": "who owns the selection set",
+          "snapshotId": "residual-32c0836",
+          "viewId": "residual-selection-shape",
+          "itemId": "f-selected"
+        }
+      ],
+      "completeness": {
+        "status": "complete",
+        "criterion": "the three declared LandscapeView choices bundle, heatmap and regions (web/src/nkp-landscape.ts:22-24); dynamic behavior and other UI panels are not claimed"
+      },
+      "data": {
+        "columns": [
+          {
+            "key": "view",
+            "title": "View",
+            "format": "text"
+          },
+          {
+            "key": "factory",
+            "title": "Factory",
+            "format": "text"
+          },
+          {
+            "key": "controls",
+            "title": "Controls",
+            "format": "text"
+          },
+          {
+            "key": "owner",
+            "title": "Owner of the active handle",
+            "format": "text"
+          },
+          {
+            "key": "selectedWhen",
+            "title": "Selected when",
+            "format": "text"
+          }
+        ],
+        "rows": [
+          {
+            "id": "row-bundle",
+            "label": "bundle: created by createBundleView in ensureViewHandle (web/src/nkp-landscape.ts:245-246)",
+            "anchor": {
+              "repository": "residual-web",
+              "path": "web/src/nkp-landscape.ts",
+              "lines": [
+                245,
+                246
+              ]
+            },
+            "evidence": [
+              "s-land"
+            ],
+            "provenance": "read",
+            "entity": {
+              "repository": "residual-web",
+              "id": "nkp-bundle",
+              "kind": "code/module"
+            },
+            "cells": {
+              "view": "bundle",
+              "factory": "createBundleView (./nkp-bundle)",
+              "controls": "min coupling strength, top-N couplings with weakest toggle, bundle tension",
+              "owner": "mountLandscape (nkp-landscape.ts:167), viewHandle",
+              "selectedWhen": "radio value bundle, and any unknown or missing value (DEFAULT_LANDSCAPE_VIEW :24, parseLandscapeView :43-45)"
+            }
+          },
+          {
+            "id": "row-heatmap",
+            "label": "heatmap: created by createHeatmapView in ensureViewHandle (web/src/nkp-landscape.ts:247-248)",
+            "anchor": {
+              "repository": "residual-web",
+              "path": "web/src/nkp-landscape.ts",
+              "lines": [
+                247,
+                248
+              ]
+            },
+            "evidence": [
+              "s-land"
+            ],
+            "provenance": "read",
+            "entity": {
+              "repository": "residual-web",
+              "id": "nkp-seriation",
+              "kind": "code/module"
+            },
+            "cells": {
+              "view": "heatmap",
+              "factory": "createHeatmapView (./nkp-seriation)",
+              "controls": "min coupling strength, heatmap counts toggle",
+              "owner": "mountLandscape (nkp-landscape.ts:167), viewHandle",
+              "selectedWhen": "radio value heatmap"
+            }
+          },
+          {
+            "id": "row-regions",
+            "label": "regions: created by createRegionsView in ensureViewHandle (web/src/nkp-landscape.ts:249-255)",
+            "anchor": {
+              "repository": "residual-web",
+              "path": "web/src/nkp-landscape.ts",
+              "lines": [
+                249,
+                255
+              ]
+            },
+            "evidence": [
+              "s-land"
+            ],
+            "provenance": "read",
+            "entity": {
+              "repository": "residual-web",
+              "id": "nkp-hypergraph",
+              "kind": "code/module"
+            },
+            "cells": {
+              "view": "regions",
+              "factory": "createRegionsView (./nkp-hypergraph)",
+              "controls": "focus component, names toggle, lock toggle, lattice toggle, keep-simulating toggle",
+              "owner": "mountLandscape (nkp-landscape.ts:167), viewHandle",
+              "selectedWhen": "radio value regions"
+            }
+          }
+        ],
+        "order": {
+          "key": "view",
+          "direction": "asc"
+        }
+      }
+    },
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "residual-selection-shape",
+      "title": "Selection identity across views",
+      "question": "What identity survives switching the drawing?",
+      "entity": {
+        "repository": "residual-web",
+        "id": "selection",
+        "kind": "residual/selection"
+      },
+      "snapshotId": "residual-32c0836",
+      "component": "shape",
+      "viewDefinitionId": "def-residual-selection-shape",
+      "scope": {
+        "repositories": [
+          "residual-web"
+        ],
+        "roots": [
+          "/home/mini/Documents/repos/residual-cli"
+        ],
+        "excludes": [],
+        "relation": "declares",
+        "limits": [
+          "Declared TypeScript types and signatures only; no instance value was observed or computed.",
+          "Read: web/src/landscape-selection.ts lines 1-80 and 325-351, web/src/nkp-landscape.ts lines 1-379.",
+          "State changes involving every renderer and every filter are not covered: that is the example residual-selection-switch (not run)."
+        ]
+      },
+      "sources": [
+        {
+          "id": "s-land",
+          "kind": "file",
+          "repository": "residual-web",
+          "path": "web/src/nkp-landscape.ts",
+          "sha256": "6eeb5997136297df81c28a9dfec1a4005a8d5560d61e5d0b914015d44523a9df",
+          "capturedAt": "2026-11-11T12:00:00Z",
+          "method": "read: full file bytes of the cited path at residual-cli revision 32c0836283dad8c22431b3025ec910b4b5759e90 (clean checkout); nothing was built, executed or observed"
+        },
+        {
+          "id": "s-sel",
+          "kind": "file",
+          "repository": "residual-web",
+          "path": "web/src/landscape-selection.ts",
+          "sha256": "38418e62f565f9f32020068263e5344cb9759a39c17523d6832198f5933e0795",
+          "capturedAt": "2026-11-11T12:00:00Z",
+          "method": "read: full file bytes of the cited path at residual-cli revision 32c0836283dad8c22431b3025ec910b4b5759e90 (clean checkout); nothing was built, executed or observed"
+        }
+      ],
+      "generatedAt": "2026-11-11T12:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "residual-web",
+            "root": "/home/mini/Documents/repos/residual-cli",
+            "gitRev": "32c0836283dad8c22431b3025ec910b4b5759e90",
+            "dirty": false,
+            "files": {
+              "web/src/nkp-landscape.ts": "6eeb5997136297df81c28a9dfec1a4005a8d5560d61e5d0b914015d44523a9df",
+              "web/src/landscape-selection.ts": "38418e62f565f9f32020068263e5344cb9759a39c17523d6832198f5933e0795"
+            }
+          }
+        ]
+      },
+      "links": [
+        {
+          "id": "l-key-variant",
+          "relation": "key variant declaration",
+          "snapshotId": "residual-32c0836",
+          "viewId": "residual-key-union",
+          "itemId": "a-union"
+        },
+        {
+          "id": "l-to-example",
+          "relation": "exercised by example",
+          "snapshotId": "residual-32c0836",
+          "viewId": "residual-selection-switch",
+          "itemId": "scenario-selection-switch",
+          "entity": {
+            "repository": "residual-web",
+            "id": "selection-switch",
+            "kind": "residual/selection"
+          }
+        }
+      ],
+      "completeness": {
+        "status": "complete",
+        "criterion": "the three variants of the EntityKey union declared at web/src/landscape-selection.ts:15 (component, force, attractor), with the selection state of mountLandscape and the EntityDetail type and functions named in the fields"
+      },
+      "data": {
+        "basis": "declared",
+        "root": "f-root",
+        "fields": [
+          {
+            "id": "f-root",
+            "label": "mountLandscape owns the cross-view selection; it survives view switches and filter changes (doc web/src/nkp-landscape.ts:158-167)",
+            "anchor": {
+              "repository": "residual-web",
+              "path": "web/src/nkp-landscape.ts",
+              "lines": [
+                158,
+                167
+              ]
+            },
+            "evidence": [
+              "s-land"
+            ],
+            "provenance": "read",
+            "path": "selection",
+            "type": "cross-view selection state owned by mountLandscape",
+            "presence": "required",
+            "children": [
+              "f-selected",
+              "f-active",
+              "f-module"
+            ]
+          },
+          {
+            "id": "f-selected",
+            "label": "let selected = new Set<EntityKey>() inside mountLandscape (web/src/nkp-landscape.ts:176)",
+            "anchor": {
+              "repository": "residual-web",
+              "path": "web/src/nkp-landscape.ts",
+              "lines": [
+                176,
+                176
+              ]
+            },
+            "evidence": [
+              "s-land"
+            ],
+            "provenance": "read",
+            "path": "selection.selected",
+            "type": "Set<EntityKey>",
+            "presence": "required",
+            "children": [],
+            "ref": "f-key"
+          },
+          {
+            "id": "f-active",
+            "label": "let activeKey: EntityKey | undefined inside mountLandscape (web/src/nkp-landscape.ts:177)",
+            "anchor": {
+              "repository": "residual-web",
+              "path": "web/src/nkp-landscape.ts",
+              "lines": [
+                177,
+                177
+              ]
+            },
+            "evidence": [
+              "s-land"
+            ],
+            "provenance": "read",
+            "path": "selection.activeKey",
+            "type": "EntityKey | undefined",
+            "presence": "optional",
+            "children": [],
+            "ref": "f-key"
+          },
+          {
+            "id": "f-module",
+            "label": "landscape-selection.ts is the pure, DOM-free half; mountLandscape owns the actual Set (web/src/landscape-selection.ts:7-10)",
+            "anchor": {
+              "repository": "residual-web",
+              "path": "web/src/landscape-selection.ts",
+              "lines": [
+                7,
+                10
+              ]
+            },
+            "evidence": [
+              "s-sel"
+            ],
+            "provenance": "read",
+            "path": "landscape-selection",
+            "type": "pure, DOM-free module without state",
+            "presence": "required",
+            "children": [
+              "f-key",
+              "f-detail",
+              "f-entity-detail",
+              "f-toggle"
+            ]
+          },
+          {
+            "id": "f-key",
+            "label": "export type EntityKey, a union of three template-literal types (web/src/landscape-selection.ts:15)",
+            "anchor": {
+              "repository": "residual-web",
+              "path": "web/src/landscape-selection.ts",
+              "lines": [
+                15,
+                15
+              ]
+            },
+            "evidence": [
+              "s-sel"
+            ],
+            "provenance": "read",
+            "path": "landscape-selection.EntityKey",
+            "type": "`component:${string}` | `force:${string}` | `attractor:${string}`",
+            "presence": "required",
+            "children": [
+              "f-key-component",
+              "f-key-force",
+              "f-key-attractor"
+            ]
+          },
+          {
+            "id": "f-key-component",
+            "label": "variant: component:<name> (web/src/landscape-selection.ts:3, :15)",
+            "anchor": {
+              "repository": "residual-web",
+              "path": "web/src/landscape-selection.ts",
+              "lines": [
+                15,
+                15
+              ]
+            },
+            "evidence": [
+              "s-sel"
+            ],
+            "provenance": "read",
+            "path": "EntityKey.component",
+            "type": "`component:${string}`",
+            "presence": "optional",
+            "children": []
+          },
+          {
+            "id": "f-key-force",
+            "label": "variant: force:<EffectiveForce.key> (web/src/landscape-selection.ts:3, :15)",
+            "anchor": {
+              "repository": "residual-web",
+              "path": "web/src/landscape-selection.ts",
+              "lines": [
+                15,
+                15
+              ]
+            },
+            "evidence": [
+              "s-sel"
+            ],
+            "provenance": "read",
+            "path": "EntityKey.force",
+            "type": "`force:${string}`",
+            "presence": "optional",
+            "children": []
+          },
+          {
+            "id": "f-key-attractor",
+            "label": "variant: attractor:<id> (web/src/landscape-selection.ts:3, :15)",
+            "anchor": {
+              "repository": "residual-web",
+              "path": "web/src/landscape-selection.ts",
+              "lines": [
+                15,
+                15
+              ]
+            },
+            "evidence": [
+              "s-sel"
+            ],
+            "provenance": "read",
+            "path": "EntityKey.attractor",
+            "type": "`attractor:${string}`",
+            "presence": "optional",
+            "children": []
+          },
+          {
+            "id": "f-detail",
+            "label": "export interface EntityDetail, the card the sidebar shows (web/src/landscape-selection.ts:17-23)",
+            "anchor": {
+              "repository": "residual-web",
+              "path": "web/src/landscape-selection.ts",
+              "lines": [
+                17,
+                23
+              ]
+            },
+            "evidence": [
+              "s-sel"
+            ],
+            "provenance": "read",
+            "path": "landscape-selection.EntityDetail",
+            "type": "interface",
+            "presence": "required",
+            "children": [
+              "f-detail-key",
+              "f-detail-kind",
+              "f-detail-title",
+              "f-detail-color",
+              "f-detail-fields"
+            ]
+          },
+          {
+            "id": "f-detail-key",
+            "label": "EntityDetail.key: key: EntityKey (web/src/landscape-selection.ts:18)",
+            "anchor": {
+              "repository": "residual-web",
+              "path": "web/src/landscape-selection.ts",
+              "lines": [
+                18,
+                18
+              ]
+            },
+            "evidence": [
+              "s-sel"
+            ],
+            "provenance": "read",
+            "path": "EntityDetail.key",
+            "type": "EntityKey",
+            "presence": "required",
+            "children": [],
+            "ref": "f-key"
+          },
+          {
+            "id": "f-detail-kind",
+            "label": "EntityDetail.kind: the detail kind, not the key variant (web/src/landscape-selection.ts:19)",
+            "anchor": {
+              "repository": "residual-web",
+              "path": "web/src/landscape-selection.ts",
+              "lines": [
+                19,
+                19
+              ]
+            },
+            "evidence": [
+              "s-sel"
+            ],
+            "provenance": "read",
+            "path": "EntityDetail.kind",
+            "type": "\"component\" | \"stressor\" | \"purpose\" | \"attractor\"",
+            "presence": "required",
+            "children": []
+          },
+          {
+            "id": "f-detail-title",
+            "label": "EntityDetail.title (web/src/landscape-selection.ts:20)",
+            "anchor": {
+              "repository": "residual-web",
+              "path": "web/src/landscape-selection.ts",
+              "lines": [
+                20,
+                20
+              ]
+            },
+            "evidence": [
+              "s-sel"
+            ],
+            "provenance": "read",
+            "path": "EntityDetail.title",
+            "type": "string",
+            "presence": "required",
+            "children": []
+          },
+          {
+            "id": "f-detail-color",
+            "label": "EntityDetail.color?: optional (web/src/landscape-selection.ts:21)",
+            "anchor": {
+              "repository": "residual-web",
+              "path": "web/src/landscape-selection.ts",
+              "lines": [
+                21,
+                21
+              ]
+            },
+            "evidence": [
+              "s-sel"
+            ],
+            "provenance": "read",
+            "path": "EntityDetail.color",
+            "type": "string",
+            "presence": "optional",
+            "children": []
+          },
+          {
+            "id": "f-detail-fields",
+            "label": "EntityDetail.fields (web/src/landscape-selection.ts:22)",
+            "anchor": {
+              "repository": "residual-web",
+              "path": "web/src/landscape-selection.ts",
+              "lines": [
+                22,
+                22
+              ]
+            },
+            "evidence": [
+              "s-sel"
+            ],
+            "provenance": "read",
+            "path": "EntityDetail.fields",
+            "type": "{ label: string; value: string }[]",
+            "presence": "required",
+            "children": []
+          },
+          {
+            "id": "f-entity-detail",
+            "label": "entityDetail: returns undefined when the key no longer exists in the state (web/src/landscape-selection.ts:44-45)",
+            "anchor": {
+              "repository": "residual-web",
+              "path": "web/src/landscape-selection.ts",
+              "lines": [
+                44,
+                45
+              ]
+            },
+            "evidence": [
+              "s-sel"
+            ],
+            "provenance": "read",
+            "path": "landscape-selection.entityDetail",
+            "type": "(state: PendingState, key: EntityKey) => EntityDetail | undefined",
+            "presence": "required",
+            "children": [],
+            "ref": "f-detail"
+          },
+          {
+            "id": "f-toggle",
+            "label": "toggleSelection: no-modifier toggle that returns a new Set and does not mutate its input (web/src/landscape-selection.ts:345-351)",
+            "anchor": {
+              "repository": "residual-web",
+              "path": "web/src/landscape-selection.ts",
+              "lines": [
+                345,
+                351
+              ]
+            },
+            "evidence": [
+              "s-sel"
+            ],
+            "provenance": "read",
+            "path": "landscape-selection.toggleSelection",
+            "type": "(current: ReadonlySet<EntityKey>, key: EntityKey) => Set<EntityKey>",
+            "presence": "required",
+            "children": []
+          }
+        ]
+      }
+    },
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "residual-selection-switch",
+      "title": "Selection survives a switch and a filter change",
+      "question": "Does a selection survive a view switch and a filter change?",
+      "entity": {
+        "repository": "residual-web",
+        "id": "selection-switch",
+        "kind": "residual/selection"
+      },
+      "snapshotId": "residual-32c0836",
+      "component": "example",
+      "viewDefinitionId": "def-residual-selection-switch",
+      "scope": {
+        "repositories": [
+          "residual-web"
+        ],
+        "roots": [
+          "/home/mini/Documents/repos/residual-cli"
+        ],
+        "excludes": [],
+        "relation": "scenario",
+        "limits": [
+          "Not run: runs is empty. The existing bun:test cases were read, not executed.",
+          "The existing tests assert only that the sidebar text contains the component name auth; the only filter change is one flip of data-hide-filtered-graph-toggle.",
+          "The scenario adapter that emits the selected keys and the sidebar detail after each step does not exist yet."
+        ]
+      },
+      "sources": [
+        {
+          "id": "s-test",
+          "kind": "file",
+          "repository": "residual-web",
+          "path": "web/src/nkp-landscape.test.ts",
+          "sha256": "d1f9db2be5dffa209793da697ea7c971f4ed07d90a1ab9a15c3ce57f0d5ecd8b",
+          "capturedAt": "2026-11-11T12:00:00Z",
+          "method": "read: full file bytes of the cited path at residual-cli revision 32c0836283dad8c22431b3025ec910b4b5759e90 (clean checkout); nothing was built, executed or observed"
+        }
+      ],
+      "generatedAt": "2026-11-11T12:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "residual-web",
+            "root": "/home/mini/Documents/repos/residual-cli",
+            "gitRev": "32c0836283dad8c22431b3025ec910b4b5759e90",
+            "dirty": false,
+            "files": {
+              "web/src/nkp-landscape.test.ts": "d1f9db2be5dffa209793da697ea7c971f4ed07d90a1ab9a15c3ce57f0d5ecd8b"
+            }
+          }
+        ]
+      },
+      "links": [
+        {
+          "id": "l-to-shape",
+          "relation": "who owns the selection set",
+          "snapshotId": "residual-32c0836",
+          "viewId": "residual-selection-shape",
+          "itemId": "f-selected"
+        }
+      ],
+      "completeness": {
+        "status": "partial",
+        "gaps": [
+          {
+            "id": "observed-run-missing",
+            "question": "Does a selection survive a view switch and a filter change in this checkout?",
+            "reason": "Not run: runs is empty. The existing tests were read, not executed, and no observed run exists."
+          },
+          {
+            "id": "adapter-missing",
+            "question": "Which adapter emits the selected keys and the resulting sidebar detail after each step as a residual/selection-result entity?",
+            "reason": "Design section 6 specifies it; the existing tests only assert that the sidebar text contains the component name."
+          }
+        ]
+      },
+      "data": {
+        "scenario": {
+          "id": "scenario-selection-switch",
+          "label": "web/src/nkp-landscape.test.ts:336-364 clicks the auth bundle leaf, then picks heatmap and regions (selection survives a view switch), then flips the hide-filtered toggle (selection survives a filter change); clicking a leaf is :270-277",
+          "anchor": {
+            "repository": "residual-web",
+            "path": "web/src/nkp-landscape.test.ts",
+            "lines": [
+              336,
+              364
+            ]
+          },
+          "evidence": [
+            "s-test"
+          ],
+          "provenance": "read",
+          "entity": {
+            "repository": "residual-web",
+            "id": "selection-switch",
+            "kind": "residual/selection"
+          },
+          "runnerId": "residual-selection-switch",
+          "parameters": {
+            "testRunner": "bun:test",
+            "leaf": "auth",
+            "viewSequence": "bundle,heatmap,regions",
+            "filterToggle": "data-hide-filtered-graph-toggle"
+          }
+        },
+        "runs": []
+      }
+    },
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "residual-key-union",
+      "title": "The EntityKey declaration",
+      "question": "Which exact code declares the key variants of a selection?",
+      "entity": {
+        "repository": "residual-web",
+        "id": "selection",
+        "kind": "residual/selection"
+      },
+      "snapshotId": "residual-32c0836",
+      "component": "source",
+      "viewDefinitionId": "def-residual-key-union",
+      "scope": {
+        "repositories": [
+          "residual-web"
+        ],
+        "roots": [
+          "/home/mini/Documents/repos/residual-cli"
+        ],
+        "excludes": [],
+        "relation": "declares",
+        "limits": [
+          "Verbatim excerpt of web/src/landscape-selection.ts lines 1-15."
+        ]
+      },
+      "sources": [
+        {
+          "id": "s-sel",
+          "kind": "file",
+          "repository": "residual-web",
+          "path": "web/src/landscape-selection.ts",
+          "sha256": "38418e62f565f9f32020068263e5344cb9759a39c17523d6832198f5933e0795",
+          "capturedAt": "2026-11-11T12:00:00Z",
+          "method": "read: full file bytes of the cited path at residual-cli revision 32c0836283dad8c22431b3025ec910b4b5759e90 (clean checkout); nothing was built, executed or observed"
+        }
+      ],
+      "generatedAt": "2026-11-11T12:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "residual-web",
+            "root": "/home/mini/Documents/repos/residual-cli",
+            "gitRev": "32c0836283dad8c22431b3025ec910b4b5759e90",
+            "dirty": false,
+            "files": {
+              "web/src/landscape-selection.ts": "38418e62f565f9f32020068263e5344cb9759a39c17523d6832198f5933e0795"
+            }
+          }
+        ]
+      },
+      "links": [
+        {
+          "id": "l-to-shape",
+          "relation": "shape of the selection",
+          "snapshotId": "residual-32c0836",
+          "viewId": "residual-selection-shape",
+          "itemId": "f-key"
+        },
+        {
+          "id": "l-to-example",
+          "relation": "exercised by example",
+          "snapshotId": "residual-32c0836",
+          "viewId": "residual-selection-switch",
+          "itemId": "scenario-selection-switch",
+          "entity": {
+            "repository": "residual-web",
+            "id": "selection-switch",
+            "kind": "residual/selection"
+          }
+        }
+      ],
+      "completeness": {
+        "status": "complete",
+        "criterion": "the cited lines 1-15 of web/src/landscape-selection.ts, quoted verbatim; nothing outside them is claimed"
+      },
+      "data": {
+        "excerpt": {
+          "id": "x-key-union",
+          "label": "header comment, imports and the EntityKey declaration (web/src/landscape-selection.ts:1-15)",
+          "anchor": {
+            "repository": "residual-web",
+            "path": "web/src/landscape-selection.ts",
+            "lines": [
+              1,
+              15
+            ]
+          },
+          "evidence": [
+            "s-sel"
+          ],
+          "provenance": "read",
+          "language": "typescript",
+          "text": "// Cross-view selection model shared by every landscape view (bundle,\n// heatmap, regions) and the sidebar. One key space spans all three views —\n// `component:<name>`, `force:<EffectiveForce.key>`, `attractor:<id>` —\n// matching the ids nkp-graph/nkp-bundle/nkp-hypergraph already use, so a\n// click anywhere resolves to a key any other view can highlight.\n//\n// mountLandscape (nkp-landscape.ts) owns the actual `Set<EntityKey>`; this\n// module only provides the pure, DOM-free pieces: turning a key into the\n// detail card the sidebar shows, computing what else lights up when a key is\n// selected, and the toggle-only (no modifier keys) selection update.\n\nimport { attractorColors, effectiveState } from \"./nkp-graph\";\nimport type { PendingState } from \"./model\";\n\nexport type EntityKey = `component:${string}` | `force:${string}` | `attractor:${string}`;"
+        },
+        "annotations": [
+          {
+            "id": "a-key-space",
+            "label": "One key space spans all three views.",
+            "anchor": {
+              "repository": "residual-web",
+              "path": "web/src/landscape-selection.ts",
+              "lines": [
+                1,
+                5
+              ]
+            },
+            "evidence": [
+              "s-sel"
+            ],
+            "provenance": "read",
+            "lines": [
+              1,
+              5
+            ],
+            "message": "One key space spans bundle, heatmap and regions: component:<name>, force:<EffectiveForce.key>, attractor:<id>.",
+            "claimIds": []
+          },
+          {
+            "id": "a-owner",
+            "label": "mountLandscape owns the Set; this module is pure.",
+            "anchor": {
+              "repository": "residual-web",
+              "path": "web/src/landscape-selection.ts",
+              "lines": [
+                7,
+                10
+              ]
+            },
+            "evidence": [
+              "s-sel"
+            ],
+            "provenance": "read",
+            "lines": [
+              7,
+              10
+            ],
+            "message": "mountLandscape owns the actual Set<EntityKey>; this module only provides pure, DOM-free pieces.",
+            "claimIds": []
+          },
+          {
+            "id": "a-union",
+            "label": "The EntityKey union.",
+            "anchor": {
+              "repository": "residual-web",
+              "path": "web/src/landscape-selection.ts",
+              "lines": [
+                15,
+                15
+              ]
+            },
+            "evidence": [
+              "s-sel"
+            ],
+            "provenance": "read",
+            "lines": [
+              15,
+              15
+            ],
+            "message": "EntityKey is the union of component:, force: and attractor: template-literal types.",
+            "claimIds": []
+          }
+        ]
+      }
+    }
+  ]
+}

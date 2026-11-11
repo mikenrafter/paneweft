@@ -1,0 +1,936 @@
+{
+  "schemaVersion": "paneweft.bundle/1",
+  "entities": [
+    {
+      "repository": "r",
+      "id": "A",
+      "kind": "nav/node",
+      "snapshotId": "snap-1",
+      "label": "Node A",
+      "dataRoles": [
+        "children",
+        "alt",
+        "tree",
+        "code",
+        "graph"
+      ],
+      "relations": []
+    },
+    {
+      "repository": "r",
+      "id": "B",
+      "kind": "nav/node",
+      "snapshotId": "snap-1",
+      "label": "Node B",
+      "dataRoles": [
+        "children"
+      ],
+      "relations": []
+    },
+    {
+      "repository": "r",
+      "id": "C",
+      "kind": "nav/node",
+      "snapshotId": "snap-1",
+      "label": "Node C",
+      "dataRoles": [
+        "children"
+      ],
+      "relations": []
+    },
+    {
+      "repository": "r",
+      "id": "D",
+      "kind": "nav/node",
+      "snapshotId": "snap-1",
+      "label": "Node D",
+      "dataRoles": [
+        "children"
+      ],
+      "relations": []
+    }
+  ],
+  "definitions": [
+    {
+      "id": "d-children",
+      "entityKind": "nav/node",
+      "title": "Children",
+      "priority": 10,
+      "component": "list",
+      "requires": [],
+      "dataRole": "children"
+    },
+    {
+      "id": "d-alt",
+      "entityKind": "nav/node",
+      "title": "Children alt",
+      "priority": 15,
+      "component": "list",
+      "requires": [],
+      "dataRole": "alt"
+    },
+    {
+      "id": "d-tree",
+      "entityKind": "nav/node",
+      "title": "Structure",
+      "priority": 20,
+      "component": "tree",
+      "requires": [],
+      "dataRole": "tree"
+    },
+    {
+      "id": "d-graph",
+      "entityKind": "nav/node",
+      "title": "Links",
+      "priority": 25,
+      "component": "graph",
+      "requires": [],
+      "dataRole": "graph"
+    },
+    {
+      "id": "d-code",
+      "entityKind": "nav/node",
+      "title": "Code",
+      "priority": 30,
+      "component": "source",
+      "requires": [],
+      "dataRole": "code"
+    },
+    {
+      "id": "d-needs",
+      "entityKind": "nav/node",
+      "title": "Telemetry",
+      "priority": 40,
+      "component": "list",
+      "requires": [
+        "telemetry"
+      ],
+      "dataRole": "children"
+    }
+  ],
+  "views": [
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "A-children",
+      "title": "Children",
+      "question": "What is in A?",
+      "entity": {
+        "repository": "r",
+        "id": "A",
+        "kind": "nav/node"
+      },
+      "snapshotId": "snap-1",
+      "component": "list",
+      "viewDefinitionId": "d-children",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/check.ts",
+          "sha256": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": null,
+            "dirty": false,
+            "files": {
+              "src/check.ts": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "all items of A-children"
+      },
+      "data": {
+        "columns": [
+          {
+            "key": "name",
+            "title": "Name",
+            "format": "text"
+          }
+        ],
+        "rows": [
+          {
+            "id": "a-to-b",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "1 to B"
+            },
+            "entity": {
+              "repository": "r",
+              "id": "B",
+              "kind": "nav/node"
+            }
+          },
+          {
+            "id": "a-to-d",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "2 to D"
+            },
+            "entity": {
+              "repository": "r",
+              "id": "D",
+              "kind": "nav/node"
+            }
+          },
+          {
+            "id": "a-none",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "3 none"
+            }
+          },
+          {
+            "id": "a-src",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "4 src"
+            },
+            "anchor": {
+              "repository": "r",
+              "path": "src/check.ts",
+              "lines": [
+                11,
+                12
+              ]
+            }
+          }
+        ],
+        "order": {
+          "key": "name",
+          "direction": "asc"
+        }
+      }
+    },
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "A-alt",
+      "title": "Children alt",
+      "question": "What is in A?",
+      "entity": {
+        "repository": "r",
+        "id": "A",
+        "kind": "nav/node"
+      },
+      "snapshotId": "snap-1",
+      "component": "list",
+      "viewDefinitionId": "d-alt",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/check.ts",
+          "sha256": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": null,
+            "dirty": false,
+            "files": {
+              "src/check.ts": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "all items of A-alt"
+      },
+      "data": {
+        "columns": [
+          {
+            "key": "name",
+            "title": "Name",
+            "format": "text"
+          }
+        ],
+        "rows": [
+          {
+            "id": "a-to-b",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "1 to B"
+            },
+            "entity": {
+              "repository": "r",
+              "id": "B",
+              "kind": "nav/node"
+            }
+          },
+          {
+            "id": "a-alt-only",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "2 only here"
+            }
+          }
+        ],
+        "order": {
+          "key": "name",
+          "direction": "asc"
+        }
+      }
+    },
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "A-tree",
+      "title": "Structure",
+      "question": "What is in A?",
+      "entity": {
+        "repository": "r",
+        "id": "A",
+        "kind": "nav/node"
+      },
+      "snapshotId": "snap-1",
+      "component": "tree",
+      "viewDefinitionId": "d-tree",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/check.ts",
+          "sha256": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": null,
+            "dirty": false,
+            "files": {
+              "src/check.ts": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "all items of A-tree"
+      },
+      "data": {
+        "columns": [
+          {
+            "key": "name",
+            "title": "Name",
+            "format": "text"
+          }
+        ],
+        "roots": [
+          "t-root"
+        ],
+        "nodes": [
+          {
+            "id": "t-root",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "root"
+            },
+            "children": [
+              "t-1",
+              "t-2"
+            ],
+            "childrenState": "complete",
+            "entity": {
+              "repository": "r",
+              "id": "A",
+              "kind": "nav/node"
+            }
+          },
+          {
+            "id": "t-1",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "one"
+            },
+            "children": [
+              "t-1a"
+            ],
+            "childrenState": "complete"
+          },
+          {
+            "id": "t-1a",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "one-a"
+            },
+            "children": [],
+            "childrenState": "complete",
+            "entity": {
+              "repository": "r",
+              "id": "C",
+              "kind": "nav/node"
+            }
+          },
+          {
+            "id": "t-2",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "two"
+            },
+            "children": [],
+            "childrenState": "complete",
+            "entity": {
+              "repository": "r",
+              "id": "B",
+              "kind": "nav/node"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "A-graph",
+      "title": "Links",
+      "question": "What is in A?",
+      "entity": {
+        "repository": "r",
+        "id": "A",
+        "kind": "nav/node"
+      },
+      "snapshotId": "snap-1",
+      "component": "graph",
+      "viewDefinitionId": "d-graph",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/check.ts",
+          "sha256": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": null,
+            "dirty": false,
+            "files": {
+              "src/check.ts": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "all items of A-graph"
+      },
+      "data": {
+        "nodes": [
+          {
+            "id": "g1",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "label": "B",
+            "entity": {
+              "repository": "r",
+              "id": "B",
+              "kind": "nav/node"
+            }
+          },
+          {
+            "id": "g2",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "label": "C",
+            "entity": {
+              "repository": "r",
+              "id": "C",
+              "kind": "nav/node"
+            }
+          }
+        ],
+        "edges": [
+          {
+            "id": "ge1",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "from": "g1",
+            "to": "g2",
+            "relation": "links",
+            "anchor": {
+              "repository": "r",
+              "path": "src/check.ts",
+              "lines": [
+                11,
+                12
+              ]
+            }
+          }
+        ],
+        "layout": "layered"
+      }
+    },
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "A-code",
+      "title": "Code",
+      "question": "What is in A?",
+      "entity": {
+        "repository": "r",
+        "id": "A",
+        "kind": "nav/node"
+      },
+      "snapshotId": "snap-1",
+      "component": "source",
+      "viewDefinitionId": "d-code",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/check.ts",
+          "sha256": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": null,
+            "dirty": false,
+            "files": {
+              "src/check.ts": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "all items of A-code"
+      },
+      "data": {
+        "excerpt": {
+          "id": "x",
+          "provenance": "read",
+          "evidence": [
+            "s1"
+          ],
+          "anchor": {
+            "repository": "r",
+            "path": "src/check.ts",
+            "lines": [
+              10,
+              12
+            ]
+          },
+          "language": "typescript",
+          "text": "export function check(user: User) {\n  if (!allowed(user)) return denied;\n  audit(user);"
+        },
+        "annotations": [
+          {
+            "id": "a1",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "lines": [
+              11,
+              12
+            ],
+            "message": "Denial branch",
+            "claimIds": [
+              "C1"
+            ]
+          },
+          {
+            "id": "a2",
+            "provenance": "compiled",
+            "evidence": [
+              "s1"
+            ],
+            "lines": [
+              10,
+              10
+            ],
+            "message": "Entry point",
+            "claimIds": []
+          }
+        ]
+      }
+    },
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "B-children",
+      "title": "Children",
+      "question": "What is in B?",
+      "entity": {
+        "repository": "r",
+        "id": "B",
+        "kind": "nav/node"
+      },
+      "snapshotId": "snap-1",
+      "component": "list",
+      "viewDefinitionId": "d-children",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/check.ts",
+          "sha256": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": null,
+            "dirty": false,
+            "files": {
+              "src/check.ts": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "all items of B-children"
+      },
+      "data": {
+        "columns": [
+          {
+            "key": "name",
+            "title": "Name",
+            "format": "text"
+          }
+        ],
+        "rows": [
+          {
+            "id": "b-to-c",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "1 to C"
+            },
+            "entity": {
+              "repository": "r",
+              "id": "C",
+              "kind": "nav/node"
+            }
+          }
+        ],
+        "order": {
+          "key": "name",
+          "direction": "asc"
+        }
+      }
+    },
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "C-children",
+      "title": "Children",
+      "question": "What is in C?",
+      "entity": {
+        "repository": "r",
+        "id": "C",
+        "kind": "nav/node"
+      },
+      "snapshotId": "snap-1",
+      "component": "list",
+      "viewDefinitionId": "d-children",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/check.ts",
+          "sha256": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": null,
+            "dirty": false,
+            "files": {
+              "src/check.ts": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "all items of C-children"
+      },
+      "data": {
+        "columns": [
+          {
+            "key": "name",
+            "title": "Name",
+            "format": "text"
+          }
+        ],
+        "rows": [
+          {
+            "id": "c-leaf",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "1 leaf"
+            }
+          }
+        ],
+        "order": {
+          "key": "name",
+          "direction": "asc"
+        }
+      }
+    },
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "D-children",
+      "title": "Children",
+      "question": "What is in D?",
+      "entity": {
+        "repository": "r",
+        "id": "D",
+        "kind": "nav/node"
+      },
+      "snapshotId": "snap-1",
+      "component": "list",
+      "viewDefinitionId": "d-children",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/check.ts",
+          "sha256": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": null,
+            "dirty": false,
+            "files": {
+              "src/check.ts": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "all items of D-children"
+      },
+      "data": {
+        "columns": [
+          {
+            "key": "name",
+            "title": "Name",
+            "format": "text"
+          }
+        ],
+        "rows": [
+          {
+            "id": "d-x",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "1 x"
+            }
+          }
+        ],
+        "order": {
+          "key": "name",
+          "direction": "asc"
+        }
+      }
+    }
+  ]
+}

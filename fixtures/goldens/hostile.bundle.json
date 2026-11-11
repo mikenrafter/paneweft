@@ -1,0 +1,696 @@
+{
+  "schemaVersion": "paneweft.bundle/1",
+  "entities": [
+    {
+      "repository": "r",
+      "id": "subject",
+      "kind": "demo/subject",
+      "snapshotId": "snap-1",
+      "label": "Subject \"><svg onload=\"window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')\">",
+      "dataRoles": [
+        "h-list",
+        "h-tree",
+        "h-graph",
+        "h-source",
+        "h-shape",
+        "h-notebook",
+        "h-example"
+      ],
+      "relations": []
+    }
+  ],
+  "definitions": [
+    {
+      "id": "d-h-list",
+      "entityKind": "demo/subject",
+      "title": "Hostile list",
+      "priority": 10,
+      "component": "list",
+      "requires": [],
+      "dataRole": "h-list"
+    },
+    {
+      "id": "d-h-tree",
+      "entityKind": "demo/subject",
+      "title": "Hostile tree",
+      "priority": 11,
+      "component": "tree",
+      "requires": [],
+      "dataRole": "h-tree"
+    },
+    {
+      "id": "d-h-graph",
+      "entityKind": "demo/subject",
+      "title": "Hostile graph",
+      "priority": 12,
+      "component": "graph",
+      "requires": [],
+      "dataRole": "h-graph"
+    },
+    {
+      "id": "d-h-source",
+      "entityKind": "demo/subject",
+      "title": "Hostile source",
+      "priority": 13,
+      "component": "source",
+      "requires": [],
+      "dataRole": "h-source"
+    },
+    {
+      "id": "d-h-shape",
+      "entityKind": "demo/subject",
+      "title": "Hostile shape",
+      "priority": 14,
+      "component": "shape",
+      "requires": [],
+      "dataRole": "h-shape"
+    },
+    {
+      "id": "d-h-notebook",
+      "entityKind": "demo/subject",
+      "title": "Hostile notebook",
+      "priority": 15,
+      "component": "notebook",
+      "requires": [],
+      "dataRole": "h-notebook"
+    },
+    {
+      "id": "d-h-example",
+      "entityKind": "demo/subject",
+      "title": "Hostile example",
+      "priority": 16,
+      "component": "example",
+      "requires": [],
+      "dataRole": "h-example"
+    }
+  ],
+  "views": [
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "h-list",
+      "title": "Hostile list",
+      "question": "Question <img src=x onerror=\"window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')\">",
+      "entity": {
+        "repository": "r",
+        "id": "subject",
+        "kind": "demo/subject"
+      },
+      "snapshotId": "snap-1",
+      "component": "list",
+      "viewDefinitionId": "d-h-list",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/check.ts",
+          "sha256": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": null,
+            "dirty": false,
+            "files": {
+              "src/check.ts": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "criterion <script>window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')</script>"
+      },
+      "data": {
+        "columns": [
+          {
+            "key": "name",
+            "title": "Name <img src=x onerror=\"window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')\">",
+            "format": "text"
+          }
+        ],
+        "rows": [
+          {
+            "id": "hr1",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "<script>window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')</script>"
+            },
+            "label": "\"><svg onload=\"window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')\">"
+          },
+          {
+            "id": "hr2",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "$(rm -rf /)"
+            }
+          },
+          {
+            "id": "hr3",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "; touch /tmp/x"
+            }
+          }
+        ],
+        "order": {
+          "key": "name",
+          "direction": "asc"
+        }
+      }
+    },
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "h-tree",
+      "title": "Hostile tree",
+      "question": "Question <img src=x onerror=\"window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')\">",
+      "entity": {
+        "repository": "r",
+        "id": "subject",
+        "kind": "demo/subject"
+      },
+      "snapshotId": "snap-1",
+      "component": "tree",
+      "viewDefinitionId": "d-h-tree",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/check.ts",
+          "sha256": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": null,
+            "dirty": false,
+            "files": {
+              "src/check.ts": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "criterion <script>window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')</script>"
+      },
+      "data": {
+        "columns": [
+          {
+            "key": "name",
+            "title": "Name",
+            "format": "text"
+          }
+        ],
+        "roots": [
+          "ht1"
+        ],
+        "nodes": [
+          {
+            "id": "ht1",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "<img src=x onerror=\"window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')\">"
+            },
+            "children": [
+              "ht2"
+            ],
+            "childrenState": "complete"
+          },
+          {
+            "id": "ht2",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "cells": {
+              "name": "$(rm -rf /)"
+            },
+            "children": [],
+            "childrenState": "complete"
+          }
+        ]
+      }
+    },
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "h-graph",
+      "title": "Hostile graph",
+      "question": "Question <img src=x onerror=\"window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')\">",
+      "entity": {
+        "repository": "r",
+        "id": "subject",
+        "kind": "demo/subject"
+      },
+      "snapshotId": "snap-1",
+      "component": "graph",
+      "viewDefinitionId": "d-h-graph",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/check.ts",
+          "sha256": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": null,
+            "dirty": false,
+            "files": {
+              "src/check.ts": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "criterion <script>window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')</script>"
+      },
+      "data": {
+        "nodes": [
+          {
+            "id": "hn1",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "label": "<script>window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')</script>"
+          },
+          {
+            "id": "hn2",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "label": "; touch /tmp/x"
+          }
+        ],
+        "edges": [
+          {
+            "id": "he1",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "from": "hn1",
+            "to": "hn2",
+            "relation": "<img src=x onerror=\"window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')\">"
+          }
+        ],
+        "layout": "layered"
+      }
+    },
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "h-source",
+      "title": "Hostile source",
+      "question": "Question <img src=x onerror=\"window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')\">",
+      "entity": {
+        "repository": "r",
+        "id": "subject",
+        "kind": "demo/subject"
+      },
+      "snapshotId": "snap-1",
+      "component": "source",
+      "viewDefinitionId": "d-h-source",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/check.ts",
+          "sha256": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": null,
+            "dirty": false,
+            "files": {
+              "src/check.ts": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "criterion <script>window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')</script>"
+      },
+      "data": {
+        "excerpt": {
+          "id": "hx",
+          "provenance": "read",
+          "evidence": [
+            "s1"
+          ],
+          "anchor": {
+            "repository": "r",
+            "path": "src/check.ts",
+            "lines": [
+              1,
+              3
+            ]
+          },
+          "language": "typescript",
+          "text": "<script>window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')</script>\n<img src=x onerror=\"window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')\">\n$(rm -rf /)"
+        },
+        "annotations": [
+          {
+            "id": "ha1",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "lines": [
+              1,
+              3
+            ],
+            "message": "\"><svg onload=\"window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')\">",
+            "claimIds": [
+              "C1"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "h-shape",
+      "title": "Hostile shape",
+      "question": "Question <img src=x onerror=\"window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')\">",
+      "entity": {
+        "repository": "r",
+        "id": "subject",
+        "kind": "demo/subject"
+      },
+      "snapshotId": "snap-1",
+      "component": "shape",
+      "viewDefinitionId": "d-h-shape",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/check.ts",
+          "sha256": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": null,
+            "dirty": false,
+            "files": {
+              "src/check.ts": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "criterion <script>window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')</script>"
+      },
+      "data": {
+        "basis": "declared",
+        "root": "hf1",
+        "fields": [
+          {
+            "id": "hf1",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "path": "\"><svg onload=\"window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')\">",
+            "type": "<img src=x onerror=\"window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')\">",
+            "presence": "required",
+            "example": "<script>window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')</script>",
+            "children": []
+          }
+        ]
+      }
+    },
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "h-notebook",
+      "title": "Hostile notebook",
+      "question": "Question <img src=x onerror=\"window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')\">",
+      "entity": {
+        "repository": "r",
+        "id": "subject",
+        "kind": "demo/subject"
+      },
+      "snapshotId": "snap-1",
+      "component": "notebook",
+      "viewDefinitionId": "d-h-notebook",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/check.ts",
+          "sha256": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": null,
+            "dirty": false,
+            "files": {
+              "src/check.ts": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "criterion <script>window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')</script>"
+      },
+      "data": {
+        "blocks": [
+          {
+            "id": "hb1",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "kind": "prose",
+            "markdown": "Click [js](javascript:window.__pwned=1) or [data](data:text/html,x) or [ok](https://example.com/a?b=1&c=2) or [mail](mailto:a@example.com) or [frag](#top) ![pic](http://example.com/p.png) <b onclick=\"window.__pwned=1\">raw</b> <script>window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')</script>"
+          },
+          {
+            "id": "hb2",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "kind": "claim",
+            "statement": "<script>window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')</script>",
+            "status": "open",
+            "supports": [
+              "s1"
+            ],
+            "contradicts": []
+          }
+        ]
+      }
+    },
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "h-example",
+      "title": "Hostile example",
+      "question": "Question <img src=x onerror=\"window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')\">",
+      "entity": {
+        "repository": "r",
+        "id": "subject",
+        "kind": "demo/subject"
+      },
+      "snapshotId": "snap-1",
+      "component": "example",
+      "viewDefinitionId": "d-h-example",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/check.ts",
+          "sha256": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": null,
+            "dirty": false,
+            "files": {
+              "src/check.ts": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "criterion <script>window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')</script>"
+      },
+      "data": {
+        "scenario": {
+          "id": "hs",
+          "provenance": "read",
+          "evidence": [
+            "s1"
+          ],
+          "label": "\"><svg onload=\"window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')\">",
+          "runnerId": "runner-1",
+          "parameters": {
+            "p": "<script>window.__pwned=1;document.documentElement.setAttribute('data-pwned','1')</script>"
+          }
+        },
+        "runs": []
+      }
+    }
+  ]
+}

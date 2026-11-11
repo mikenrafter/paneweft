@@ -1,0 +1,23 @@
+{
+  "expectedRevision": 1,
+  "blocks": [
+    {
+      "id": "b1",
+      "kind": "prose",
+      "markdown": "Why does cancellation preserve a result? (http)",
+      "provenance": "read",
+      "evidence": [
+        "s1"
+      ]
+    },
+    {
+      "id": "b2",
+      "kind": "prose",
+      "markdown": "Edited by writer http.",
+      "provenance": "read",
+      "evidence": [
+        "s1"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,122 @@
+{
+  "schemaVersion": "paneweft.bundle/1",
+  "entities": [
+    {
+      "repository": "r",
+      "id": "ledger",
+      "kind": "acct/ledger",
+      "snapshotId": "snap-1",
+      "label": "ledger",
+      "dataRoles": [
+        "rows"
+      ],
+      "relations": []
+    }
+  ],
+  "definitions": [
+    {
+      "id": "def-rows",
+      "entityKind": "acct/ledger",
+      "title": "Rows",
+      "priority": 10,
+      "component": "list",
+      "requires": [],
+      "dataRole": "rows"
+    }
+  ],
+  "views": [
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "rows",
+      "title": "Rows",
+      "question": "What is in this set, and which members matter?",
+      "entity": {
+        "repository": "r",
+        "id": "ledger",
+        "kind": "acct/ledger"
+      },
+      "snapshotId": "snap-1",
+      "component": "list",
+      "viewDefinitionId": "def-rows",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/ledger.txt",
+          "sha256": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": "0123456789abcdef0123456789abcdef01234567",
+            "dirty": false,
+            "files": {
+              "src/ledger.txt": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "all rows of the fixture"
+      },
+      "data": {
+        "columns": [
+          {
+            "key": "name",
+            "title": "Name",
+            "format": "text"
+          }
+        ],
+        "rows": [
+          {
+            "id": "row-a",
+            "label": "Alpha",
+            "cells": {
+              "name": "Alpha"
+            },
+            "evidence": [
+              "s1"
+            ],
+            "provenance": "read"
+          },
+          {
+            "id": "row-b",
+            "label": "Bravo",
+            "cells": {
+              "name": "Bravo"
+            },
+            "evidence": [
+              "s1"
+            ],
+            "provenance": "read"
+          }
+        ],
+        "order": {
+          "key": "name",
+          "direction": "asc"
+        }
+      }
+    }
+  ]
+}

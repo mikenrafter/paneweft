@@ -1,0 +1,204 @@
+{
+  "schemaVersion": "paneweft.bundle/1",
+  "entities": [
+    {
+      "repository": "r",
+      "id": "subject",
+      "kind": "demo/subject",
+      "snapshotId": "snap-1",
+      "label": "Subject",
+      "dataRoles": [
+        "example"
+      ],
+      "relations": []
+    },
+    {
+      "repository": "r",
+      "id": "res-1",
+      "kind": "json/value",
+      "snapshotId": "snap-1",
+      "label": "result one",
+      "dataRoles": [],
+      "relations": []
+    },
+    {
+      "repository": "r",
+      "id": "res-2",
+      "kind": "json/value",
+      "snapshotId": "snap-1",
+      "label": "result two",
+      "dataRoles": [],
+      "relations": []
+    }
+  ],
+  "definitions": [
+    {
+      "id": "d-example",
+      "entityKind": "demo/subject",
+      "title": "One change fires",
+      "priority": 10,
+      "component": "example",
+      "requires": [],
+      "dataRole": "example"
+    }
+  ],
+  "views": [
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "v-example-runs",
+      "title": "One change fires",
+      "question": "Can I rerun this scenario and inspect its tested result?",
+      "entity": {
+        "repository": "r",
+        "id": "subject",
+        "kind": "demo/subject"
+      },
+      "snapshotId": "snap-1",
+      "component": "example",
+      "viewDefinitionId": "d-example",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/check.ts",
+          "sha256": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        },
+        {
+          "id": "s2",
+          "kind": "command",
+          "sha256": "dc51b8c96c2d745df3bd5590d990230a482fd247123599548e0632fdbf97fc22",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "cargo test one_write",
+          "runId": "run-1",
+          "argv": [
+            "cargo",
+            "test",
+            "one_write"
+          ],
+          "exitCode": 0
+        },
+        {
+          "id": "s3",
+          "kind": "command",
+          "sha256": "2056a28ea38a000f3a3328cb7fabe330638d3258affe1a869e3f92986222d997",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "cargo test one_write",
+          "runId": "run-2",
+          "argv": [
+            "cargo",
+            "test",
+            "one_write"
+          ],
+          "exitCode": 1
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": null,
+            "dirty": false,
+            "files": {
+              "src/check.ts": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "both recorded runs of the scenario"
+      },
+      "data": {
+        "scenario": {
+          "id": "once",
+          "provenance": "read",
+          "evidence": [
+            "s1"
+          ],
+          "label": "One change fires",
+          "runnerId": "vigil-one-write",
+          "parameters": {}
+        },
+        "runs": [
+          {
+            "id": "r1",
+            "provenance": "observed",
+            "evidence": [
+              "s2"
+            ],
+            "runId": "run-1",
+            "status": "passed",
+            "result": {
+              "repository": "r",
+              "id": "res-1",
+              "kind": "json/value"
+            },
+            "assertions": [
+              {
+                "id": "as1",
+                "provenance": "observed",
+                "evidence": [
+                  "s2"
+                ],
+                "statement": "status is fired",
+                "passed": true
+              },
+              {
+                "id": "as2",
+                "provenance": "observed",
+                "evidence": [
+                  "s2"
+                ],
+                "statement": "tick is 1",
+                "passed": true
+              }
+            ]
+          },
+          {
+            "id": "r2",
+            "provenance": "observed",
+            "evidence": [
+              "s3"
+            ],
+            "runId": "run-2",
+            "status": "failed",
+            "result": {
+              "repository": "r",
+              "id": "res-2",
+              "kind": "json/value"
+            },
+            "assertions": [
+              {
+                "id": "as3",
+                "provenance": "observed",
+                "evidence": [
+                  "s3"
+                ],
+                "statement": "tick is 1",
+                "passed": false
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

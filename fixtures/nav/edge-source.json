@@ -1,0 +1,361 @@
+{
+  "schemaVersion": "paneweft.bundle/1",
+  "entities": [
+    {
+      "repository": "r",
+      "id": "flow",
+      "kind": "code/flow",
+      "snapshotId": "snap-1",
+      "label": "flow",
+      "dataRoles": [
+        "graph",
+        "source"
+      ],
+      "relations": []
+    }
+  ],
+  "definitions": [
+    {
+      "id": "def-flow-graph",
+      "entityKind": "code/flow",
+      "title": "Flow",
+      "priority": 10,
+      "component": "graph",
+      "requires": [],
+      "dataRole": "graph"
+    },
+    {
+      "id": "def-flow-source",
+      "entityKind": "code/flow",
+      "title": "Check",
+      "priority": 20,
+      "component": "source",
+      "requires": [],
+      "dataRole": "source"
+    }
+  ],
+  "views": [
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "flow-graph",
+      "title": "Flow",
+      "question": "What connects these entities, and by which relation?",
+      "entity": {
+        "repository": "r",
+        "id": "flow",
+        "kind": "code/flow"
+      },
+      "snapshotId": "snap-1",
+      "component": "graph",
+      "viewDefinitionId": "def-flow-graph",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/check.ts",
+          "sha256": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        },
+        {
+          "id": "s2",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/other.ts",
+          "sha256": "7e4fa2eb8c7ac089739d5defc4489fad68a100d92082ca35c6b40a4524821f87",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": "0123456789abcdef0123456789abcdef01234567",
+            "dirty": false,
+            "files": {
+              "src/check.ts": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+              "src/other.ts": "7e4fa2eb8c7ac089739d5defc4489fad68a100d92082ca35c6b40a4524821f87"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "all calls of the fixture"
+      },
+      "data": {
+        "nodes": [
+          {
+            "id": "n1",
+            "label": "start",
+            "evidence": [
+              "s1"
+            ],
+            "provenance": "read"
+          },
+          {
+            "id": "n2",
+            "label": "check",
+            "evidence": [
+              "s1"
+            ],
+            "provenance": "read"
+          },
+          {
+            "id": "n3",
+            "label": "end",
+            "evidence": [
+              "s1"
+            ],
+            "provenance": "read"
+          }
+        ],
+        "edges": [
+          {
+            "id": "e-main",
+            "from": "n1",
+            "to": "n2",
+            "relation": "calls",
+            "anchor": {
+              "repository": "r",
+              "path": "src/check.ts",
+              "lines": [
+                5,
+                6
+              ]
+            },
+            "evidence": [
+              "s1"
+            ],
+            "provenance": "read"
+          },
+          {
+            "id": "e-first",
+            "from": "n1",
+            "to": "n3",
+            "relation": "calls",
+            "anchor": {
+              "repository": "r",
+              "path": "src/check.ts",
+              "lines": [
+                4,
+                4
+              ]
+            },
+            "evidence": [
+              "s1"
+            ],
+            "provenance": "read"
+          },
+          {
+            "id": "e-last",
+            "from": "n2",
+            "to": "n3",
+            "relation": "calls",
+            "anchor": {
+              "repository": "r",
+              "path": "src/check.ts",
+              "lines": [
+                8,
+                8
+              ]
+            },
+            "evidence": [
+              "s1"
+            ],
+            "provenance": "read"
+          },
+          {
+            "id": "e-before",
+            "from": "n1",
+            "to": "n2",
+            "relation": "calls",
+            "anchor": {
+              "repository": "r",
+              "path": "src/check.ts",
+              "lines": [
+                3,
+                4
+              ]
+            },
+            "evidence": [
+              "s1"
+            ],
+            "provenance": "read"
+          },
+          {
+            "id": "e-after",
+            "from": "n2",
+            "to": "n3",
+            "relation": "calls",
+            "anchor": {
+              "repository": "r",
+              "path": "src/check.ts",
+              "lines": [
+                8,
+                9
+              ]
+            },
+            "evidence": [
+              "s1"
+            ],
+            "provenance": "read"
+          },
+          {
+            "id": "e-bare",
+            "from": "n1",
+            "to": "n2",
+            "relation": "calls",
+            "evidence": [
+              "s1"
+            ],
+            "provenance": "read"
+          },
+          {
+            "id": "e-elsewhere",
+            "from": "n2",
+            "to": "n3",
+            "relation": "calls",
+            "anchor": {
+              "repository": "r",
+              "path": "src/other.ts",
+              "lines": [
+                5,
+                6
+              ]
+            },
+            "evidence": [
+              "s1"
+            ],
+            "provenance": "read"
+          }
+        ],
+        "layout": "layered"
+      }
+    },
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "flow-source",
+      "title": "Check",
+      "question": "Which exact code supports this statement?",
+      "entity": {
+        "repository": "r",
+        "id": "flow",
+        "kind": "code/flow"
+      },
+      "snapshotId": "snap-1",
+      "component": "source",
+      "viewDefinitionId": "def-flow-source",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/check.ts",
+          "sha256": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": "0123456789abcdef0123456789abcdef01234567",
+            "dirty": false,
+            "files": {
+              "src/check.ts": "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "the cited lines of src/check.ts"
+      },
+      "data": {
+        "excerpt": {
+          "id": "x",
+          "anchor": {
+            "repository": "r",
+            "path": "src/check.ts",
+            "lines": [
+              4,
+              8
+            ]
+          },
+          "language": "typescript",
+          "text": "line4\nline5\nline6\nline7\nline8",
+          "evidence": [
+            "s1"
+          ],
+          "provenance": "read"
+        },
+        "annotations": [
+          {
+            "id": "a",
+            "lines": [
+              5,
+              6
+            ],
+            "message": "Denial branch",
+            "claimIds": [
+              "C1"
+            ],
+            "evidence": [
+              "s1"
+            ],
+            "provenance": "read"
+          },
+          {
+            "id": "a-tail",
+            "lines": [
+              8,
+              8
+            ],
+            "message": "Tail",
+            "claimIds": [
+              "C1"
+            ],
+            "evidence": [
+              "s1"
+            ],
+            "provenance": "read"
+          }
+        ]
+      }
+    }
+  ]
+}

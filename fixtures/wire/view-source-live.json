@@ -1,0 +1,92 @@
+{
+  "schemaVersion": "paneweft.view/1",
+  "id": "check-live",
+  "title": "Live denial branch",
+  "question": "Which exact code supports this statement?",
+  "entity": {
+    "repository": "r",
+    "id": "watch",
+    "kind": "vigil/watch"
+  },
+  "snapshotId": "snap-1",
+  "component": "source",
+  "viewDefinitionId": "def-source",
+  "scope": {
+    "repositories": [
+      "r"
+    ],
+    "roots": [
+      "/work/r"
+    ],
+    "excludes": [],
+    "limits": [
+      "fixture"
+    ]
+  },
+  "sources": [
+    {
+      "id": "s1",
+      "kind": "file",
+      "repository": "r",
+      "path": "src/check.ts",
+      "sha256": "e0887e8f7555d0c504affd7c04a13a6fa0153e51ee470c37204df542c3b6fc71",
+      "capturedAt": "2026-11-11T00:00:00Z",
+      "method": "read"
+    }
+  ],
+  "generatedAt": "2026-11-11T00:00:00Z",
+  "freshness": {
+    "repositories": [
+      {
+        "id": "r",
+        "root": "/work/r",
+        "gitRev": "0123456789abcdef0123456789abcdef01234567",
+        "dirty": false,
+        "files": {
+          "src/check.ts": "e0887e8f7555d0c504affd7c04a13a6fa0153e51ee470c37204df542c3b6fc71"
+        }
+      }
+    ]
+  },
+  "links": [],
+  "completeness": {
+    "status": "complete",
+    "criterion": "lines 3 to 5 of src/check.ts"
+  },
+  "data": {
+    "excerpt": {
+      "id": "x",
+      "anchor": {
+        "repository": "r",
+        "path": "src/check.ts",
+        "lines": [
+          3,
+          5
+        ]
+      },
+      "language": "typescript",
+      "text": "  const denied = \"denied\";\n  if (!allowed) return denied;\n  return \"ok\";",
+      "provenance": "read",
+      "evidence": [
+        "s1"
+      ]
+    },
+    "annotations": [
+      {
+        "id": "a",
+        "lines": [
+          4,
+          4
+        ],
+        "message": "Denial branch",
+        "claimIds": [
+          "C1"
+        ],
+        "provenance": "read",
+        "evidence": [
+          "s1"
+        ]
+      }
+    ]
+  }
+}

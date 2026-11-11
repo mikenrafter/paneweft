@@ -1,0 +1,134 @@
+{
+  "schemaVersion": "paneweft.bundle/1",
+  "entities": [
+    {
+      "repository": "r",
+      "id": "subject",
+      "kind": "demo/subject",
+      "snapshotId": "snap-1",
+      "label": "Subject",
+      "dataRoles": [
+        "code"
+      ],
+      "relations": []
+    }
+  ],
+  "definitions": [
+    {
+      "id": "d-code",
+      "entityKind": "demo/subject",
+      "title": "Denial branch",
+      "priority": 10,
+      "component": "source",
+      "requires": [],
+      "dataRole": "code"
+    }
+  ],
+  "views": [
+    {
+      "schemaVersion": "paneweft.view/1",
+      "id": "v-code",
+      "title": "Denial branch",
+      "question": "Which exact code supports this statement?",
+      "entity": {
+        "repository": "r",
+        "id": "subject",
+        "kind": "demo/subject"
+      },
+      "snapshotId": "snap-1",
+      "component": "source",
+      "viewDefinitionId": "d-code",
+      "scope": {
+        "repositories": [
+          "r"
+        ],
+        "roots": [
+          "/work/r"
+        ],
+        "excludes": [],
+        "limits": [
+          "fixture"
+        ]
+      },
+      "sources": [
+        {
+          "id": "s1",
+          "kind": "file",
+          "repository": "r",
+          "path": "src/check.ts",
+          "sha256": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2",
+          "capturedAt": "2026-11-11T00:00:00Z",
+          "method": "read"
+        }
+      ],
+      "generatedAt": "2026-11-11T00:00:00Z",
+      "freshness": {
+        "repositories": [
+          {
+            "id": "r",
+            "root": "/work/r",
+            "gitRev": null,
+            "dirty": false,
+            "files": {
+              "src/check.ts": "89e5381dc79ea9a770589a60d99cd7bed1d1a6cccba8195b1da5c716ea7c8bc2"
+            }
+          }
+        ]
+      },
+      "links": [],
+      "completeness": {
+        "status": "complete",
+        "criterion": "the cited lines of src/check.ts"
+      },
+      "data": {
+        "excerpt": {
+          "id": "x",
+          "provenance": "read",
+          "evidence": [
+            "s1"
+          ],
+          "anchor": {
+            "repository": "r",
+            "path": "src/check.ts",
+            "lines": [
+              10,
+              12
+            ]
+          },
+          "language": "typescript",
+          "text": "export function check(user: User) {\n  if (!allowed(user)) return denied;\n  audit(user);"
+        },
+        "annotations": [
+          {
+            "id": "a1",
+            "provenance": "read",
+            "evidence": [
+              "s1"
+            ],
+            "lines": [
+              11,
+              12
+            ],
+            "message": "Denial branch",
+            "claimIds": [
+              "C1"
+            ]
+          },
+          {
+            "id": "a2",
+            "provenance": "compiled",
+            "evidence": [
+              "s1"
+            ],
+            "lines": [
+              10,
+              10
+            ],
+            "message": "Entry point",
+            "claimIds": []
+          }
+        ]
+      }
+    }
+  ]
+}
