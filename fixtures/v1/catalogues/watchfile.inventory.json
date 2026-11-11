@@ -1,0 +1,34 @@
+{
+  "schemaVersion": "paneweft.inventory/1",
+  "views": [
+    {
+      "id": "event.details",
+      "module": "watch"
+    },
+    {
+      "id": "watch.events",
+      "module": "watch"
+    },
+    {
+      "id": "watch.status",
+      "module": "watch"
+    }
+  ],
+  "examples": [
+    {
+      "id": "watch.cancelled",
+      "module": "watch",
+      "typeId": "vigil::watch::WatchFile"
+    },
+    {
+      "id": "watch.pending",
+      "module": "watch",
+      "typeId": "vigil::watch::WatchFile"
+    },
+    {
+      "id": "watch.redelivered",
+      "module": "watch",
+      "typeId": "vigil::watch::WatchFile"
+    }
+  ]
+}

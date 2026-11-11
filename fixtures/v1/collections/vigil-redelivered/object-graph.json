@@ -1,0 +1,496 @@
+{
+  "schemaVersion": "paneweft.object-graph/1",
+  "captureId": "inv-1",
+  "runId": "run-1",
+  "invocationId": "inv-1",
+  "roots": [
+    "o1"
+  ],
+  "objects": [
+    {
+      "id": "o1",
+      "typeId": "vigil::watch::WatchFile",
+      "domainKey": null,
+      "label": "watch w-1",
+      "fields": {},
+      "edges": [
+        {
+          "name": "watch.events",
+          "kind": "child",
+          "target": "o2"
+        },
+        {
+          "name": "watch.events",
+          "kind": "child",
+          "target": "o3"
+        },
+        {
+          "name": "watch.events",
+          "kind": "child",
+          "target": "o4"
+        }
+      ],
+      "views": [
+        "watch.status",
+        "watch.events"
+      ],
+      "contentHash": "1fa6010286618823ec9fdeefdb033d016665052743126c8a693db7ec107a6f36"
+    },
+    {
+      "id": "o2",
+      "typeId": "vigil::watch::Event",
+      "domainKey": "e-1",
+      "label": "e-1",
+      "fields": {
+        "tick": 3,
+        "redelivered": false
+      },
+      "edges": [],
+      "views": [
+        "event.details"
+      ],
+      "contentHash": "16eb483a448deb152686bf4042bc0951dc7953c1312fe0f9ca918e23ed883348"
+    },
+    {
+      "id": "o3",
+      "typeId": "vigil::watch::Event",
+      "domainKey": "e-2",
+      "label": "e-2",
+      "fields": {
+        "tick": 5,
+        "redelivered": true
+      },
+      "edges": [],
+      "views": [
+        "event.details"
+      ],
+      "contentHash": "9637606607524174e847fa88e2f06c43a285760d4509a67df82e68f65213bbed"
+    },
+    {
+      "id": "o4",
+      "typeId": "vigil::watch::Event",
+      "domainKey": "e-1",
+      "label": "e-1",
+      "fields": {
+        "tick": 6,
+        "redelivered": true
+      },
+      "edges": [],
+      "views": [
+        "event.details"
+      ],
+      "contentHash": "f04f5c81c7a238a5ffc7094123278d75b8e056affa9b0eb0d48fea621a4b13ff"
+    }
+  ],
+  "views": [
+    {
+      "viewId": "watch.status",
+      "objectId": "o1",
+      "title": "Status",
+      "question": "What state did this watch reach?",
+      "component": "shape",
+      "priority": 10,
+      "completeness": {
+        "status": "complete"
+      },
+      "evidence": {
+        "provenance": "observed",
+        "runId": "run-1"
+      },
+      "data": {
+        "basis": "observed",
+        "root": "details",
+        "fields": [
+          {
+            "id": "details",
+            "path": "$",
+            "type": "object",
+            "presence": "required",
+            "children": [
+              "details.status",
+              "details.tick",
+              "details.judge status",
+              "details.event count"
+            ],
+            "provenance": "observed",
+            "evidence": [
+              "run"
+            ]
+          },
+          {
+            "id": "details.status",
+            "path": "$.status",
+            "type": "string",
+            "presence": "required",
+            "example": "Cancelled",
+            "children": [],
+            "provenance": "observed",
+            "evidence": [
+              "run"
+            ]
+          },
+          {
+            "id": "details.tick",
+            "path": "$.tick",
+            "type": "number",
+            "presence": "required",
+            "example": 7,
+            "children": [],
+            "provenance": "observed",
+            "evidence": [
+              "run"
+            ]
+          },
+          {
+            "id": "details.judge status",
+            "path": "$.judge status",
+            "type": "string",
+            "presence": "required",
+            "example": "Idle",
+            "children": [],
+            "provenance": "observed",
+            "evidence": [
+              "run"
+            ]
+          },
+          {
+            "id": "details.event count",
+            "path": "$.event count",
+            "type": "number",
+            "presence": "required",
+            "example": 3,
+            "children": [],
+            "provenance": "observed",
+            "evidence": [
+              "run"
+            ]
+          }
+        ]
+      },
+      "pages": []
+    },
+    {
+      "viewId": "watch.events",
+      "objectId": "o1",
+      "title": "Events",
+      "question": "Which events were retained, and were they redelivered?",
+      "component": "list",
+      "priority": 20,
+      "completeness": {
+        "status": "complete"
+      },
+      "evidence": {
+        "provenance": "observed",
+        "runId": "run-1"
+      },
+      "pages": [],
+      "rowsTotal": 3,
+      "data": {
+        "columns": [
+          {
+            "key": "event",
+            "title": "Event",
+            "format": "text"
+          },
+          {
+            "key": "tick",
+            "title": "Tick",
+            "format": "number"
+          },
+          {
+            "key": "redelivered",
+            "title": "Redelivered",
+            "format": "boolean"
+          }
+        ],
+        "rows": [
+          {
+            "id": "event-0",
+            "cells": {
+              "event": "e-1",
+              "tick": 3,
+              "redelivered": false
+            },
+            "provenance": "observed",
+            "evidence": [
+              "run"
+            ],
+            "target": {
+              "object": "o2"
+            }
+          },
+          {
+            "id": "event-2",
+            "cells": {
+              "event": "e-1",
+              "tick": 6,
+              "redelivered": true
+            },
+            "provenance": "observed",
+            "evidence": [
+              "run"
+            ],
+            "target": {
+              "object": "o4"
+            }
+          },
+          {
+            "id": "event-1",
+            "cells": {
+              "event": "e-2",
+              "tick": 5,
+              "redelivered": true
+            },
+            "provenance": "observed",
+            "evidence": [
+              "run"
+            ],
+            "target": {
+              "object": "o3"
+            }
+          }
+        ],
+        "order": {
+          "key": "event",
+          "direction": "asc"
+        }
+      }
+    },
+    {
+      "viewId": "event.details",
+      "objectId": "o2",
+      "title": "Event",
+      "question": "Which event is this, and was it redelivered?",
+      "component": "shape",
+      "priority": 10,
+      "completeness": {
+        "status": "complete"
+      },
+      "evidence": {
+        "provenance": "observed",
+        "runId": "run-1"
+      },
+      "data": {
+        "basis": "observed",
+        "root": "details",
+        "fields": [
+          {
+            "id": "details",
+            "path": "$",
+            "type": "object",
+            "presence": "required",
+            "children": [
+              "details.event_id",
+              "details.tick",
+              "details.redelivered"
+            ],
+            "provenance": "observed",
+            "evidence": [
+              "run"
+            ]
+          },
+          {
+            "id": "details.event_id",
+            "path": "$.event_id",
+            "type": "string",
+            "presence": "required",
+            "example": "e-1",
+            "children": [],
+            "provenance": "observed",
+            "evidence": [
+              "run"
+            ]
+          },
+          {
+            "id": "details.tick",
+            "path": "$.tick",
+            "type": "number",
+            "presence": "required",
+            "example": 3,
+            "children": [],
+            "provenance": "observed",
+            "evidence": [
+              "run"
+            ]
+          },
+          {
+            "id": "details.redelivered",
+            "path": "$.redelivered",
+            "type": "boolean",
+            "presence": "required",
+            "example": false,
+            "children": [],
+            "provenance": "observed",
+            "evidence": [
+              "run"
+            ]
+          }
+        ]
+      },
+      "pages": []
+    },
+    {
+      "viewId": "event.details",
+      "objectId": "o3",
+      "title": "Event",
+      "question": "Which event is this, and was it redelivered?",
+      "component": "shape",
+      "priority": 10,
+      "completeness": {
+        "status": "complete"
+      },
+      "evidence": {
+        "provenance": "observed",
+        "runId": "run-1"
+      },
+      "data": {
+        "basis": "observed",
+        "root": "details",
+        "fields": [
+          {
+            "id": "details",
+            "path": "$",
+            "type": "object",
+            "presence": "required",
+            "children": [
+              "details.event_id",
+              "details.tick",
+              "details.redelivered"
+            ],
+            "provenance": "observed",
+            "evidence": [
+              "run"
+            ]
+          },
+          {
+            "id": "details.event_id",
+            "path": "$.event_id",
+            "type": "string",
+            "presence": "required",
+            "example": "e-2",
+            "children": [],
+            "provenance": "observed",
+            "evidence": [
+              "run"
+            ]
+          },
+          {
+            "id": "details.tick",
+            "path": "$.tick",
+            "type": "number",
+            "presence": "required",
+            "example": 5,
+            "children": [],
+            "provenance": "observed",
+            "evidence": [
+              "run"
+            ]
+          },
+          {
+            "id": "details.redelivered",
+            "path": "$.redelivered",
+            "type": "boolean",
+            "presence": "required",
+            "example": true,
+            "children": [],
+            "provenance": "observed",
+            "evidence": [
+              "run"
+            ]
+          }
+        ]
+      },
+      "pages": []
+    },
+    {
+      "viewId": "event.details",
+      "objectId": "o4",
+      "title": "Event",
+      "question": "Which event is this, and was it redelivered?",
+      "component": "shape",
+      "priority": 10,
+      "completeness": {
+        "status": "complete"
+      },
+      "evidence": {
+        "provenance": "observed",
+        "runId": "run-1"
+      },
+      "data": {
+        "basis": "observed",
+        "root": "details",
+        "fields": [
+          {
+            "id": "details",
+            "path": "$",
+            "type": "object",
+            "presence": "required",
+            "children": [
+              "details.event_id",
+              "details.tick",
+              "details.redelivered"
+            ],
+            "provenance": "observed",
+            "evidence": [
+              "run"
+            ]
+          },
+          {
+            "id": "details.event_id",
+            "path": "$.event_id",
+            "type": "string",
+            "presence": "required",
+            "example": "e-1",
+            "children": [],
+            "provenance": "observed",
+            "evidence": [
+              "run"
+            ]
+          },
+          {
+            "id": "details.tick",
+            "path": "$.tick",
+            "type": "number",
+            "presence": "required",
+            "example": 6,
+            "children": [],
+            "provenance": "observed",
+            "evidence": [
+              "run"
+            ]
+          },
+          {
+            "id": "details.redelivered",
+            "path": "$.redelivered",
+            "type": "boolean",
+            "presence": "required",
+            "example": true,
+            "children": [],
+            "provenance": "observed",
+            "evidence": [
+              "run"
+            ]
+          }
+        ]
+      },
+      "pages": []
+    }
+  ],
+  "pages": [],
+  "diagnostics": [],
+  "limits": {
+    "depth": 4,
+    "objects": 1000,
+    "references": 4000,
+    "rootBytes": 2097152,
+    "stringBytes": 16384,
+    "pageRows": 100,
+    "collectionBytes": 33554432,
+    "roots": 100,
+    "viewRows": 10000,
+    "viewBudgetMs": 100
+  },
+  "completeness": {
+    "status": "complete"
+  }
+}

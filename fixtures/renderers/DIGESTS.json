@@ -1,0 +1,17 @@
+{
+  "why": "Reviewed digests of the renderer fixtures. digest = sha256 over the lines `<file>\\0<sha256 of file>\\n` for renderer.json, bundle.js, style.css in that order (docs/v1-red-contract.md section 12). payloadSchemaDigest = sha256 of the canonical JSON (sorted keys at every level) of renderer.json's payloadSchema. Regenerating this file is a deliberate act: edit a renderer, rerun the author tool, review the diff.",
+  "renderers": {
+    "mapping-card": {
+      "digest": "0f2a69c4a3f2e64caea0ecd15424171f1ba679bc832291aafb95fac8f2876d7d",
+      "payloadSchemaDigest": "c0dbe898989f5e51466065b904b2d88ef029914981ff986e84aa7fe46f4fae0e"
+    },
+    "hostile": {
+      "digest": "cc3019a208f74fcc661d52e053f3f6f6ca0ae34b78883488655af1c23dad9823",
+      "payloadSchemaDigest": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf"
+    },
+    "misbehaving": {
+      "digest": "d6d9931cdd581b856823ea24ac2b040b7fbb7fc1c86ab4e5b11342336069c3ea",
+      "payloadSchemaDigest": "82ef96cebaf5fbe16269fd18b0240d78f5b9b90a4155a17eb797115b09148ecf"
+    }
+  }
+}

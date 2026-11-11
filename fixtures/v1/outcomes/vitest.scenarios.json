@@ -1,0 +1,1728 @@
+{
+  "why": "Literal outcome fixtures for the vitest adapter, the same scenarios as cargo plus teardown failure. `input.native` is the reporter.json (or the typecheck result when the typecheck step failed).",
+  "scenarios": [
+    {
+      "scenario": "all-pass",
+      "why": "Two verified examples and a clean exit: the collection succeeds (S6).",
+      "input": {
+        "runId": "run-fixture",
+        "selected": [
+          "ex.a",
+          "ex.b"
+        ],
+        "testNames": {
+          "ex.a": "example:ex.a",
+          "ex.b": "example:ex.b"
+        },
+        "exit": {
+          "code": 0,
+          "signal": null,
+          "timedOut": false,
+          "cancelled": false
+        },
+        "compile": "ok",
+        "skipped": [],
+        "filtered": [],
+        "invocations": [
+          {
+            "started": {
+              "id": "inv-1",
+              "exampleId": "ex.a",
+              "attempt": 1,
+              "parent": null,
+              "startedAt": "2026-11-11T12:00:00Z"
+            },
+            "completed": {
+              "id": "inv-1",
+              "exampleId": "ex.a",
+              "attempt": 1,
+              "parent": null,
+              "native": {
+                "outcome": "passed"
+              },
+              "capture": {
+                "outcome": "captured",
+                "captureId": "inv-1",
+                "diagnostics": []
+              },
+              "checks": [
+                {
+                  "claim": "C",
+                  "passed": true
+                }
+              ],
+              "result": {
+                "captureId": "inv-1",
+                "object": "o1"
+              },
+              "startedAt": "2026-11-11T12:00:00Z",
+              "finishedAt": "2026-11-11T12:00:01Z"
+            }
+          },
+          {
+            "started": {
+              "id": "inv-2",
+              "exampleId": "ex.b",
+              "attempt": 1,
+              "parent": null,
+              "startedAt": "2026-11-11T12:00:00Z"
+            },
+            "completed": {
+              "id": "inv-2",
+              "exampleId": "ex.b",
+              "attempt": 1,
+              "parent": null,
+              "native": {
+                "outcome": "passed"
+              },
+              "capture": {
+                "outcome": "captured",
+                "captureId": "inv-2",
+                "diagnostics": []
+              },
+              "checks": [
+                {
+                  "claim": "C",
+                  "passed": true
+                }
+              ],
+              "result": {
+                "captureId": "inv-2",
+                "object": "o1"
+              },
+              "startedAt": "2026-11-11T12:00:00Z",
+              "finishedAt": "2026-11-11T12:00:01Z"
+            }
+          }
+        ],
+        "native": {
+          "schemaVersion": "paneweft.vitest-report/1",
+          "runId": "run-fixture",
+          "vitestVersion": "5.1.0",
+          "tests": [
+            {
+              "name": "example:ex.a",
+              "file": "tests/x.paneweft.test.ts",
+              "state": "passed",
+              "errors": [],
+              "retries": 0
+            },
+            {
+              "name": "example:ex.b",
+              "file": "tests/x.paneweft.test.ts",
+              "state": "passed",
+              "errors": [],
+              "retries": 0
+            }
+          ],
+          "suites": [],
+          "unhandledErrors": []
+        }
+      },
+      "expected": {
+        "collection": {
+          "status": "succeeded",
+          "complete": true,
+          "missingInvocations": 0,
+          "compile": "ok"
+        },
+        "counts": {
+          "selected": 2,
+          "passed": 2,
+          "failed": 0,
+          "error": 0,
+          "skipped": 0,
+          "filtered": 0,
+          "cancelled": 0,
+          "blocked": 0,
+          "verified": 2,
+          "exploratory": 0
+        },
+        "examples": {
+          "ex.a": {
+            "outcome": "passed",
+            "verified": true,
+            "attempts": 1,
+            "priorFailures": 0,
+            "suiteFailedAfter": []
+          },
+          "ex.b": {
+            "outcome": "passed",
+            "verified": true,
+            "attempts": 1,
+            "priorFailures": 0,
+            "suiteFailedAfter": []
+          }
+        },
+        "suites": []
+      }
+    },
+    {
+      "scenario": "assertion-failure",
+      "why": "A failed recorded check is `failed`, not `error`; the collection fails but the invocation and its captured object are retained (S6, IV17).",
+      "input": {
+        "runId": "run-fixture",
+        "selected": [
+          "ex.a"
+        ],
+        "testNames": {
+          "ex.a": "example:ex.a"
+        },
+        "exit": {
+          "code": 101,
+          "signal": null,
+          "timedOut": false,
+          "cancelled": false
+        },
+        "compile": "ok",
+        "skipped": [],
+        "filtered": [],
+        "invocations": [
+          {
+            "started": {
+              "id": "inv-1",
+              "exampleId": "ex.a",
+              "attempt": 1,
+              "parent": null,
+              "startedAt": "2026-11-11T12:00:00Z"
+            },
+            "completed": {
+              "id": "inv-1",
+              "exampleId": "ex.a",
+              "attempt": 1,
+              "parent": null,
+              "native": {
+                "outcome": "failed",
+                "message": "expected 1 to equal 2"
+              },
+              "capture": {
+                "outcome": "captured",
+                "captureId": "inv-1",
+                "diagnostics": []
+              },
+              "checks": [
+                {
+                  "claim": "C",
+                  "passed": false
+                }
+              ],
+              "result": {
+                "captureId": "inv-1",
+                "object": "o1"
+              },
+              "startedAt": "2026-11-11T12:00:00Z",
+              "finishedAt": "2026-11-11T12:00:01Z"
+            }
+          }
+        ],
+        "native": {
+          "schemaVersion": "paneweft.vitest-report/1",
+          "runId": "run-fixture",
+          "vitestVersion": "5.1.0",
+          "tests": [
+            {
+              "name": "example:ex.a",
+              "file": "tests/x.paneweft.test.ts",
+              "state": "failed",
+              "errors": [
+                "expected 1 to equal 2"
+              ],
+              "retries": 0
+            }
+          ],
+          "suites": [],
+          "unhandledErrors": []
+        }
+      },
+      "expected": {
+        "collection": {
+          "status": "failed",
+          "complete": true,
+          "missingInvocations": 0,
+          "compile": "ok"
+        },
+        "counts": {
+          "selected": 1,
+          "passed": 0,
+          "failed": 1,
+          "error": 0,
+          "skipped": 0,
+          "filtered": 0,
+          "cancelled": 0,
+          "blocked": 0,
+          "verified": 0,
+          "exploratory": 0
+        },
+        "examples": {
+          "ex.a": {
+            "outcome": "failed",
+            "verified": false,
+            "attempts": 1,
+            "priorFailures": 0,
+            "suiteFailedAfter": []
+          }
+        },
+        "suites": []
+      }
+    },
+    {
+      "scenario": "panic-or-err-is-error",
+      "why": "A panic or Result::Err that is not a check is `error` (S6).",
+      "input": {
+        "runId": "run-fixture",
+        "selected": [
+          "ex.a"
+        ],
+        "testNames": {
+          "ex.a": "example:ex.a"
+        },
+        "exit": {
+          "code": 101,
+          "signal": null,
+          "timedOut": false,
+          "cancelled": false
+        },
+        "compile": "ok",
+        "skipped": [],
+        "filtered": [],
+        "invocations": [
+          {
+            "started": {
+              "id": "inv-1",
+              "exampleId": "ex.a",
+              "attempt": 1,
+              "parent": null,
+              "startedAt": "2026-11-11T12:00:00Z"
+            },
+            "completed": {
+              "id": "inv-1",
+              "exampleId": "ex.a",
+              "attempt": 1,
+              "parent": null,
+              "native": {
+                "outcome": "error",
+                "message": "boom"
+              },
+              "capture": {
+                "outcome": "captured",
+                "captureId": "inv-1",
+                "diagnostics": []
+              },
+              "checks": [],
+              "result": null,
+              "startedAt": "2026-11-11T12:00:00Z",
+              "finishedAt": "2026-11-11T12:00:01Z"
+            }
+          }
+        ],
+        "native": {
+          "schemaVersion": "paneweft.vitest-report/1",
+          "runId": "run-fixture",
+          "vitestVersion": "5.1.0",
+          "tests": [
+            {
+              "name": "example:ex.a",
+              "file": "tests/x.paneweft.test.ts",
+              "state": "failed",
+              "errors": [
+                "boom"
+              ],
+              "retries": 0
+            }
+          ],
+          "suites": [],
+          "unhandledErrors": []
+        }
+      },
+      "expected": {
+        "collection": {
+          "status": "failed",
+          "complete": true,
+          "missingInvocations": 0,
+          "compile": "ok"
+        },
+        "counts": {
+          "selected": 1,
+          "passed": 0,
+          "failed": 0,
+          "error": 1,
+          "skipped": 0,
+          "filtered": 0,
+          "cancelled": 0,
+          "blocked": 0,
+          "verified": 0,
+          "exploratory": 0
+        },
+        "examples": {
+          "ex.a": {
+            "outcome": "error",
+            "verified": false,
+            "attempts": 1,
+            "priorFailures": 0,
+            "suiteFailedAfter": []
+          }
+        },
+        "suites": []
+      }
+    },
+    {
+      "scenario": "zero-check-is-exploratory",
+      "why": "A passing invocation with no executed recorded check is exploratory: passed but not verified, and the collection still succeeds (IV6).",
+      "input": {
+        "runId": "run-fixture",
+        "selected": [
+          "ex.a"
+        ],
+        "testNames": {
+          "ex.a": "example:ex.a"
+        },
+        "exit": {
+          "code": 0,
+          "signal": null,
+          "timedOut": false,
+          "cancelled": false
+        },
+        "compile": "ok",
+        "skipped": [],
+        "filtered": [],
+        "invocations": [
+          {
+            "started": {
+              "id": "inv-1",
+              "exampleId": "ex.a",
+              "attempt": 1,
+              "parent": null,
+              "startedAt": "2026-11-11T12:00:00Z"
+            },
+            "completed": {
+              "id": "inv-1",
+              "exampleId": "ex.a",
+              "attempt": 1,
+              "parent": null,
+              "native": {
+                "outcome": "passed"
+              },
+              "capture": {
+                "outcome": "captured",
+                "captureId": "inv-1",
+                "diagnostics": []
+              },
+              "checks": [],
+              "result": {
+                "captureId": "inv-1",
+                "object": "o1"
+              },
+              "startedAt": "2026-11-11T12:00:00Z",
+              "finishedAt": "2026-11-11T12:00:01Z"
+            }
+          }
+        ],
+        "native": {
+          "schemaVersion": "paneweft.vitest-report/1",
+          "runId": "run-fixture",
+          "vitestVersion": "5.1.0",
+          "tests": [
+            {
+              "name": "example:ex.a",
+              "file": "tests/x.paneweft.test.ts",
+              "state": "passed",
+              "errors": [],
+              "retries": 0
+            }
+          ],
+          "suites": [],
+          "unhandledErrors": []
+        }
+      },
+      "expected": {
+        "collection": {
+          "status": "succeeded",
+          "complete": true,
+          "missingInvocations": 0,
+          "compile": "ok"
+        },
+        "counts": {
+          "selected": 1,
+          "passed": 1,
+          "failed": 0,
+          "error": 0,
+          "skipped": 0,
+          "filtered": 0,
+          "cancelled": 0,
+          "blocked": 0,
+          "verified": 0,
+          "exploratory": 1
+        },
+        "examples": {
+          "ex.a": {
+            "outcome": "passed",
+            "verified": false,
+            "attempts": 1,
+            "priorFailures": 0,
+            "suiteFailedAfter": []
+          }
+        },
+        "suites": []
+      }
+    },
+    {
+      "scenario": "retry-keeps-the-prior-failure",
+      "why": "Attempt 1 failed, attempt 2 passed: the final attempt decides, the failure stays in priorFailures (S6; decision 6).",
+      "input": {
+        "runId": "run-fixture",
+        "selected": [
+          "ex.a"
+        ],
+        "testNames": {
+          "ex.a": "example:ex.a"
+        },
+        "exit": {
+          "code": 0,
+          "signal": null,
+          "timedOut": false,
+          "cancelled": false
+        },
+        "compile": "ok",
+        "skipped": [],
+        "filtered": [],
+        "invocations": [
+          {
+            "started": {
+              "id": "inv-1",
+              "exampleId": "ex.a",
+              "attempt": 1,
+              "parent": null,
+              "startedAt": "2026-11-11T12:00:00Z"
+            },
+            "completed": {
+              "id": "inv-1",
+              "exampleId": "ex.a",
+              "attempt": 1,
+              "parent": null,
+              "native": {
+                "outcome": "failed",
+                "message": "flaky"
+              },
+              "capture": {
+                "outcome": "captured",
+                "captureId": "inv-1",
+                "diagnostics": []
+              },
+              "checks": [
+                {
+                  "claim": "C",
+                  "passed": false
+                }
+              ],
+              "result": {
+                "captureId": "inv-1",
+                "object": "o1"
+              },
+              "startedAt": "2026-11-11T12:00:00Z",
+              "finishedAt": "2026-11-11T12:00:01Z"
+            }
+          },
+          {
+            "started": {
+              "id": "inv-2",
+              "exampleId": "ex.a",
+              "attempt": 2,
+              "parent": null,
+              "startedAt": "2026-11-11T12:00:00Z"
+            },
+            "completed": {
+              "id": "inv-2",
+              "exampleId": "ex.a",
+              "attempt": 2,
+              "parent": null,
+              "native": {
+                "outcome": "passed"
+              },
+              "capture": {
+                "outcome": "captured",
+                "captureId": "inv-2",
+                "diagnostics": []
+              },
+              "checks": [
+                {
+                  "claim": "C",
+                  "passed": true
+                }
+              ],
+              "result": {
+                "captureId": "inv-2",
+                "object": "o1"
+              },
+              "startedAt": "2026-11-11T12:00:00Z",
+              "finishedAt": "2026-11-11T12:00:01Z"
+            }
+          }
+        ],
+        "native": {
+          "schemaVersion": "paneweft.vitest-report/1",
+          "runId": "run-fixture",
+          "vitestVersion": "5.1.0",
+          "tests": [
+            {
+              "name": "example:ex.a",
+              "file": "tests/x.paneweft.test.ts",
+              "state": "failed",
+              "errors": [
+                "flaky"
+              ],
+              "retries": 0
+            },
+            {
+              "name": "example:ex.a",
+              "file": "tests/x.paneweft.test.ts",
+              "state": "passed",
+              "errors": [],
+              "retries": 1
+            }
+          ],
+          "suites": [],
+          "unhandledErrors": []
+        }
+      },
+      "expected": {
+        "collection": {
+          "status": "succeeded",
+          "complete": true,
+          "missingInvocations": 0,
+          "compile": "ok"
+        },
+        "counts": {
+          "selected": 1,
+          "passed": 1,
+          "failed": 0,
+          "error": 0,
+          "skipped": 0,
+          "filtered": 0,
+          "cancelled": 0,
+          "blocked": 0,
+          "verified": 1,
+          "exploratory": 0
+        },
+        "examples": {
+          "ex.a": {
+            "outcome": "passed",
+            "verified": true,
+            "attempts": 2,
+            "priorFailures": 1,
+            "suiteFailedAfter": []
+          }
+        },
+        "suites": []
+      }
+    },
+    {
+      "scenario": "child-failure-blocks-parent",
+      "why": "A failed child blocks its parent: the parent is `blocked`, not `failed` (S6).",
+      "input": {
+        "runId": "run-fixture",
+        "selected": [
+          "ex.parent"
+        ],
+        "testNames": {
+          "ex.parent": "example:ex.parent",
+          "ex.child": "example:ex.child"
+        },
+        "exit": {
+          "code": 101,
+          "signal": null,
+          "timedOut": false,
+          "cancelled": false
+        },
+        "compile": "ok",
+        "skipped": [],
+        "filtered": [],
+        "invocations": [
+          {
+            "started": {
+              "id": "inv-1",
+              "exampleId": "ex.parent",
+              "attempt": 1,
+              "parent": null,
+              "startedAt": "2026-11-11T12:00:00Z"
+            },
+            "completed": {
+              "id": "inv-1",
+              "exampleId": "ex.parent",
+              "attempt": 1,
+              "parent": null,
+              "native": {
+                "outcome": "blocked",
+                "blockedBy": "inv-2"
+              },
+              "capture": {
+                "outcome": "captured",
+                "captureId": "inv-1",
+                "diagnostics": []
+              },
+              "checks": [],
+              "result": null,
+              "startedAt": "2026-11-11T12:00:00Z",
+              "finishedAt": "2026-11-11T12:00:01Z"
+            }
+          },
+          {
+            "started": {
+              "id": "inv-2",
+              "exampleId": "ex.child",
+              "attempt": 1,
+              "parent": "inv-1",
+              "startedAt": "2026-11-11T12:00:00Z"
+            },
+            "completed": {
+              "id": "inv-2",
+              "exampleId": "ex.child",
+              "attempt": 1,
+              "parent": "inv-1",
+              "native": {
+                "outcome": "error",
+                "message": "child broke"
+              },
+              "capture": {
+                "outcome": "captured",
+                "captureId": "inv-2",
+                "diagnostics": []
+              },
+              "checks": [],
+              "result": null,
+              "startedAt": "2026-11-11T12:00:00Z",
+              "finishedAt": "2026-11-11T12:00:01Z"
+            }
+          }
+        ],
+        "native": {
+          "schemaVersion": "paneweft.vitest-report/1",
+          "runId": "run-fixture",
+          "vitestVersion": "5.1.0",
+          "tests": [
+            {
+              "name": "example:ex.parent",
+              "file": "tests/x.paneweft.test.ts",
+              "state": "failed",
+              "errors": [
+                "failed"
+              ],
+              "retries": 0
+            },
+            {
+              "name": "example:ex.child",
+              "file": "tests/x.paneweft.test.ts",
+              "state": "failed",
+              "errors": [
+                "child broke"
+              ],
+              "retries": 0
+            }
+          ],
+          "suites": [],
+          "unhandledErrors": []
+        }
+      },
+      "expected": {
+        "collection": {
+          "status": "failed",
+          "complete": true,
+          "missingInvocations": 0,
+          "compile": "ok"
+        },
+        "counts": {
+          "selected": 1,
+          "passed": 0,
+          "failed": 0,
+          "error": 0,
+          "skipped": 0,
+          "filtered": 0,
+          "cancelled": 0,
+          "blocked": 1,
+          "verified": 0,
+          "exploratory": 0
+        },
+        "examples": {
+          "ex.parent": {
+            "outcome": "blocked",
+            "verified": false,
+            "attempts": 1,
+            "priorFailures": 0,
+            "suiteFailedAfter": []
+          },
+          "ex.child": {
+            "outcome": "error",
+            "verified": false,
+            "attempts": 1,
+            "priorFailures": 0,
+            "suiteFailedAfter": []
+          }
+        },
+        "suites": []
+      }
+    },
+    {
+      "scenario": "expected-failure-passes",
+      "why": "A dead end whose documented failure reproduced passes and is verified; a child failure inside expect_failure is not a blocker (N4).",
+      "input": {
+        "runId": "run-fixture",
+        "selected": [
+          "dead.end"
+        ],
+        "testNames": {
+          "dead.end": "example:dead.end",
+          "ex.child": "example:ex.child"
+        },
+        "exit": {
+          "code": 0,
+          "signal": null,
+          "timedOut": false,
+          "cancelled": false
+        },
+        "compile": "ok",
+        "skipped": [],
+        "filtered": [],
+        "invocations": [
+          {
+            "started": {
+              "id": "inv-1",
+              "exampleId": "dead.end",
+              "attempt": 1,
+              "parent": null,
+              "startedAt": "2026-11-11T12:00:00Z"
+            },
+            "completed": {
+              "id": "inv-1",
+              "exampleId": "dead.end",
+              "attempt": 1,
+              "parent": null,
+              "native": {
+                "outcome": "passed"
+              },
+              "capture": {
+                "outcome": "captured",
+                "captureId": "inv-1",
+                "diagnostics": []
+              },
+              "checks": [
+                {
+                  "claim": "DE",
+                  "passed": true
+                }
+              ],
+              "result": {
+                "captureId": "inv-1",
+                "object": "o1"
+              },
+              "expectedFailure": {
+                "matched": true,
+                "diagnosticId": "diag-1"
+              },
+              "startedAt": "2026-11-11T12:00:00Z",
+              "finishedAt": "2026-11-11T12:00:01Z"
+            }
+          },
+          {
+            "started": {
+              "id": "inv-2",
+              "exampleId": "ex.child",
+              "attempt": 1,
+              "parent": "inv-1",
+              "startedAt": "2026-11-11T12:00:00Z"
+            },
+            "completed": {
+              "id": "inv-2",
+              "exampleId": "ex.child",
+              "attempt": 1,
+              "parent": "inv-1",
+              "native": {
+                "outcome": "error",
+                "message": "lock held"
+              },
+              "capture": {
+                "outcome": "captured",
+                "captureId": "inv-2",
+                "diagnostics": []
+              },
+              "checks": [],
+              "result": null,
+              "startedAt": "2026-11-11T12:00:00Z",
+              "finishedAt": "2026-11-11T12:00:01Z"
+            }
+          }
+        ],
+        "native": {
+          "schemaVersion": "paneweft.vitest-report/1",
+          "runId": "run-fixture",
+          "vitestVersion": "5.1.0",
+          "tests": [
+            {
+              "name": "example:dead.end",
+              "file": "tests/x.paneweft.test.ts",
+              "state": "passed",
+              "errors": [],
+              "retries": 0
+            },
+            {
+              "name": "example:ex.child",
+              "file": "tests/x.paneweft.test.ts",
+              "state": "failed",
+              "errors": [
+                "lock held"
+              ],
+              "retries": 0
+            }
+          ],
+          "suites": [],
+          "unhandledErrors": []
+        }
+      },
+      "expected": {
+        "collection": {
+          "status": "succeeded",
+          "complete": true,
+          "missingInvocations": 0,
+          "compile": "ok"
+        },
+        "counts": {
+          "selected": 1,
+          "passed": 1,
+          "failed": 0,
+          "error": 0,
+          "skipped": 0,
+          "filtered": 0,
+          "cancelled": 0,
+          "blocked": 0,
+          "verified": 1,
+          "exploratory": 0
+        },
+        "examples": {
+          "dead.end": {
+            "outcome": "passed",
+            "verified": true,
+            "attempts": 1,
+            "priorFailures": 0,
+            "suiteFailedAfter": []
+          },
+          "ex.child": {
+            "outcome": "error",
+            "verified": false,
+            "attempts": 1,
+            "priorFailures": 0,
+            "suiteFailedAfter": []
+          }
+        },
+        "suites": []
+      }
+    },
+    {
+      "scenario": "capture-failed-native-passed",
+      "why": "The test passed but its view failed validation: native passed + capture failed = a failing collection and an unverified example (decision: native outcome and capture outcome are separate).",
+      "input": {
+        "runId": "run-fixture",
+        "selected": [
+          "ex.a"
+        ],
+        "testNames": {
+          "ex.a": "example:ex.a"
+        },
+        "exit": {
+          "code": 0,
+          "signal": null,
+          "timedOut": false,
+          "cancelled": false
+        },
+        "compile": "ok",
+        "skipped": [],
+        "filtered": [],
+        "invocations": [
+          {
+            "started": {
+              "id": "inv-1",
+              "exampleId": "ex.a",
+              "attempt": 1,
+              "parent": null,
+              "startedAt": "2026-11-11T12:00:00Z"
+            },
+            "completed": {
+              "id": "inv-1",
+              "exampleId": "ex.a",
+              "attempt": 1,
+              "parent": null,
+              "native": {
+                "outcome": "passed"
+              },
+              "capture": {
+                "outcome": "failed",
+                "diagnostics": [
+                  "diag-9"
+                ]
+              },
+              "checks": [
+                {
+                  "claim": "C",
+                  "passed": true
+                }
+              ],
+              "result": null,
+              "startedAt": "2026-11-11T12:00:00Z",
+              "finishedAt": "2026-11-11T12:00:01Z"
+            }
+          }
+        ],
+        "native": {
+          "schemaVersion": "paneweft.vitest-report/1",
+          "runId": "run-fixture",
+          "vitestVersion": "5.1.0",
+          "tests": [
+            {
+              "name": "example:ex.a",
+              "file": "tests/x.paneweft.test.ts",
+              "state": "passed",
+              "errors": [],
+              "retries": 0
+            }
+          ],
+          "suites": [],
+          "unhandledErrors": []
+        }
+      },
+      "expected": {
+        "collection": {
+          "status": "failed",
+          "complete": true,
+          "missingInvocations": 0,
+          "compile": "ok"
+        },
+        "counts": {
+          "selected": 1,
+          "passed": 1,
+          "failed": 0,
+          "error": 0,
+          "skipped": 0,
+          "filtered": 0,
+          "cancelled": 0,
+          "blocked": 0,
+          "verified": 0,
+          "exploratory": 0
+        },
+        "examples": {
+          "ex.a": {
+            "outcome": "passed",
+            "verified": false,
+            "attempts": 1,
+            "priorFailures": 0,
+            "suiteFailedAfter": []
+          }
+        },
+        "suites": []
+      }
+    },
+    {
+      "scenario": "skipped-and-filtered-are-distinct",
+      "why": "An ignored example is `skipped`; an example that the runner never reached because of the filter is `filtered` (S6).",
+      "input": {
+        "runId": "run-fixture",
+        "selected": [
+          "ex.a",
+          "ex.skip",
+          "ex.filtered"
+        ],
+        "testNames": {
+          "ex.a": "example:ex.a",
+          "ex.skip": "example:ex.skip",
+          "ex.filtered": "example:ex.filtered"
+        },
+        "exit": {
+          "code": 0,
+          "signal": null,
+          "timedOut": false,
+          "cancelled": false
+        },
+        "compile": "ok",
+        "skipped": [
+          "ex.skip"
+        ],
+        "filtered": [
+          "ex.filtered"
+        ],
+        "invocations": [
+          {
+            "started": {
+              "id": "inv-1",
+              "exampleId": "ex.a",
+              "attempt": 1,
+              "parent": null,
+              "startedAt": "2026-11-11T12:00:00Z"
+            },
+            "completed": {
+              "id": "inv-1",
+              "exampleId": "ex.a",
+              "attempt": 1,
+              "parent": null,
+              "native": {
+                "outcome": "passed"
+              },
+              "capture": {
+                "outcome": "captured",
+                "captureId": "inv-1",
+                "diagnostics": []
+              },
+              "checks": [
+                {
+                  "claim": "C",
+                  "passed": true
+                }
+              ],
+              "result": {
+                "captureId": "inv-1",
+                "object": "o1"
+              },
+              "startedAt": "2026-11-11T12:00:00Z",
+              "finishedAt": "2026-11-11T12:00:01Z"
+            }
+          }
+        ],
+        "native": {
+          "schemaVersion": "paneweft.vitest-report/1",
+          "runId": "run-fixture",
+          "vitestVersion": "5.1.0",
+          "tests": [
+            {
+              "name": "example:ex.a",
+              "file": "tests/x.paneweft.test.ts",
+              "state": "passed",
+              "errors": [],
+              "retries": 0
+            },
+            {
+              "name": "example:ex.skip",
+              "file": "tests/x.paneweft.test.ts",
+              "state": "skipped",
+              "errors": [],
+              "retries": 0
+            }
+          ],
+          "suites": [],
+          "unhandledErrors": []
+        }
+      },
+      "expected": {
+        "collection": {
+          "status": "succeeded",
+          "complete": true,
+          "missingInvocations": 0,
+          "compile": "ok"
+        },
+        "counts": {
+          "selected": 3,
+          "passed": 1,
+          "failed": 0,
+          "error": 0,
+          "skipped": 1,
+          "filtered": 1,
+          "cancelled": 0,
+          "blocked": 0,
+          "verified": 1,
+          "exploratory": 0
+        },
+        "examples": {
+          "ex.a": {
+            "outcome": "passed",
+            "verified": true,
+            "attempts": 1,
+            "priorFailures": 0,
+            "suiteFailedAfter": []
+          },
+          "ex.skip": {
+            "outcome": "skipped",
+            "verified": false,
+            "attempts": 1,
+            "priorFailures": 0,
+            "suiteFailedAfter": []
+          },
+          "ex.filtered": {
+            "outcome": "filtered",
+            "verified": false,
+            "attempts": 1,
+            "priorFailures": 0,
+            "suiteFailedAfter": []
+          }
+        },
+        "suites": []
+      }
+    },
+    {
+      "scenario": "worker-crash-has-no-completion-record",
+      "why": "A started record without a completion record is a missing invocation: the example is an `error` (worker aborted), the collection is incomplete and says how many are missing (IV17).",
+      "input": {
+        "runId": "run-fixture",
+        "selected": [
+          "ex.a",
+          "ex.b"
+        ],
+        "testNames": {
+          "ex.a": "example:ex.a",
+          "ex.b": "example:ex.b"
+        },
+        "exit": {
+          "code": 101,
+          "signal": "SIGABRT",
+          "timedOut": false,
+          "cancelled": false
+        },
+        "compile": "ok",
+        "skipped": [],
+        "filtered": [],
+        "invocations": [
+          {
+            "started": {
+              "id": "inv-1",
+              "exampleId": "ex.a",
+              "attempt": 1,
+              "parent": null,
+              "startedAt": "2026-11-11T12:00:00Z"
+            },
+            "completed": {
+              "id": "inv-1",
+              "exampleId": "ex.a",
+              "attempt": 1,
+              "parent": null,
+              "native": {
+                "outcome": "passed"
+              },
+              "capture": {
+                "outcome": "captured",
+                "captureId": "inv-1",
+                "diagnostics": []
+              },
+              "checks": [
+                {
+                  "claim": "C",
+                  "passed": true
+                }
+              ],
+              "result": {
+                "captureId": "inv-1",
+                "object": "o1"
+              },
+              "startedAt": "2026-11-11T12:00:00Z",
+              "finishedAt": "2026-11-11T12:00:01Z"
+            }
+          },
+          {
+            "started": {
+              "id": "inv-2",
+              "exampleId": "ex.b",
+              "attempt": 1,
+              "parent": null,
+              "startedAt": "2026-11-11T12:00:00Z"
+            },
+            "completed": null
+          }
+        ],
+        "native": {
+          "schemaVersion": "paneweft.vitest-report/1",
+          "runId": "run-fixture",
+          "vitestVersion": "5.1.0",
+          "tests": [
+            {
+              "name": "example:ex.a",
+              "file": "tests/x.paneweft.test.ts",
+              "state": "passed",
+              "errors": [],
+              "retries": 0
+            }
+          ],
+          "suites": [],
+          "unhandledErrors": []
+        }
+      },
+      "expected": {
+        "collection": {
+          "status": "incomplete",
+          "complete": false,
+          "missingInvocations": 1,
+          "compile": "ok"
+        },
+        "counts": {
+          "selected": 2,
+          "passed": 1,
+          "failed": 0,
+          "error": 1,
+          "skipped": 0,
+          "filtered": 0,
+          "cancelled": 0,
+          "blocked": 0,
+          "verified": 1,
+          "exploratory": 0
+        },
+        "examples": {
+          "ex.a": {
+            "outcome": "passed",
+            "verified": true,
+            "attempts": 1,
+            "priorFailures": 0,
+            "suiteFailedAfter": []
+          },
+          "ex.b": {
+            "outcome": "error",
+            "verified": false,
+            "attempts": 1,
+            "priorFailures": 0,
+            "suiteFailedAfter": []
+          }
+        },
+        "suites": [
+          {
+            "phase": "binary",
+            "outcome": "aborted",
+            "examples": [
+              "ex.b"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "scenario": "compile-failure",
+      "why": "The build failed, nothing ran: every selected example is `error` (not run) and the collection says compile failed (IV17, IV18).",
+      "input": {
+        "runId": "run-fixture",
+        "selected": [
+          "ex.a",
+          "ex.b"
+        ],
+        "testNames": {
+          "ex.a": "example:ex.a",
+          "ex.b": "example:ex.b"
+        },
+        "exit": {
+          "code": 101,
+          "signal": null,
+          "timedOut": false,
+          "cancelled": false
+        },
+        "compile": "failed",
+        "skipped": [],
+        "filtered": [],
+        "invocations": [],
+        "native": {
+          "typecheck": {
+            "exitCode": 2,
+            "output": "src/mappings/containerMappings.paneweft.ts(17,75): error TS2339: Property 'tick' does not exist."
+          }
+        }
+      },
+      "expected": {
+        "collection": {
+          "status": "failed",
+          "complete": false,
+          "missingInvocations": 2,
+          "compile": "failed"
+        },
+        "counts": {
+          "selected": 2,
+          "passed": 0,
+          "failed": 0,
+          "error": 2,
+          "skipped": 0,
+          "filtered": 0,
+          "cancelled": 0,
+          "blocked": 0,
+          "verified": 0,
+          "exploratory": 0
+        },
+        "examples": {
+          "ex.a": {
+            "outcome": "error",
+            "verified": false,
+            "attempts": 1,
+            "priorFailures": 0,
+            "suiteFailedAfter": []
+          },
+          "ex.b": {
+            "outcome": "error",
+            "verified": false,
+            "attempts": 1,
+            "priorFailures": 0,
+            "suiteFailedAfter": []
+          }
+        },
+        "suites": []
+      }
+    },
+    {
+      "scenario": "timeout",
+      "why": "The collection deadline killed the process group: unfinished examples are `cancelled`, the collection is timed-out, completed examples keep their result (IV17).",
+      "input": {
+        "runId": "run-fixture",
+        "selected": [
+          "ex.a",
+          "ex.b"
+        ],
+        "testNames": {
+          "ex.a": "example:ex.a",
+          "ex.b": "example:ex.b"
+        },
+        "exit": {
+          "code": null,
+          "signal": "SIGKILL",
+          "timedOut": true,
+          "cancelled": false
+        },
+        "compile": "ok",
+        "skipped": [],
+        "filtered": [],
+        "invocations": [
+          {
+            "started": {
+              "id": "inv-1",
+              "exampleId": "ex.a",
+              "attempt": 1,
+              "parent": null,
+              "startedAt": "2026-11-11T12:00:00Z"
+            },
+            "completed": {
+              "id": "inv-1",
+              "exampleId": "ex.a",
+              "attempt": 1,
+              "parent": null,
+              "native": {
+                "outcome": "passed"
+              },
+              "capture": {
+                "outcome": "captured",
+                "captureId": "inv-1",
+                "diagnostics": []
+              },
+              "checks": [
+                {
+                  "claim": "C",
+                  "passed": true
+                }
+              ],
+              "result": {
+                "captureId": "inv-1",
+                "object": "o1"
+              },
+              "startedAt": "2026-11-11T12:00:00Z",
+              "finishedAt": "2026-11-11T12:00:01Z"
+            }
+          },
+          {
+            "started": {
+              "id": "inv-2",
+              "exampleId": "ex.b",
+              "attempt": 1,
+              "parent": null,
+              "startedAt": "2026-11-11T12:00:00Z"
+            },
+            "completed": null
+          }
+        ],
+        "native": {
+          "schemaVersion": "paneweft.vitest-report/1",
+          "runId": "run-fixture",
+          "vitestVersion": "5.1.0",
+          "tests": [
+            {
+              "name": "example:ex.a",
+              "file": "tests/x.paneweft.test.ts",
+              "state": "passed",
+              "errors": [],
+              "retries": 0
+            }
+          ],
+          "suites": [],
+          "unhandledErrors": []
+        }
+      },
+      "expected": {
+        "collection": {
+          "status": "timed-out",
+          "complete": false,
+          "missingInvocations": 1,
+          "compile": "ok"
+        },
+        "counts": {
+          "selected": 2,
+          "passed": 1,
+          "failed": 0,
+          "error": 0,
+          "skipped": 0,
+          "filtered": 0,
+          "cancelled": 1,
+          "blocked": 0,
+          "verified": 1,
+          "exploratory": 0
+        },
+        "examples": {
+          "ex.a": {
+            "outcome": "passed",
+            "verified": true,
+            "attempts": 1,
+            "priorFailures": 0,
+            "suiteFailedAfter": []
+          },
+          "ex.b": {
+            "outcome": "cancelled",
+            "verified": false,
+            "attempts": 1,
+            "priorFailures": 0,
+            "suiteFailedAfter": []
+          }
+        },
+        "suites": []
+      }
+    },
+    {
+      "scenario": "cancelled",
+      "why": "A cancelled collection preserves completed examples and marks the rest `cancelled`; the collection status is cancelled, distinct from timed-out and failed (IV17, N2).",
+      "input": {
+        "runId": "run-fixture",
+        "selected": [
+          "ex.a",
+          "ex.b"
+        ],
+        "testNames": {
+          "ex.a": "example:ex.a",
+          "ex.b": "example:ex.b"
+        },
+        "exit": {
+          "code": null,
+          "signal": "SIGTERM",
+          "timedOut": false,
+          "cancelled": true
+        },
+        "compile": "ok",
+        "skipped": [],
+        "filtered": [],
+        "invocations": [
+          {
+            "started": {
+              "id": "inv-1",
+              "exampleId": "ex.a",
+              "attempt": 1,
+              "parent": null,
+              "startedAt": "2026-11-11T12:00:00Z"
+            },
+            "completed": {
+              "id": "inv-1",
+              "exampleId": "ex.a",
+              "attempt": 1,
+              "parent": null,
+              "native": {
+                "outcome": "passed"
+              },
+              "capture": {
+                "outcome": "captured",
+                "captureId": "inv-1",
+                "diagnostics": []
+              },
+              "checks": [
+                {
+                  "claim": "C",
+                  "passed": true
+                }
+              ],
+              "result": {
+                "captureId": "inv-1",
+                "object": "o1"
+              },
+              "startedAt": "2026-11-11T12:00:00Z",
+              "finishedAt": "2026-11-11T12:00:01Z"
+            }
+          },
+          {
+            "started": {
+              "id": "inv-2",
+              "exampleId": "ex.b",
+              "attempt": 1,
+              "parent": null,
+              "startedAt": "2026-11-11T12:00:00Z"
+            },
+            "completed": null
+          }
+        ],
+        "native": {
+          "schemaVersion": "paneweft.vitest-report/1",
+          "runId": "run-fixture",
+          "vitestVersion": "5.1.0",
+          "tests": [
+            {
+              "name": "example:ex.a",
+              "file": "tests/x.paneweft.test.ts",
+              "state": "passed",
+              "errors": [],
+              "retries": 0
+            }
+          ],
+          "suites": [],
+          "unhandledErrors": []
+        }
+      },
+      "expected": {
+        "collection": {
+          "status": "cancelled",
+          "complete": false,
+          "missingInvocations": 1,
+          "compile": "ok"
+        },
+        "counts": {
+          "selected": 2,
+          "passed": 1,
+          "failed": 0,
+          "error": 0,
+          "skipped": 0,
+          "filtered": 0,
+          "cancelled": 1,
+          "blocked": 0,
+          "verified": 1,
+          "exploratory": 0
+        },
+        "examples": {
+          "ex.a": {
+            "outcome": "passed",
+            "verified": true,
+            "attempts": 1,
+            "priorFailures": 0,
+            "suiteFailedAfter": []
+          },
+          "ex.b": {
+            "outcome": "cancelled",
+            "verified": false,
+            "attempts": 1,
+            "priorFailures": 0,
+            "suiteFailedAfter": []
+          }
+        },
+        "suites": []
+      }
+    },
+    {
+      "scenario": "teardown-failure-after-tests",
+      "why": "afterAll threw after the example passed: a suite outcome (phase teardown) shown on the example as 'suite failed after'; the example's own result stays passed but is not verified (S6; IV6 spirit).",
+      "input": {
+        "runId": "run-fixture",
+        "selected": [
+          "ex.a"
+        ],
+        "testNames": {
+          "ex.a": "example:ex.a"
+        },
+        "exit": {
+          "code": 1,
+          "signal": null,
+          "timedOut": false,
+          "cancelled": false
+        },
+        "compile": "ok",
+        "skipped": [],
+        "filtered": [],
+        "invocations": [
+          {
+            "started": {
+              "id": "inv-1",
+              "exampleId": "ex.a",
+              "attempt": 1,
+              "parent": null,
+              "startedAt": "2026-11-11T12:00:00Z"
+            },
+            "completed": {
+              "id": "inv-1",
+              "exampleId": "ex.a",
+              "attempt": 1,
+              "parent": null,
+              "native": {
+                "outcome": "passed"
+              },
+              "capture": {
+                "outcome": "captured",
+                "captureId": "inv-1",
+                "diagnostics": []
+              },
+              "checks": [
+                {
+                  "claim": "C",
+                  "passed": true
+                }
+              ],
+              "result": {
+                "captureId": "inv-1",
+                "object": "o1"
+              },
+              "startedAt": "2026-11-11T12:00:00Z",
+              "finishedAt": "2026-11-11T12:00:01Z"
+            }
+          }
+        ],
+        "native": {
+          "schemaVersion": "paneweft.vitest-report/1",
+          "runId": "run-fixture",
+          "vitestVersion": "5.1.0",
+          "tests": [
+            {
+              "name": "example:ex.a",
+              "file": "tests/x.paneweft.test.ts",
+              "state": "passed",
+              "errors": [],
+              "retries": 0
+            }
+          ],
+          "suites": [
+            {
+              "file": "tests/x.paneweft.test.ts",
+              "phase": "teardown",
+              "outcome": "failed",
+              "message": "teardown exploded",
+              "examples": [
+                "ex.a"
+              ]
+            }
+          ],
+          "unhandledErrors": []
+        }
+      },
+      "expected": {
+        "collection": {
+          "status": "failed",
+          "complete": true,
+          "missingInvocations": 0,
+          "compile": "ok"
+        },
+        "counts": {
+          "selected": 1,
+          "passed": 1,
+          "failed": 0,
+          "error": 0,
+          "skipped": 0,
+          "filtered": 0,
+          "cancelled": 0,
+          "blocked": 0,
+          "verified": 0,
+          "exploratory": 0
+        },
+        "examples": {
+          "ex.a": {
+            "outcome": "passed",
+            "verified": false,
+            "attempts": 1,
+            "priorFailures": 0,
+            "suiteFailedAfter": [
+              "suite-teardown"
+            ]
+          }
+        },
+        "suites": [
+          {
+            "phase": "teardown",
+            "outcome": "failed",
+            "examples": [
+              "ex.a"
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

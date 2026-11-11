@@ -1,0 +1,25 @@
+{
+  "why": "The pinned pilot topic of spec S9 (vigil 'where can a keepalive result stop being delivered?'). FIXTURE CONTENT: the questions, keys and evidence below exercise the harness; they were written for the harness and are not verified against vigil's source. The model pilot is a separate recorded run after week one.",
+  "topic": { "schemaVersion": "paneweft.benchmark-topic/1", "id": "vigil-keepalive", "title": "Where can a keepalive result stop being delivered?", "pinnedCommit": "d2a3d7624d5e21afc0714f63888642a869d2c70f", "questionIds": ["q-recall", "q-trace", "q-locate", "q-causal", "q-counterfactual", "q-boundary", "q-why-not"],
+    "plantedErrors": [{ "id": "planted-1", "claim": "A watch saved after a failed save is delivered exactly once.", "contradictedBy": ["EVIDENCE-REDELIVERY-EVENT"] }] },
+  "questions": [
+    { "schemaVersion": "paneweft.benchmark-question/1", "id": "q-recall", "topic": "vigil-keepalive", "kind": "recall", "text": "What does an event record besides its id?", "author": { "role": "question-author", "sawViews": false } },
+    { "schemaVersion": "paneweft.benchmark-question/1", "id": "q-trace", "topic": "vigil-keepalive", "kind": "trace", "text": "In order, what happens to a result between the judge and the caller?", "author": { "role": "question-author", "sawViews": false } },
+    { "schemaVersion": "paneweft.benchmark-question/1", "id": "q-locate", "topic": "vigil-keepalive", "kind": "locate", "text": "Which function decides that a watch has finished?", "author": { "role": "question-author", "sawViews": false } },
+    { "schemaVersion": "paneweft.benchmark-question/1", "id": "q-causal", "topic": "vigil-keepalive", "kind": "causal", "text": "Why can the same event id be delivered twice?", "author": { "role": "question-author", "sawViews": false } },
+    { "schemaVersion": "paneweft.benchmark-question/1", "id": "q-counterfactual", "topic": "vigil-keepalive", "kind": "counterfactual", "text": "What breaks if save failures stopped redelivering?", "author": { "role": "question-author", "sawViews": false } },
+    { "schemaVersion": "paneweft.benchmark-question/1", "id": "q-boundary", "topic": "vigil-keepalive", "kind": "boundary", "text": "What does the supplied material NOT tell you about network failures?", "author": { "role": "question-author", "sawViews": false } },
+    { "schemaVersion": "paneweft.benchmark-question/1", "id": "q-why-not", "topic": "vigil-keepalive", "kind": "why-not", "text": "Why was a userspace lock not used for the session?", "author": { "role": "question-author", "sawViews": false } }
+  ],
+  "keys": [
+    { "schemaVersion": "paneweft.benchmark-key/1", "questionId": "q-recall", "answer": "tick and a redelivered flag", "citations": [{ "kind": "code", "ref": "src/watch.rs:Event" }] },
+    { "schemaVersion": "paneweft.benchmark-key/1", "questionId": "q-trace", "answer": "judge, finish, save, deliver", "citations": [{ "kind": "code", "ref": "src/watch.rs:finish" }] },
+    { "schemaVersion": "paneweft.benchmark-key/1", "questionId": "q-locate", "answer": "WatchFile::finish", "citations": [{ "kind": "code", "ref": "src/watch.rs:finish" }] },
+    { "schemaVersion": "paneweft.benchmark-key/1", "questionId": "q-causal", "answer": "a failed save is retried and redelivers", "citations": [{ "kind": "code", "ref": "src/watch.rs:save" }] },
+    { "schemaVersion": "paneweft.benchmark-key/1", "questionId": "q-counterfactual", "answer": "lost events", "citations": [{ "kind": "code", "ref": "src/watch.rs:save" }] },
+    { "schemaVersion": "paneweft.benchmark-key/1", "questionId": "q-boundary", "answer": "the material does not cover network failures", "citations": [{ "kind": "code", "ref": "src/watch.rs" }] },
+    { "schemaVersion": "paneweft.benchmark-key/1", "questionId": "q-why-not", "answer": "three rounds of recovery protocol still had a crash window", "citations": [{ "kind": "trail", "ref": "write-lock/e1/userspace" }] }
+  ],
+  "material": { "text": "VIEW-MATERIAL watch.events lists e-1 tick 3 and e-1 tick 6 redelivered. EVIDENCE-REDELIVERY-EVENT: the second e-1 is a redelivery with different contents.", "trail": "TRAIL-MATERIAL write-lock e1: userspace failed, flock chosen.", "planted": "VIEW-MATERIAL (planted) A watch saved after a failed save is delivered exactly once. EVIDENCE-REDELIVERY-EVENT: the second e-1 is a redelivery." },
+  "code": [{ "path": "src/watch.rs", "text": "CODE-SENTINEL pub fn finish(&mut self) {}" }]
+}

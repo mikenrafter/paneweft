@@ -29,6 +29,13 @@ export interface TestRun {
      * Before/after hashing is a sample, not proof that the inputs never changed mid-run (S10).
      */
     sampledConsistency: "consistent-sampled" | "mixed-input" | "unverified";
+    /**
+     * The sampled member list (path, sha256), kept so staleness can name the changed files.
+     */
+    members?: {
+      path: string;
+      sha256: string;
+    }[];
   };
   collection: CollectionOutcome;
   suites: Suite[];

@@ -1,0 +1,82 @@
+{
+  "schemaVersion": "paneweft.test-run/1",
+  "runId": "run-a",
+  "collectionId": null,
+  "runner": {
+    "id": "cargo",
+    "version": "1.97.1",
+    "features": [
+      "paneweft"
+    ]
+  },
+  "inputFingerprint": {
+    "digest": "9f738d404bb2b367d1e820a4dc16c84ea29cfc1e3a8265fbeb4808f44c235f07",
+    "memberCount": 3,
+    "sampledConsistency": "consistent-sampled"
+  },
+  "collection": {
+    "status": "succeeded",
+    "exitCode": 0,
+    "signal": null,
+    "timedOut": false,
+    "cancelled": false,
+    "compile": "ok",
+    "complete": true,
+    "missingInvocations": 0,
+    "counts": {
+      "selected": 1,
+      "passed": 1,
+      "failed": 0,
+      "error": 0,
+      "skipped": 0,
+      "filtered": 0,
+      "cancelled": 0,
+      "blocked": 0,
+      "verified": 1,
+      "exploratory": 0
+    }
+  },
+  "suites": [],
+  "examples": [
+    {
+      "id": "node.cycle",
+      "attempts": [
+        "inv-1"
+      ],
+      "final": "inv-1",
+      "outcome": "passed",
+      "verified": true,
+      "priorFailures": [],
+      "suiteFailedAfter": []
+    }
+  ],
+  "invocations": [
+    {
+      "id": "inv-1",
+      "exampleId": "node.cycle",
+      "attempt": 1,
+      "parent": null,
+      "native": {
+        "outcome": "passed"
+      },
+      "capture": {
+        "outcome": "captured",
+        "captureId": "inv-1",
+        "diagnostics": []
+      },
+      "checks": [
+        {
+          "claim": "N1",
+          "passed": true
+        }
+      ],
+      "verified": true,
+      "result": {
+        "captureId": "inv-1",
+        "object": "o1"
+      },
+      "startedAt": "2026-11-11T12:00:00Z",
+      "finishedAt": "2026-11-11T12:00:01Z"
+    }
+  ]
+}

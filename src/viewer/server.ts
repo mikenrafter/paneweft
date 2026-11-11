@@ -27,6 +27,10 @@ export interface ViewerServerOptions {
   port?: number;
   /** Directory of bundled assets; default dist/viewer. */
   assetsDirectory?: string;
+  /** v1: the session directory, where renderers.trust.json lives (docs/v1-red-contract.md section 12). RED: not used yet. */
+  sessionDirectory?: string;
+  /** v1: clock for capability-token expiry (milliseconds since the epoch); default Date.now. RED: not used yet. */
+  clock?: () => number;
 }
 export interface ViewerServer {
   readonly host: string;

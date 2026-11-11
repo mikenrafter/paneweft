@@ -19,7 +19,6 @@ for (const [file, name] of Object.entries(GENERATED)) {
   const text = await compile(schema, name, { bannerComment: banner, additionalProperties: false, unknownAny: true, $refOptions: { resolve: { external: false, http: false, file: false } } });
   outputs.set(`${name}.ts`, text);
 }
-outputs.set("index.ts", `${banner}\n` + Object.values(GENERATED).map((name) => `export type * from "./${name}.ts";`).join("\n") + "\n");
 if (process.argv.includes("--check")) {
   let stale = false;
   for (const [name, content] of outputs) {

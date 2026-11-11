@@ -1,0 +1,138 @@
+#!/usr/bin/env node
+// A deterministic fake of the qex CLI for tests (docs/v1-red-contract.md section 8). State lives in $FAKE_QEX_DIR; behaviour is
+// steered by $FAKE_QEX_DIR/control.json, re-read on every call, so a test can change it between calls:
+//   failBeforeAck  submit exits 121 before creating anything
+//   crashAfterAck  submit creates (and starts) the job, then dies (exit 137) without printing the id or writing --id-file
+//   hold           a submitted job stays `queued` until `qex __release ID`
+//   startDelayMs   the job sits in `starting` this long before it runs
+//   listFails      `qex list` exits 121
+// Every invocation appends its argv to calls.jsonl. Jobs run detached in their own process group; `kill` signals that group.
+import { spawn } from "node:child_process";
+import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, writeFileSync, watch } from "node:fs";
+import { join } from "node:path";
+
+const DIR = process.env.FAKE_QEX_DIR;
+if (!DIR) { console.error("FAKE_QEX_DIR is not set"); process.exit(121); }
+mkdirSync(join(DIR, "jobs"), { recursive: true });
+const argv = process.argv.slice(2);
+appendFileSync(join(DIR, "calls.jsonl"), JSON.stringify(argv) + "\n");
+const control = () => { try { return JSON.parse(readFileSync(join(DIR, "control.json"), "utf8")); } catch { return {}; } };
+const jobFile = (id) => join(DIR, "jobs", `${id}.json`);
+const readJob = (id) => { try { return JSON.parse(readFileSync(jobFile(id), "utf8")); } catch { return null; } };
+const writeJob = (job) => { const tmp = jobFile(job.id) + ".tmp"; writeFileSync(tmp, JSON.stringify(job)); renameSync(tmp, jobFile(job.id)); };
+const allJobs = () => readdirSync(join(DIR, "jobs")).filter((n) => n.endsWith(".json")).map((n) => readJob(n.slice(0, -5))).filter(Boolean).sort((a, b) => a.sequence - b.sequence);
+const TERMINAL = ["completed", "failed", "killed", "timeout", "cancelled"];
+const now = () => new Date().toISOString();
+const die = (code, message) => { if (message) console.error(message); process.exit(code); };
+
+function takeOption(list, flag, hasValue = true) {
+  const at = list.indexOf(flag);
+  if (at < 0) return undefined;
+  const value = hasValue ? list[at + 1] : true;
+  list.splice(at, hasValue ? 2 : 1);
+  return value;
+}
+function takeAll(list, flag) { const values = []; for (;;) { const v = takeOption(list, flag); if (v === undefined) return values; values.push(v); } }
+
+const [command, ...rest] = argv;
+switch (command) {
+  case "submit": submit(rest); break;
+  case "list": list(rest); break;
+  case "status": status(rest); break;
+  case "cancel": cancel(rest); break;
+  case "kill": kill(rest); break;
+  case "logs": logs(rest); break;
+  case "wait": status([...rest, "--wait"]); break;
+  case "version": console.log("fake-qex 0.0.0"); break;
+  case "__release": release(rest[0]); break;
+  case "__supervise": supervise(rest[0]); break;
+  default: die(121, `fake qex: unsupported command ${command}`);
+}
+
+function submit(args) {
+  const c = control();
+  if (c.failBeforeAck) die(121, "fake qex: coordinator unavailable");
+  const split = args.indexOf("--");
+  const options = split < 0 ? args : args.slice(0, split);
+  const commandLine = split < 0 ? [] : args.slice(split + 1);
+  const dedupeKey = takeOption(options, "--dedupe-key");
+  takeOption(options, "--dedupe-window");
+  const idFile = takeOption(options, "--id-file");
+  const name = takeOption(options, "--name") ?? "job";
+  const cwd = takeOption(options, "--cwd") ?? process.cwd();
+  const env = Object.fromEntries(takeAll(options, "--env").map((pair) => [pair.slice(0, pair.indexOf("=")), pair.slice(pair.indexOf("=") + 1)]));
+  for (const flag of ["--cpu", "--mem", "--tag", "--timeout", "--priority"]) takeAll(options, flag);
+  if (dedupeKey !== undefined) {
+    const existing = allJobs().find((j) => j.dedupe_key === dedupeKey);
+    if (existing) { console.log(existing.id); process.exit(0); }
+  }
+  const sequence = allJobs().length + 1;
+  const job = { id: `fq-${sequence}`, sequence, name, state: "queued", command: commandLine, cwd, env, dedupe_key: dedupeKey ?? null, pid: null, exit_code: null, signal: null, submitted_at: now(), started_at: null, finished_at: null, tags: [] };
+  writeJob(job);
+  if (!c.hold) start(job.id, c.startDelayMs ?? 0);
+  if (c.crashAfterAck) process.exit(137);
+  if (idFile) { writeFileSync(idFile + ".tmp", job.id + "\n"); renameSync(idFile + ".tmp", idFile); }
+  console.log(job.id);
+}
+
+function start(id, delayMs) {
+  const child = spawn(process.execPath, [new URL(import.meta.url).pathname, "__supervise", id, String(delayMs)], { detached: true, stdio: "ignore", env: process.env });
+  child.unref();
+}
+
+function supervise(id) {
+  const delay = Number(process.argv[4] ?? 0);
+  const begin = () => {
+    const job = readJob(id);
+    if (!job || job.state === "cancelled") return;
+    const logFd = openSync(join(DIR, `${id}.log`), "a");
+    const child = spawn(job.command[0], job.command.slice(1), { cwd: job.cwd, env: { ...process.env, ...job.env }, detached: true, stdio: ["ignore", logFd, logFd] });
+    child.on("error", (error) => { const j = readJob(id); writeJob({ ...j, state: "failed", exit_code: 127, finished_at: now(), error: String(error) }); process.exit(0); });
+    writeJob({ ...job, state: "running", pid: child.pid, started_at: now() });
+    child.on("exit", (code, signal) => {
+      const j = readJob(id);
+      if (TERMINAL.includes(j.state)) process.exit(0);
+      writeJob({ ...j, state: signal ? "killed" : code === 0 ? "completed" : "failed", exit_code: code, signal, pid: null, finished_at: now() });
+      process.exit(0);
+    });
+  };
+  const job = readJob(id);
+  if (delay > 0) { writeJob({ ...job, state: "starting" }); setTimeout(begin, delay); } else begin();
+}
+
+function release(id) { const job = readJob(id); if (job && job.state === "queued") start(id, 0); }
+
+function list() {
+  if (control().listFails) die(121, "fake qex: coordinator unavailable");
+  console.log(JSON.stringify(allJobs().map(({ env, ...job }) => job)));
+}
+
+function status(args) {
+  const id = args[0];
+  const wait = args.includes("--wait");
+  const print = (job) => { console.log(JSON.stringify(job)); process.exit(wait ? (job.exit_code ?? 0) : 0); };
+  const job = readJob(id);
+  if (!job) die(127, `fake qex: no job ${id}`);
+  if (!wait || TERMINAL.includes(job.state)) return print(job);
+  const watcher = watch(join(DIR, "jobs"), () => { const j = readJob(id); if (j && TERMINAL.includes(j.state)) { watcher.close(); print(j); } });
+}
+
+function cancel(args) {
+  const job = readJob(args[0]);
+  if (!job) die(127, `fake qex: no job ${args[0]}`);
+  if (job.state !== "queued") die(1, `fake qex: job ${job.id} is ${job.state}; only a queued job can be cancelled (use kill)`);
+  writeJob({ ...job, state: "cancelled", finished_at: now() });
+}
+
+function kill(args) {
+  const job = readJob(args[0]);
+  if (!job) die(127, `fake qex: no job ${args[0]}`);
+  if (!["starting", "running"].includes(job.state)) die(1, `fake qex: job ${job.id} is ${job.state}; nothing to kill`);
+  if (job.pid) { try { process.kill(-job.pid, "SIGKILL"); } catch { /* already gone */ } }
+  writeJob({ ...readJob(job.id), state: "killed", signal: "SIGKILL", pid: null, finished_at: now() });
+}
+
+function logs(args) {
+  const path = join(DIR, `${args[0]}.log`);
+  if (existsSync(path)) process.stdout.write(readFileSync(path));
+}

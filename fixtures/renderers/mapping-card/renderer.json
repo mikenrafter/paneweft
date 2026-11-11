@@ -1,0 +1,1 @@
+{ "id": "mapping-card", "apiVersion": 1, "title": "Container mapping card", "payloadSchema": { "type": "object", "additionalProperties": false, "required": ["originalIndex", "containerId", "backupName"], "properties": { "originalIndex": { "type": "integer" }, "containerId": { "type": "string" }, "backupName": { "type": "string" } } } }
