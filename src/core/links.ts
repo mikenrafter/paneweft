@@ -12,7 +12,7 @@ import type { NumberedLine } from "./anchors.ts";
 import { rankViews } from "./registry.ts";
 import { currentFileHash } from "./freshness.ts";
 import { viewItems, type AnyItem } from "./items.ts";
-import { compareCodeUnits } from "./canonical.ts";
+import { compareCodeUnits, ownValue } from "./canonical.ts";
 
 export type LinkTarget =
   | { snapshotId: string; viewId: string; itemId?: string }
@@ -142,7 +142,7 @@ export async function resolveItemSource(session: Session, key: ViewKey, itemId: 
   if (excerptView === undefined) return cannotOpen(`item "${itemId}" is anchored at ${anchor.path}:${anchor.lines[0]}-${anchor.lines[1]}, which no stored source excerpt of snapshot "${key.snapshotId}" covers`);
 
   const repository = envelope.freshness.repositories.find((candidate) => candidate.id === anchor.repository);
-  const recordedSha256 = repository?.files[anchor.path] ?? null;
+  const recordedSha256 = (repository === undefined ? undefined : ownValue(repository.files, anchor.path)) ?? null;
   const current = await currentFileHash(await session.repositories(), anchor.repository, anchor.path);
   const currentSha256 = current.state === "present" ? current.sha256 : null;
   const state: "fresh" | "stale" | "unknown" = current.state !== "present" ? "unknown" : currentSha256 !== null && currentSha256 === recordedSha256 ? "fresh" : "stale";

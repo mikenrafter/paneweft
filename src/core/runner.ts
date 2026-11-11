@@ -63,7 +63,7 @@ function substitute(argv: string[], parameters: Record<string, Scalar>): { argv:
   const issues: ValidationIssue[] = [];
   const result = argv.map((element) =>
     element.replace(/\{param:([A-Za-z0-9_.-]+)\}/g, (placeholder, name: string) => {
-      if (!(name in parameters)) {
+      if (!Object.hasOwn(parameters, name)) {
         issues.push({ code: "REQUIRED", pointer: `/parameters/${name}`, constraint: `required: ${name}`, hint: `The runner's argv uses ${placeholder}; supply a value for "${name}".` });
         return placeholder;
       }

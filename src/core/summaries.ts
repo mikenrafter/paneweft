@@ -10,7 +10,7 @@ import type { Envelope } from "./wire.ts";
 import type { FreshnessResult } from "./freshness.ts";
 import { viewItems, UNIT_OF_COMPONENT, type AnyItem } from "./items.ts";
 import { graphNeighborhood } from "./layout.ts";
-import { compareCodeUnits } from "./canonical.ts";
+import { compareCodeUnits, ownValue } from "./canonical.ts";
 import { jsonOfSlot, textOfSlot, type Entry, type Format, type Layout, type PageState } from "./pager.ts";
 
 export type Scalar = string | number | boolean | null;
@@ -89,7 +89,7 @@ function matches(item: AnyItem, filter: ViewFilter): boolean {
   }
   if (filter.columns !== undefined) {
     const cells = (item.cells ?? {}) as Record<string, Scalar>;
-    for (const [key, wanted] of Object.entries(filter.columns)) if (!(key in cells) || cells[key] !== wanted) return false;
+    for (const [key, wanted] of Object.entries(filter.columns)) if (!Object.hasOwn(cells, key) || cells[key] !== wanted) return false;
   }
   if (filter.provenance !== undefined && !filter.provenance.includes(item.provenance)) return false;
   if (filter.relation !== undefined && typeof item.relation === "string" && !filter.relation.includes(item.relation)) return false;
@@ -173,13 +173,13 @@ function listEntries(data: any, query: ViewQuery): Built {
   const sign = order.direction === "asc" ? 1 : -1;
   const rows = (data.rows as AnyItem[]).filter((row) => matches(row, query.filter)).sort((a, b) => {
     const cells = (row: AnyItem) => (row.cells ?? {}) as Record<string, Scalar>;
-    const byKey = compareScalar(cells(a)[order.key] ?? null, cells(b)[order.key] ?? null) * sign;
+    const byKey = compareScalar(ownValue(cells(a), order.key) ?? null, ownValue(cells(b), order.key) ?? null) * sign;
     return byKey !== 0 ? byKey : compareCodeUnits(a.id, b.id);
   });
   const firstKey = columns[0]?.key;
   const lines = rows.map((row) => {
     const cells = (row.cells ?? {}) as Record<string, Scalar>;
-    const head = firstKey !== undefined && firstKey in cells ? show(cells[firstKey]) : (row.label ?? row.id);
+    const head = firstKey !== undefined && Object.hasOwn(cells, firstKey) ? show(cells[firstKey]) : (row.label ?? row.id);
     return entry(row.id, row, `${oneLine(head)} -> ${entityPart(row)}; ${trailer(row)}`);
   });
   return { total: data.rows.length, matched: rows.length, entries: lines, bodyPrelude: [], jsonExtras: {}, footer: none, order };
@@ -225,7 +225,7 @@ function treeEntries(data: any, query: ViewQuery): Built {
     if (!keep.has(node.id)) continue;
     const context = !matchSet.has(node.id);
     const cells = (node.cells ?? {}) as Record<string, Scalar>;
-    const name = firstKey !== undefined && firstKey in cells ? show(cells[firstKey]) : (node.label ?? node.id);
+    const name = firstKey !== undefined && Object.hasOwn(cells, firstKey) ? show(cells[firstKey]) : (node.label ?? node.id);
     const children = (node.children as string[]) ?? [];
     const state = node.childrenState === "not_loaded" ? "not_loaded; children=?" : `${children.length > 0 ? "expanded" : "leaf"}; children=${children.length}`;
     const text = `${"  ".repeat(depth)}${oneLine(name)} [${state}; ${trailer(node)}]${context ? " [context]" : ""}`;

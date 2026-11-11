@@ -24,7 +24,7 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import type { Bundle, Entity, EntityRef, Envelope, ViewDefinition } from "./wire.ts";
 import type { OperationError, Result, ValidationIssue } from "./errors.ts";
-import { canonicalJson, compareCodeUnits } from "./canonical.ts";
+import { canonicalJson, compareCodeUnits, ownValue } from "./canonical.ts";
 import { canonicalSha256, sha256Hex } from "./digest.ts";
 import { viewItems } from "./items.ts";
 import { validateDefinition, validateRunOutput, validateSubmission, type DefinitionMetadata, type ReferenceContext } from "./validate.ts";
@@ -275,7 +275,7 @@ class DirectorySession implements Session {
   async snapshotInfo(snapshotId: string): Promise<Result<SnapshotInfo>> {
     return this.withReads(async () => {
       const manifest = await this.readManifest();
-      const snapshot = manifest.snapshots[snapshotId];
+      const snapshot = ownValue(manifest.snapshots, snapshotId);
       if (snapshot === undefined) return failure("NOT_FOUND", `no snapshot "${snapshotId}"`);
       const viewIds = [...new Set(manifest.views.filter((view) => view.snapshotId === snapshotId).map((view) => view.viewId))].sort(compareCodeUnits);
       return ok({ snapshotId, predecessor: snapshot.predecessor, viewIds });
@@ -500,9 +500,9 @@ class DirectorySession implements Session {
       if (existing === undefined) toStore.push({ envelope, hash });
     }
     for (const snapshotId of new Set([...content.entities.map((entity) => entity.snapshotId), ...content.views.map((view) => view.snapshotId)])) {
-      const known = manifest.snapshots[snapshotId];
+      const known = ownValue(manifest.snapshots, snapshotId);
       if (known === undefined) {
-        if (predecessor !== undefined && manifest.snapshots[predecessor] === undefined && !content.views.some((view) => view.snapshotId === predecessor) && !content.entities.some((entity) => entity.snapshotId === predecessor)) {
+        if (predecessor !== undefined && ownValue(manifest.snapshots, predecessor) === undefined && !content.views.some((view) => view.snapshotId === predecessor) && !content.entities.some((entity) => entity.snapshotId === predecessor)) {
           return { error: failure("NOT_FOUND", `predecessor snapshot "${predecessor}" does not exist`) };
         }
       } else if (predecessor !== undefined && known.predecessor !== predecessor && known.predecessor !== null) {
@@ -517,7 +517,8 @@ class DirectorySession implements Session {
     }
     const snapshots = { ...manifest.snapshots };
     for (const snapshotId of new Set([...content.entities.map((entity) => entity.snapshotId), ...content.views.map((view) => view.snapshotId)])) {
-      if (snapshots[snapshotId] === undefined) snapshots[snapshotId] = { predecessor: predecessor !== undefined && predecessor !== snapshotId ? predecessor : null };
+      // defineProperty: plain assignment of "__proto__" would set the prototype instead of adding the entry
+      if (ownValue(snapshots, snapshotId) === undefined) Object.defineProperty(snapshots, snapshotId, { value: { predecessor: predecessor !== undefined && predecessor !== snapshotId ? predecessor : null }, enumerable: true, writable: true, configurable: true });
     }
     const registryRevision = manifest.registryRevision + (registryChanged ? 1 : 0);
     const next: Manifest = { ...manifest, entities, definitions, views, pages, snapshots, registryRevision };

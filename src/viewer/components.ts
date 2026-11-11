@@ -9,7 +9,7 @@ import type { SourceOpening } from "../core/links.ts";
 import { computeGraphLayout, graphNeighborhood } from "../core/layout.ts";
 import { renderMarkdown } from "../core/markdown.ts";
 import { completenessLine, type ViewSummary } from "../core/summaries.ts";
-import { compareCodeUnits } from "../core/canonical.ts";
+import { compareCodeUnits, ownValue } from "../core/canonical.ts";
 import { append, h, svg, type Child } from "./dom.ts";
 import type { ViewModel } from "./source.ts";
 
@@ -130,7 +130,7 @@ function renderList(ctx: ComponentContext): HTMLElement {
     return h(ctx.doc, "div", {
       "data-pw": "row", role: "row", "data-id": row.id, "data-provenance": row.provenance, "aria-selected": ctx.selection.includes(row.id) ? "true" : "false", tabindex: row.id === rove ? 0 : -1,
     },
-    ...data.columns.map((column) => h(ctx.doc, "div", { "data-pw": "cell", role: "gridcell", "data-id": column.key }, formatCell(ctx, cells[column.key], column.format))),
+    ...data.columns.map((column) => h(ctx.doc, "div", { "data-pw": "cell", role: "gridcell", "data-id": column.key }, formatCell(ctx, ownValue(cells, column.key), column.format))),
     h(ctx.doc, "div", { role: "gridcell" }, ...factChildren(ctx, row, "actionable")));
   };
   const ungrouped = rows.filter((row) => typeof row.group !== "string");
@@ -195,7 +195,7 @@ function renderTree(ctx: ComponentContext): HTMLElement {
       "aria-expanded": can ? String(expandedState(ctx, flat, true)) : undefined, "data-children-state": String(node.childrenState), tabindex: node.id === rove ? 0 : -1,
     },
     can && h(ctx.doc, "button", { type: "button", "data-pw": "toggle", "data-item": node.id, "aria-label": `Toggle ${node.id}` }),
-    ...data.columns.map((column) => h(ctx.doc, "span", { "data-pw": "cell", "data-id": column.key }, formatCell(ctx, cells[column.key], column.format))),
+    ...data.columns.map((column) => h(ctx.doc, "span", { "data-pw": "cell", "data-id": column.key }, formatCell(ctx, ownValue(cells, column.key), column.format))),
     ...badge(ctx, node, false),
     node.childrenState === "not_loaded" && h(ctx.doc, "span", { "data-pw": "load-affordance" }, "needs evidence: children not loaded"),
     ...(hasTarget(node) ? actions(ctx, node) : [noTarget(ctx)]));
