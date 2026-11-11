@@ -154,14 +154,14 @@ describe("[S9] topic admission", () => {
     expect(KINDS.sort()).toEqual([...QUESTION_KINDS].sort());
     expect(fixture.topic.title).toBe("Where can a keepalive result stop being delivered?");
     for (const doc of [fixture.topic, ...fixture.questions, ...fixture.keys]) expect(validateAgainstV1("urn:paneweft:schema:v1:benchmark:1", doc), doc.id ?? doc.questionId).toEqual([]);
-    expect(must(validateTopic(fixture.topic, fixture.keys, { text: material.planted, trail: material.trail }), "admit")).toBe(true);
+    expect(must(validateTopic(fixture.topic, fixture.keys, { text: material.planted, trail: material.trail }, fixture.questions), "admit")).toBe(true);
   });
 
   // why: S9. A planted error that the supplied material does not contradict is undetectable: admitting it would make the detection
   // rate meaningless. The pointer names the planted error.
   // proves: CLAIM(S9-planted-error)
   it("refuses an undetectable planted error", () => {
-    const error = mustFail(validateTopic(fixture.topic, fixture.keys, { text: "VIEW-MATERIAL says nothing relevant", trail: material.trail }), "undetectable");
+    const error = mustFail(validateTopic(fixture.topic, fixture.keys, { text: "VIEW-MATERIAL says nothing relevant", trail: material.trail }, fixture.questions), "undetectable");
     expect(error.errors.map((e) => e.pointer)).toContain("/plantedErrors/0/contradictedBy");
   });
 
@@ -171,7 +171,62 @@ describe("[S9] topic admission", () => {
   it("refuses a why-not key that cites code alone", () => {
     const keys = structuredClone(fixture.keys);
     keys.find((k: any) => k.questionId === "q-why-not").citations = [{ kind: "code", ref: "src/write-lock.ts:1" }];
-    const error = mustFail(validateTopic(fixture.topic, keys, { text: material.planted, trail: material.trail }), "code only");
+    const error = mustFail(validateTopic(fixture.topic, keys, { text: material.planted, trail: material.trail }, fixture.questions), "code only");
     expect(error.errors.map((e) => e.pointer)).toContain("/keys/6/citations");
+  });
+});
+
+describe("[S21] a key is checked against its question's kind", () => {
+  const material = fixture.material;
+  /** The pilot topic with the why-not question renamed (the ids are names; the kind is unchanged). */
+  const renamed = (id: string) => {
+    const questions = structuredClone(fixture.questions);
+    const keys = structuredClone(fixture.keys);
+    const topic = structuredClone(fixture.topic);
+    questions.find((q: any) => q.id === "q-why-not").id = id;
+    keys.find((k: any) => k.questionId === "q-why-not").questionId = id;
+    topic.questionIds = topic.questionIds.map((q: string) => (q === "q-why-not" ? id : q));
+    return { questions, keys, topic };
+  };
+
+  // why: S21. The why-not evidence rule was decided by `/why-not/.test(questionId)`, so a why-not question named q1 needed no trail or recorded evidence at all. The
+  // key belongs to a question and the question's kind decides. Rejects the implementation that reads the id.
+  // proves: CLAIM(S21-key-kind)
+  it("holds a why-not question named q1 to the evidence rule", () => {
+    const { questions, keys, topic } = renamed("q1");
+    keys.find((k: any) => k.questionId === "q1").citations = [{ kind: "code", ref: "src/write-lock.ts:1" }];
+    const error = mustFail(validateTopic(topic, keys, { text: material.planted, trail: material.trail }, questions), "code only, under a neutral id");
+    expect(error.errors.map((e) => e.pointer)).toContain("/keys/6/citations");
+  });
+
+  // why: S21. The converse: a question that is NOT a why-not, whose id happens to contain the words, is not held to the rule.
+  // proves: CLAIM(S21-key-kind)
+  it("does not hold a recall question called why-not-recall to it", () => {
+    const { questions, keys, topic } = renamed("q1");
+    questions.find((q: any) => q.id === "q-recall").id = "why-not-recall";
+    keys.find((k: any) => k.questionId === "q-recall").questionId = "why-not-recall";
+    topic.questionIds = topic.questionIds.map((q: string) => (q === "q-recall" ? "why-not-recall" : q));
+    expect(must(validateTopic(topic, keys, { text: material.planted, trail: material.trail }, questions), "admitted")).toBe(true);
+  });
+
+  // why: S21. A key whose question was never authored cannot be checked against any kind: it is a dangling reference, not a pass.
+  // proves: CLAIM(S21-key-kind)
+  it("refuses a key for a question that does not exist", () => {
+    const keys = [...structuredClone(fixture.keys), { schemaVersion: "paneweft.benchmark-key/1", questionId: "q-ghost", answer: "x", citations: [{ kind: "code", ref: "a:1" }] }];
+    const error = mustFail(validateTopic(fixture.topic, keys, { text: material.planted, trail: material.trail }, fixture.questions), "ghost key");
+    expect(error.errors.map((e) => e.pointer)).toContain("/keys/7/questionId");
+  });
+
+  // why: S21 through the harness: a run whose author wrote a code-only key for a why-not question named q1 is refused before any student call.
+  // proves: CLAIM(S21-key-kind)
+  it("refuses the run before the student is asked", async () => {
+    const { questions, keys, topic } = renamed("q1");
+    keys.find((k: any) => k.questionId === "q1").citations = [{ kind: "code", ref: "src/write-lock.ts:1" }];
+    const m = mocks();
+    const author = m.models["question-author"];
+    m.models["question-author"] = { family: author.family, complete: async (call) => { m.calls.push(call); return JSON.stringify({ questions, keys }); } };
+    const error = mustFail(await runBenchmark(config(m, { topic })), "admission");
+    expect(error.code).toBe("VALIDATION_FAILED");
+    expect(m.calls.filter((c) => c.role === "student")).toEqual([]);
   });
 });

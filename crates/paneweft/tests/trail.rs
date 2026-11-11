@@ -63,3 +63,29 @@ fn the_rust_trail_equals_the_shared_literal_fixture() {
     );
     assert_eq!(trail.to_json(), fixture);
 }
+
+// why: S20. The builder always wrote `links: []`, so a Rust trail could not point at the view, source, example or type behind a decision. A link
+// keeps its kind, target and snapshot; a source link keeps its anchor. The expected document is written out by hand (the TypeScript builder passes the same members through).
+// proves: CLAIM(S20-trail-links)
+#[test]
+fn an_entry_keeps_its_snapshot_bound_links() {
+    use paneweft::trail::{LinkKind, TrailLink};
+    let trail = Trail::new("t", "T").entry(
+        TrailEntry::new("e1", 1, "q?")
+            .option(TrailOption::new("a", OptionStatus::Chosen, "r"))
+            .decision("a")
+            .link(TrailLink::new(LinkKind::View, "lock.state", "snap-run-7"))
+            .link(TrailLink::new(LinkKind::Source, "src/lock.rs", "snap-run-7").anchored("vg", "src/lock.rs", 10, 20))
+            .link(TrailLink::new(LinkKind::Example, "lock.userspace-recovery", "snap-run-8"))
+            .link(TrailLink::new(LinkKind::Type, "vigil::lock::Lock", "snap-run-7")),
+    );
+    assert_eq!(
+        trail.to_json()["entries"][0]["links"],
+        json!([
+            {"kind": "view", "id": "lock.state", "snapshotId": "snap-run-7"},
+            {"kind": "source", "id": "src/lock.rs", "snapshotId": "snap-run-7", "anchor": {"repository": "vg", "path": "src/lock.rs", "lines": [10, 20]}},
+            {"kind": "example", "id": "lock.userspace-recovery", "snapshotId": "snap-run-8"},
+            {"kind": "type", "id": "vigil::lock::Lock", "snapshotId": "snap-run-7"}
+        ])
+    );
+}

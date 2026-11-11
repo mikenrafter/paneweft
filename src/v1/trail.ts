@@ -69,6 +69,10 @@ export function lowerTrail(trail: Trail, context: TrailContext): Result<{ blocks
     }
     const successor = trail.entries.slice(entryIndex + 1).find((later) => later.supersedes === entry.id);
     blocks.push({ id: `${entry.id}-decision`, kind: "prose", markdown: `**Decision:** ${entry.decision}${successor === undefined ? "" : ` (superseded by ${successor.id})`}`, ...base, evidence: trailEvidence });
+    // S20: the entry's links keep their kind, target and SNAPSHOT in the notebook output (a source link also keeps its anchor), after the decision they belong to
+    for (const [linkIndex, link] of entry.links.entries()) {
+      blocks.push({ id: `${entry.id}-link-${linkIndex + 1}`, kind: "prose", markdown: `Link (${link.kind}): \`${link.id}\` in snapshot \`${link.snapshotId}\``, ...(link.anchor === undefined ? {} : { anchor: link.anchor }), ...base, evidence: trailEvidence });
+    }
     if (entry.deadEndExample !== undefined) blocks.push({ id: `${entry.id}-dead-end`, kind: "example", exampleId: entry.deadEndExample, ...base, evidence: trailEvidence });
   }
   return ok({ blocks });

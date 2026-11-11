@@ -70,3 +70,39 @@ describe("[S8] lowering", () => {
     expect(blocks.find((b) => b.id === "e1-decision")!.markdown).toContain("superseded by e2");
   });
 });
+
+describe("[S20] links survive lowering", () => {
+  const withLinks = () => {
+    const trail = lock();
+    trail.entries[0].links = [
+      { kind: "view", id: "lock.state", snapshotId: "snap-run-7" },
+      { kind: "source", id: "src/lock.rs", snapshotId: "snap-run-7", anchor: { repository: "vg", path: "src/lock.rs", lines: [10, 20] } },
+      { kind: "example", id: "lock.userspace-recovery", snapshotId: "snap-run-8" },
+      { kind: "type", id: "vigil::lock::Lock", snapshotId: "snap-run-7" },
+    ];
+    return trail;
+  };
+
+  // why: S20. lowerTrail read an entry's decision, options and dead end and dropped `entry.links`, so a trail that pointed at the view, source, example and
+  // type behind a decision lowered to a notebook with no pointer to any of them. One block per link follows its decision, in order, naming the kind, the target and the
+  // SNAPSHOT it was bound to (two links of one entry may belong to different snapshots); a source link keeps its anchor. Rejects a lowering that never reads `links`.
+  // proves: CLAIM(S20-trail-links) CLAIM(S8-trail-contract)
+  it("lowers every link to a block that keeps its kind, target, snapshot and anchor", () => {
+    const blocks = must(lowerTrail(withLinks(), context), "lower").blocks;
+    expect(blocks.map((b) => b.id)).toEqual(["e1-question", "e1-option-userspace", "e1-option-flock", "e1-decision", "e1-link-1", "e1-link-2", "e1-link-3", "e1-link-4", "e1-dead-end"]);
+    expect(blocks.filter((b) => String(b.id).includes("-link-"))).toEqual([
+      { id: "e1-link-1", kind: "prose", markdown: "Link (view): `lock.state` in snapshot `snap-run-7`", provenance: "read", evidence: ["trail"] },
+      { id: "e1-link-2", kind: "prose", markdown: "Link (source): `src/lock.rs` in snapshot `snap-run-7`", anchor: { repository: "vg", path: "src/lock.rs", lines: [10, 20] }, provenance: "read", evidence: ["trail"] },
+      { id: "e1-link-3", kind: "prose", markdown: "Link (example): `lock.userspace-recovery` in snapshot `snap-run-8`", provenance: "read", evidence: ["trail"] },
+      { id: "e1-link-4", kind: "prose", markdown: "Link (type): `vigil::lock::Lock` in snapshot `snap-run-7`", provenance: "read", evidence: ["trail"] },
+    ]);
+  });
+
+  // why: S20. The lowered blocks with links are still a valid notebook component.
+  // proves: CLAIM(S20-trail-links)
+  it("keeps the notebook schema satisfied", () => {
+    const lowered = must(lowerTrail(withLinks(), context), "lower");
+    const validate = createV1SchemaRegistry().getSchema(componentSchemaId("notebook"))!;
+    expect(validate(lowered), JSON.stringify(validate.errors)).toBe(true);
+  });
+});

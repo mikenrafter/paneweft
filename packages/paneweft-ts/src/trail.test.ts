@@ -34,3 +34,15 @@ describe("[S8] trail builder", () => {
     expect(json.entries[0].supersedes).toBeUndefined();
   });
 });
+
+describe("[S20] trail links in the TypeScript builder", () => {
+  // why: S20. The TypeScript builder passes links through; this pins that a source link's anchor and each link's snapshot are kept, the same document the Rust builder writes.
+  // proves: CLAIM(S20-trail-links)
+  it("keeps a source link's anchor and every link's snapshot", () => {
+    const json = trail("t", "T").entry({
+      id: "e1", order: 1, question: "q?", options: [{ id: "a", status: "chosen", reason: "r" }], decision: "a",
+      links: [{ kind: "view", id: "lock.state", snapshotId: "snap-run-7" }, { kind: "source", id: "src/lock.rs", snapshotId: "snap-run-7", anchor: { repository: "vg", path: "src/lock.rs", lines: [10, 20] } }],
+    }).toJSON() as any;
+    expect(json.entries[0].links).toEqual([{ kind: "view", id: "lock.state", snapshotId: "snap-run-7" }, { kind: "source", id: "src/lock.rs", snapshotId: "snap-run-7", anchor: { repository: "vg", path: "src/lock.rs", lines: [10, 20] } }]);
+  });
+});

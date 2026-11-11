@@ -49,7 +49,14 @@ export function validateFrameMessage(
   const seq = candidate.seq as number;
   if (seq <= state.lastSeq) return reject("SEQ_NOT_MONOTONIC");
   if (!(RENDERER_TYPES as readonly string[]).includes(candidate.type)) return reject("UNKNOWN_TYPE");
-  if (new TextEncoder().encode(JSON.stringify(candidate)).length > FRAME_MESSAGE_MAX_BYTES) return reject("TOO_LARGE");
+  // postMessage clones what JSON cannot carry (cycles, BigInt), and a hostile toJSON can throw: a message that cannot be measured is malformed
+  let size: number;
+  try {
+    size = new TextEncoder().encode(JSON.stringify(candidate)).length;
+  } catch {
+    return reject("BAD_SHAPE");
+  }
+  if (size > FRAME_MESSAGE_MAX_BYTES) return reject("TOO_LARGE");
   const body = (candidate.body ?? {}) as Record<string, unknown>;
   if (candidate.type === "ready" && body.nonce !== state.nonce) return reject("BAD_NONCE");
   if ((candidate.type === "open_object" || candidate.type === "select_item") && (typeof body.object !== "string" || !state.permittedObjects.includes(body.object))) return reject("UNPERMITTED_OBJECT");

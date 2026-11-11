@@ -15,7 +15,8 @@ export interface TrailEntrySpec {
   question: string;
   options: TrailOptionSpec[];
   decision: string;
-  links?: Array<{ kind: "type" | "view" | "example" | "source"; id: string; snapshotId: string }>;
+  /** Snapshot-bound links to a type, view, example or source; a source link may carry the anchor it points at. */
+  links?: Array<{ kind: "type" | "view" | "example" | "source"; id: string; snapshotId: string; anchor?: { repository: string; path: string; lines: [number, number] } }>;
   supersedes?: string;
   deadEndExample?: string;
 }

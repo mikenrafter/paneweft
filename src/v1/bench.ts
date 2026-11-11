@@ -64,9 +64,9 @@ export function calibration(scores: Array<{ correct: boolean; confidence: number
 }
 
 /** A topic is admissible when every planted error is detectable from the supplied material (its `contradictedBy` evidence appears in
- * `material`) and every why-not key cites a trail entry or other recorded evidence, not code alone. A key belongs to a why-not question
- * when its question id says so (`...why-not`), because a key carries no kind of its own. */
-export function validateTopic(topic: unknown, keys: unknown[], material: { text?: string; trail?: string }): Result<true> {
+ * `material`) and every why-not key cites a trail entry or other recorded evidence, not code alone. A key carries no kind of its own: it
+ * belongs to the QUESTION it answers, and the question's `kind` decides (S21). A question's id is a name and says nothing about its kind. */
+export function validateTopic(topic: unknown, keys: unknown[], material: { text?: string; trail?: string }, questions: unknown[]): Result<true> {
   const shape = validateAgainstV1(BENCHMARK, topic);
   if (shape.length > 0) return err("VALIDATION_FAILED", "the topic does not match paneweft.benchmark-topic/1", { errors: shape });
   const document = topic as Extract<Benchmark, { schemaVersion: "paneweft.benchmark-topic/1" }>;
@@ -82,7 +82,12 @@ export function validateTopic(topic: unknown, keys: unknown[], material: { text?
       return;
     }
     const typed = key as Key;
-    if (/why-not/.test(typed.questionId) && !typed.citations.some((citation) => citation.kind === "trail" || citation.kind === "recorded-evidence")) {
+    const question = questions.find((candidate) => (candidate as { id?: unknown } | null)?.id === typed.questionId) as { kind?: string } | undefined;
+    if (question === undefined) {
+      issues.push(issue("DANGLING_REFERENCE", `/keys/${index}/questionId`, "a key answers a question of the topic", `No question "${typed.questionId}" was authored, so this key cannot be checked against a kind.`));
+      return;
+    }
+    if (question.kind === "why-not" && !typed.citations.some((citation) => citation.kind === "trail" || citation.kind === "recorded-evidence")) {
       issues.push(issue("CONSTRAINT", `/keys/${index}/citations`, "a why-not key cites a trail entry or other recorded evidence", "Code shows what the system does, not why an alternative was abandoned; cite the trail entry or the recorded evidence."));
     }
   });
@@ -135,7 +140,7 @@ export async function runBenchmark(config: HarnessConfig): Promise<Result<Benchm
   authorOutput.questions.forEach((question, index) => questionIssues.push(...validateAgainstV1(BENCHMARK, question).map((fault) => ({ ...fault, pointer: `/questions/${index}${fault.pointer}` }))));
   if (questionIssues.length > 0) return err("VALIDATION_FAILED", "the question author's questions do not match paneweft.benchmark-question/1", { errors: questionIssues });
   const questions = authorOutput.questions as Question[];
-  const admission = validateTopic(topic, authorOutput.keys, { text: config.material.planted ?? config.material.text ?? "", trail: config.material.trail ?? "" });
+  const admission = validateTopic(topic, authorOutput.keys, { text: config.material.planted ?? config.material.text ?? "", trail: config.material.trail ?? "" }, questions);
   if (!admission.ok) return admission;
   const keys = authorOutput.keys as Key[];
 

@@ -187,3 +187,25 @@ describe("[IV13] custom view data and its fallback", () => {
     expect(error.errors.map((e) => e.constraint).join(" ")).toMatch(/remote|network|local/i);
   });
 });
+
+describe("[S19] a message that cannot be serialized is rejected, not thrown", () => {
+  const state: FrameState = { frameId: "f1", nonce: "n-1", viewId: "inv-1.o1.mapping.card", snapshotId: "snap-run-2", permittedObjects: ["o1"], lastSeq: 0, closed: false, requestsInWindow: 0 };
+  const message = (body: unknown) => ({ protocol: 1, type: "render_error", frameId: "f1", viewId: "inv-1.o1.mapping.card", snapshotId: "snap-run-2", requestId: "r1", seq: 1, body });
+  const open = { windowMatches: true, handshakeDone: true };
+  const cyclic: Record<string, unknown> = {};
+  cyclic.self = cyclic;
+
+  // why: S19. postMessage structured-clones cyclic objects and BigInts, which JSON.stringify refuses by THROWING: the size check threw out of the validator
+  // and past the visible protocol rejection (and out of the host's message handler). A message JSON cannot carry is a malformed message, rejected with a reason.
+  // Rejects the validator that calls JSON.stringify on the candidate unguarded.
+  // proves: CLAIM(S19-serialization)
+  it.each<[string, unknown]>([
+    ["a cyclic body", cyclic],
+    ["a BigInt in the body", { message: 10n }],
+    ["a body whose toJSON throws", { toJSON() { throw new Error("hostile"); } }],
+  ])("rejects %s with BAD_SHAPE and does not throw", (_name, body) => {
+    let verdict: ReturnType<typeof validateFrameMessage> | undefined;
+    expect(() => { verdict = validateFrameMessage(state, message(body), open); }).not.toThrow();
+    expect(verdict).toEqual({ accept: false, reason: "BAD_SHAPE", revokePort: false });
+  });
+});
