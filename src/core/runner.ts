@@ -6,11 +6,15 @@
 // a paneweft.run/1 document to outputBundlePath (relative to workspaceRoot); a stale output file is
 // removed before the run; exceeding timeoutMs kills the process.
 //
+// CLAIM(runner-timeout-kills-group): the runner is started as the leader of its own process group (`detached`), and a timeout or an abort
+//   SIGKILLs the whole group, so helpers the runner started die with it [runner.process-group.test.ts, T12]. The cost of `detached`: a terminal's
+//   Ctrl-C no longer reaches the runner, so the CLI turns SIGINT/SIGTERM into an abort.
+//
 // CLAIM(run-id-bound): the run id is generated here, handed to the runner, and the recorded output must carry exactly that id, so a
 //   runner cannot record under another run's identity or replay a stale document [runner.test.ts, MC17].
 // Errors (all Result values, never exceptions): RUNNER_NOT_FOUND, INVALID_ARGUMENT (parameters), RUNNER_TIMEOUT, RUNNER_FAILED
 //   (details.exitCode / signal / spawn reason), RUNNER_OUTPUT_INVALID (the validation issues in `errors`).
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { readFile, rm } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -75,20 +79,35 @@ function substitute(argv: string[], parameters: Record<string, Scalar>): { argv:
   return issues.length > 0 ? { issues } : { argv: result };
 }
 
-type ProcessOutcome = { kind: "exited"; exitCode: number | null; signal: NodeJS.Signals | null } | { kind: "timeout" } | { kind: "spawn-failed"; reason: string }
+type ProcessOutcome = { kind: "exited"; exitCode: number | null; signal: NodeJS.Signals | null } | { kind: "timeout" } | { kind: "aborted" } | { kind: "spawn-failed"; reason: string }
 
-function runProcess(runner: RunnerDefinition, argv: string[], runId: string): Promise<ProcessOutcome> {
+/** SIGKILL to the runner's whole process group (the runner leads it, so the group id is its pid); only the runner itself when that fails. */
+function killGroup(child: ChildProcess): void {
+  if (child.pid === undefined) return;
+  try {
+    process.kill(-child.pid, "SIGKILL");
+  } catch {
+    child.kill("SIGKILL");
+  }
+}
+
+function runProcess(runner: RunnerDefinition, argv: string[], runId: string, signal?: AbortSignal): Promise<ProcessOutcome> {
   return new Promise((resolveOutcome) => {
     let settled = false;
     const settle = (outcome: ProcessOutcome) => { if (!settled) { settled = true; resolveOutcome(outcome); } };
     // no shell: the executable and every argv element are literal
-    const child = spawn(runner.executable, argv, { cwd: runner.workspaceRoot, env: { ...process.env, PANEWEFT_RUN_ID: runId }, shell: false, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(runner.executable, argv, { cwd: runner.workspaceRoot, env: { ...process.env, PANEWEFT_RUN_ID: runId }, shell: false, stdio: ["ignore", "pipe", "pipe"], detached: true });
     child.stdout.on("data", () => {});
     child.stderr.on("data", () => {});
-    let timedOut = false;
-    const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, runner.timeoutMs);
-    child.once("error", (error) => { clearTimeout(timer); settle({ kind: "spawn-failed", reason: error.message }); });
-    child.once("exit", (exitCode, signal) => { clearTimeout(timer); settle(timedOut ? { kind: "timeout" } : { kind: "exited", exitCode, signal }); });
+    let ended: "timeout" | "aborted" | null = null;
+    const stop = (reason: "timeout" | "aborted") => { if (ended === null) { ended = reason; killGroup(child); } };
+    const timer = setTimeout(() => stop("timeout"), runner.timeoutMs);
+    const onAbort = () => stop("aborted");
+    if (signal?.aborted === true) onAbort();
+    else signal?.addEventListener("abort", onAbort, { once: true });
+    const done = () => { clearTimeout(timer); signal?.removeEventListener("abort", onAbort); };
+    child.once("error", (error) => { done(); settle({ kind: "spawn-failed", reason: error.message }); });
+    child.once("exit", (exitCode, exitSignal) => { done(); settle(ended === "timeout" ? { kind: "timeout" } : ended === "aborted" ? { kind: "aborted" } : { kind: "exited", exitCode, signal: exitSignal }); });
   });
 }
 
@@ -108,8 +127,9 @@ export async function runExample(session: Session, request: RunExampleRequest): 
   const outputPath = resolve(runner.workspaceRoot, runner.outputBundlePath);
   await rm(outputPath, { force: true }); // CLAIM(run-id-bound): nothing written before this run can be mistaken for its output
 
-  const outcome = await runProcess(runner, substituted.argv, runId);
+  const outcome = await runProcess(runner, substituted.argv, runId, request.signal);
   if (outcome.kind === "spawn-failed") return failure("RUNNER_FAILED", `runner "${runner.id}" could not be started: ${outcome.reason}`, { details: { reason: outcome.reason } });
+  if (outcome.kind === "aborted") return failure("RUNNER_FAILED", `runner "${runner.id}" was stopped before it finished`, { details: { aborted: true } });
   if (outcome.kind === "timeout") return failure("RUNNER_TIMEOUT", `runner "${runner.id}" did not finish within ${runner.timeoutMs} ms and was killed`, { retryable: true, details: { timeoutMs: runner.timeoutMs } });
   if (outcome.exitCode !== 0) {
     return failure("RUNNER_FAILED", `runner "${runner.id}" ${outcome.exitCode === null ? `was terminated by ${outcome.signal}` : `exited with code ${outcome.exitCode}`}`, { details: { exitCode: outcome.exitCode, signal: outcome.signal } });
