@@ -7,7 +7,7 @@
 // reads the data-* attributes the renderers wrote. Nothing in here uses a timer.
 import type { Entity, EntityRef, Envelope } from "../core/wire.ts";
 import type { Result } from "../core/errors.ts";
-import { viewItems, type AnyItem } from "../core/items.ts";
+import { referencedSnapshot, viewItems, type AnyItem } from "../core/items.ts";
 import { initialInspectorState, reduceInspector, type InspectorAction, type InspectorState, type InspectorWorld, type PaneState } from "../core/inspector.ts";
 import { LAYOUT_VERSION } from "../core/layout.ts";
 import type { RankOutput, RankedView } from "../core/registry.ts";
@@ -106,8 +106,9 @@ export async function mountViewer(container: HTMLElement, options: MountOptions)
         for (const block of viewItems(model.value.envelope)) {
           const viewId = block.kind === "view" ? String(block.viewId) : null;
           if (viewId === null) continue;
-          const key = JSON.stringify([pane.snapshotId, viewId]);
-          if (!embeds.has(key)) embeds.set(key, await source.getView({ viewId, snapshotId: pane.snapshotId }));
+          const snapshotId = referencedSnapshot(model.value.envelope, viewId);
+          const key = JSON.stringify([snapshotId, viewId]);
+          if (!embeds.has(key)) embeds.set(key, await source.getView({ viewId, snapshotId }));
         }
       }
     }
@@ -275,7 +276,7 @@ export async function mountViewer(container: HTMLElement, options: MountOptions)
         h(doc, "div", { "data-pw": "match-count", "data-matched": summary.matched, "data-total": summary.total }, `${summary.matched} of ${summary.total} match`));
       const context: ComponentContext = {
         doc, locale, layoutVersion, paneIndex: index, envelope: view.envelope, summary, ui, selection: pane.selection, interactive: true,
-        embeds: new Map([...embedModels(pane.snapshotId)]), editable: options.editable === true, summarise: (inner) => summarise(inner),
+        embeds: embedModels(view.envelope), editable: options.editable === true, summarise: (inner) => summarise(inner),
         ...(view.notebookRevision === undefined ? {} : { notebookRevision: view.notebookRevision }),
       };
       if (ui.error !== null) panelChildren.push(h(doc, "div", { "data-pw": "error", role: "alert", "data-code": ui.error.code }, `${ui.error.code}: ${ui.error.message}`));
@@ -295,11 +296,14 @@ export async function mountViewer(container: HTMLElement, options: MountOptions)
     tablist, needs, ...parts, panel, opened);
   }
 
-  function embedModels(snapshotId: string): Array<[string, ViewModel | null]> {
-    const found: Array<[string, ViewModel | null]> = [];
-    for (const [key, result] of embeds) {
-      const [snapshot, viewId] = JSON.parse(key) as [string, string];
-      if (snapshot === snapshotId) found.push([viewId, result.ok ? result.value : null]);
+  function embedModels(envelope: Envelope): Map<string, ViewModel | null> {
+    const found = new Map<string, ViewModel | null>();
+    if (envelope.component !== "notebook") return found;
+    for (const block of viewItems(envelope)) {
+      if (block.kind !== "view") continue;
+      const viewId = String(block.viewId);
+      const result = embeds.get(JSON.stringify([referencedSnapshot(envelope, viewId), viewId]));
+      found.set(viewId, result !== undefined && result.ok ? result.value : null);
     }
     return found;
   }
@@ -381,7 +385,9 @@ export async function mountViewer(container: HTMLElement, options: MountOptions)
     const pane = state.trail[index];
     if (pane === undefined) return;
     const ui = uiOf(index);
-    const model = await source.getView({ viewId, snapshotId: pane.snapshotId });
+    const holder = currentModel(index);
+    const snapshotId = holder === undefined ? pane.snapshotId : referencedSnapshot(holder.envelope, viewId, itemId);
+    const model = await source.getView({ viewId, snapshotId });
     const item = model.ok ? viewItems(model.value.envelope).find((candidate) => candidate.id === itemId) : undefined;
     if (!model.ok || item === undefined) {
       ui.notes.set(blockId, `no entity or source: ${model.ok ? `item "${itemId}" is not in view "${viewId}"` : `view "${viewId}" cannot be opened (${model.error.code})`}`);
@@ -390,10 +396,10 @@ export async function mountViewer(container: HTMLElement, options: MountOptions)
     }
     ui.notes.delete(blockId);
     const { entity, viewDefinitionId } = model.value.envelope;
-    await ensureEntity(entity, pane.snapshotId);
-    await ensureView(entity, pane.snapshotId, viewDefinitionId);
+    await ensureEntity(entity, snapshotId);
+    await ensureView(entity, snapshotId, viewDefinitionId);
     lastError = null;
-    const outcome = reduceInspector(state, { type: "open", entity, snapshotId: pane.snapshotId, viewDefinitionId }, world);
+    const outcome = reduceInspector(state, { type: "open", entity, snapshotId, viewDefinitionId }, world);
     if (outcome.notice !== undefined) lastError = { code: outcome.notice.code, message: outcome.notice.message };
     else {
       const trail = outcome.state.trail.map((entry, position, all) => (position === all.length - 1 ? { ...entry, selection: [itemId] } : entry));

@@ -40,3 +40,14 @@ export function viewItems(envelope: Envelope): AnyItem[] {
 export const UNIT_OF_COMPONENT: Record<Envelope["component"], string> = {
   list: "rows", tree: "nodes", graph: "edges", source: "lines", shape: "fields", notebook: "blocks", example: "runs",
 };
+
+/**
+ * The snapshot a notebook reference points at. A `{viewId, itemId}` target or a view block names a view only; the notebook's recorded
+ * `links` say in which snapshot that view lives (a story page can cite views of two repository snapshots). Without a link the
+ * notebook's own snapshot is meant.
+ */
+export function referencedSnapshot(envelope: Envelope, viewId: string, itemId?: string): string {
+  const links = envelope.links.filter((candidate) => candidate.viewId === viewId);
+  const exact = itemId === undefined ? undefined : links.find((candidate) => candidate.itemId === itemId);
+  return (exact ?? links.find((candidate) => candidate.itemId === undefined) ?? links[0])?.snapshotId ?? envelope.snapshotId;
+}

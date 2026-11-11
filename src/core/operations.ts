@@ -26,7 +26,7 @@ import { LIMITS } from "./limits.ts";
 import { checkFreshness } from "./freshness.ts";
 import { rankViews, type RankOutput } from "./registry.ts";
 import { resolveItemSource } from "./links.ts";
-import { viewItems, type AnyItem } from "./items.ts";
+import { referencedSnapshot, viewItems, type AnyItem } from "./items.ts";
 import { decodeCursor, encodeCursor, queryDigest } from "./cursor.ts";
 import { fragmentSource, minimumBytes, paginate, type Entry, type Format, type Layout, type PageState } from "./pager.ts";
 import { layoutOf, summariseView, QueryError, type EmbedInfo, type ReplyExtras, type ViewFilter, type ViewOrder, type ViewQuery, type ViewSummary } from "./summaries.ts";
@@ -255,7 +255,7 @@ async function embedsOf(session: Session, envelope: Envelope): Promise<Map<strin
   const embeds = new Map<string, EmbedInfo>();
   for (const block of viewItems(envelope)) {
     if (block.kind !== "view" || typeof block.viewId !== "string" || block.viewId === envelope.id) continue; // an embed of itself is cut
-    const found = await session.getView({ viewId: block.viewId, snapshotId: envelope.snapshotId });
+    const found = await session.getView({ viewId: block.viewId, snapshotId: referencedSnapshot(envelope, block.viewId) });
     if (!found.ok) continue;
     const inner = found.value.envelope;
     if (inner.component === "notebook") embeds.set(block.id, { kind: "notebook", viewId: inner.id, blocks: viewItems(inner) });
