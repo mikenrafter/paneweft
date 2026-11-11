@@ -77,6 +77,11 @@ const entityPart = (item: AnyItem): string => {
 /** Longest cell value (in characters) a text line prints; a longer one is cut with a marker that counts what was left out (#13). */
 const CELL_CLIP_POINTS = 160;
 
+/** CLAIM(text-column-keys): delimiters and controls in keys are quoted/escaped [operations.column-keys.test.ts]. */
+const columnKey = (key: string): string => /[\s=|"\\\u0000-\u001f\u007f-\u009f]/u.test(key)
+  ? JSON.stringify(key).replace(/[\u007f-\u009f\u2028\u2029]/g, (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`)
+  : key;
+
 /**
  * The columns after `skip` (the one already printed as the row's name) as ` | key=value ...` in declared order; strings are JSON-quoted so a
  * separator inside a value cannot be misread. A value over CELL_CLIP_POINTS is cut as `"head…"[+N chars]`. Absent cells are not printed.
@@ -87,12 +92,13 @@ function otherColumns(cells: Record<string, Scalar>, columns: Array<{ key: strin
   let clipped = 0;
   for (const { key } of columns) {
     if (key === skip || !Object.hasOwn(cells, key)) continue;
+    const name = columnKey(key);
     const value = cells[key] as Scalar;
-    if (typeof value !== "string") { parts.push(`${key}=${JSON.stringify(value)}`); continue; }
+    if (typeof value !== "string") { parts.push(`${name}=${JSON.stringify(value)}`); continue; }
     const points = Array.from(value);
-    if (points.length <= CELL_CLIP_POINTS) { parts.push(`${key}=${JSON.stringify(value)}`); continue; }
+    if (points.length <= CELL_CLIP_POINTS) { parts.push(`${name}=${JSON.stringify(value)}`); continue; }
     clipped++;
-    parts.push(`${key}=${JSON.stringify(`${points.slice(0, CELL_CLIP_POINTS - 1).join("")}…`)}[+${points.length - (CELL_CLIP_POINTS - 1)} chars]`);
+    parts.push(`${name}=${JSON.stringify(`${points.slice(0, CELL_CLIP_POINTS - 1).join("")}…`)}[+${points.length - (CELL_CLIP_POINTS - 1)} chars]`);
   }
   return { text: parts.length === 0 ? "" : ` | ${parts.join(" ")}`, clipped };
 }

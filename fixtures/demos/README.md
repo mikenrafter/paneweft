@@ -28,7 +28,7 @@ also carries two `example` blocks (`ex1`, `ex2`) that the design's prose describ
 * Revisions: vigil `d064373a15139b969599ee05bc7b156b1d5b8ed7` (the enclosing phoe-nix checkout has unrelated dirty files in other
   scout modules; `git status --short scout-modules/vigil` is empty, so `dirty: false`), residual-cli
   `32c0836283dad8c22431b3025ec910b4b5759e90` (clean). The design note is recorded at
-  `31aae89198d5f0e1057a87848b38696e9ae155bf` (last commit that touched `docs/design.md`).
+  `2765c525907bda1a95bcc5ecf03a1bf4a93bc7a7` (last commit that touched `docs/design.md`).
 
 ## Hashes
 

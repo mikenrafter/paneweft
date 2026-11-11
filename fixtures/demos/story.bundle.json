@@ -108,7 +108,7 @@
           "path": "docs/design.md",
           "sha256": "d130a8070810e4e9e9b0881c45490aa8ea6d1ad63136d07c7230b170f3aadd3d",
           "capturedAt": "2026-11-11T12:00:00Z",
-          "method": "read: the paneweft design note (section 6 poses the question and gives the demo tables), sha256 taken when this fixture was written, repository paneweft revision 31aae89198d5f0e1057a87848b38696e9ae155bf"
+          "method": "read: the paneweft design note (section 6 poses the question and gives the demo tables), sha256 taken when this fixture was written, repository paneweft revision 2765c525907bda1a95bcc5ecf03a1bf4a93bc7a7"
         }
       ],
       "generatedAt": "2026-11-11T12:00:00Z",
@@ -136,7 +136,7 @@
           {
             "id": "paneweft",
             "root": "/home/mini/Documents/repos/paneweft",
-            "gitRev": "31aae89198d5f0e1057a87848b38696e9ae155bf",
+            "gitRev": "2765c525907bda1a95bcc5ecf03a1bf4a93bc7a7",
             "dirty": false,
             "files": {
               "docs/design.md": "d130a8070810e4e9e9b0881c45490aa8ea6d1ad63136d07c7230b170f3aadd3d"

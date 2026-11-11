@@ -440,18 +440,28 @@ class DirectorySession implements Session {
   /** Index fields derived from stored objects of rows that lack them, by content hash (objects are immutable, so the answer never goes stale). */
   private readonly derivedIndex = new Map<string, IndexFields>();
 
-  getView(key: ViewKey): Promise<Result<StoredView>> { return this.snapshot().then((read) => read.getView(key)); }
+  /** CLAIM(session-read-errors): snapshot acquisition belongs to the Result error boundary [session.read-errors.test.ts]. */
+  private async withSnapshot<T>(read: (snapshot: SessionSnapshot) => Promise<Result<T>>): Promise<Result<T>> {
+    try {
+      return await read(await this.snapshot());
+    } catch (error) {
+      if (error instanceof SessionStorageError) return failure(error.code, error.message);
+      throw error;
+    }
+  }
+
+  getView(key: ViewKey): Promise<Result<StoredView>> { return this.withSnapshot((read) => read.getView(key)); }
   listViews(): Promise<ViewKey[]> { return this.snapshot().then((read) => read.listViews()); }
   listViewIndex(snapshotId?: string): Promise<ViewIndexEntry[]> { return this.snapshot().then((read) => read.listViewIndex(snapshotId)); }
-  getEntity(entity: EntityRef, snapshotId: string): Promise<Result<Entity>> { return this.snapshot().then((read) => read.getEntity(entity, snapshotId)); }
+  getEntity(entity: EntityRef, snapshotId: string): Promise<Result<Entity>> { return this.withSnapshot((read) => read.getEntity(entity, snapshotId)); }
   listEntities(snapshotId?: string): Promise<Entity[]> { return this.snapshot().then((read) => read.listEntities(snapshotId)); }
   listDefinitions(): Promise<{ revision: number; definitions: ViewDefinition[] }> { return this.snapshot().then((read) => read.listDefinitions()); }
   repositories(): Promise<RepositoryRegistration[]> { return this.snapshot().then((read) => read.repositories()); }
-  snapshotInfo(snapshotId: string): Promise<Result<SnapshotInfo>> { return this.snapshot().then((read) => read.snapshotInfo(snapshotId)); }
+  snapshotInfo(snapshotId: string): Promise<Result<SnapshotInfo>> { return this.withSnapshot((read) => read.snapshotInfo(snapshotId)); }
   exportBundle(): Promise<Bundle> { return this.snapshot().then((read) => read.exportBundle()); }
-  listRuns(key: ViewKey): Promise<Result<RecordedRun[]>> { return this.snapshot().then((read) => read.listRuns(key)); }
-  recordedRunOutputs(key: ViewKey): Promise<Result<Array<{ run: RecordedRun; output: unknown }>>> { return this.snapshot().then((read) => read.recordedRunOutputs(key)); }
-  notebookGet(pageId: string, revision?: number, snapshotId?: string): Promise<Result<NotebookPage>> { return this.snapshot().then((read) => read.notebookGet(pageId, revision, snapshotId)); }
+  listRuns(key: ViewKey): Promise<Result<RecordedRun[]>> { return this.withSnapshot((read) => read.listRuns(key)); }
+  recordedRunOutputs(key: ViewKey): Promise<Result<Array<{ run: RecordedRun; output: unknown }>>> { return this.withSnapshot((read) => read.recordedRunOutputs(key)); }
+  notebookGet(pageId: string, revision?: number, snapshotId?: string): Promise<Result<NotebookPage>> { return this.withSnapshot((read) => read.notebookGet(pageId, revision, snapshotId)); }
 
   async registerRepository(registration: RepositoryRegistration): Promise<Result<void>> {
     if (typeof registration?.id !== "string" || registration.id === "" || typeof registration.root !== "string" || registration.root === "") {

@@ -37,7 +37,7 @@ const DESIGN_HASHES: Record<string, string> = {
 // Revisions: design.md section 6 intro (line ~500) and `git -C <repo> rev-parse HEAD` at fixture-writing time.
 const VIGIL_REV = "d064373a15139b969599ee05bc7b156b1d5b8ed7";
 const RESIDUAL_REV = "32c0836283dad8c22431b3025ec910b4b5759e90";
-const PANEWEFT_DESIGN_REV = "31aae89198d5f0e1057a87848b38696e9ae155bf"; // `git rev-list -1 HEAD -- docs/design.md`
+const PANEWEFT_DESIGN_REV = "2765c525907bda1a95bcc5ecf03a1bf4a93bc7a7"; // `git rev-list -1 HEAD -- docs/design.md`
 // `wc -l` of the inspected bytes: an anchor can never point past the end of its file.
 const LINE_COUNTS: Record<string, number> = {
   "src/watch.rs": 1349, "src/engine.rs": 1039, "src/tick.rs": 1689, "src/mcp.rs": 435, "tests/mcp_e2e.rs": 729,
