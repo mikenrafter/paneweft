@@ -233,8 +233,8 @@ const GEOMETRY_ATTRIBUTES = /\s(?:d|data-x|data-y)="[^"]*"/g;
 /**
  * Outline of the mounted viewer for goldens. Not pinned (docs/contract-additions/dom.md F, round 2 S6): the text of the two
  * built-in tabs, the own text of container elements and of incidental chrome (pin, action buttons, match counts, the no-target
- * and load affordances, the layout size label), the coordinates and SVG path strings (`d`, `data-x`, `data-y`), and
- * role/tabindex of evidence-link (an SVG text needs a role, an HTML button does not).
+ * and load affordances, the layout size label) and the coordinates and SVG path strings (`d`, `data-x`, `data-y`).
+ * role/tabindex of evidence-link ARE pinned since review round 2 S9: an SVG evidence control is a button by role and tabindex, an HTML one natively.
  */
 export function viewerOutline(container: ParentNode): string {
   const root = q(container, "viewer");
@@ -243,7 +243,6 @@ export function viewerOutline(container: ParentNode): string {
     const name = line.trimStart().split(" ")[0] ?? "";
     let out = line.replace(GEOMETRY_ATTRIBUTES, "");
     if (/data-definition-id="builtin:/.test(out) || CHROME_TEXT.has(name)) out = out.replace(/ "(?:[^"\\]|\\.)*"$/, "");
-    if (name === "evidence-link") out = out.replace(/ role="[^"]*"/, "").replace(/ tabindex="[^"]*"/, "");
     return out;
   }).join("\n");
 }

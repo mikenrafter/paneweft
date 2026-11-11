@@ -61,20 +61,36 @@ const hasTarget = (item: Item): boolean => entityOf(item) !== undefined || item.
 
 // ---- shared parts -------------------------------------------------------------------------------------------------------------
 
-function badge(ctx: ComponentContext, item: Item, inSvg: boolean, at?: { x: number; y: number }): Child[] {
-  const where = (dx: number, dy: number) => (at === undefined ? {} : { x: at.x + dx, y: at.y + dy });
+type Position = { x: number; y: number };
+const whereAt = (at: Position | undefined, dx: number, dy: number) => (at === undefined ? {} : { x: at.x + dx, y: at.y + dy });
+
+/** The provenance word and, for an inferred fact, its reason. */
+function provenanceParts(ctx: ComponentContext, item: Item, inSvg: boolean, at?: Position): Child[] {
   const make = inSvg
     ? (attrs: Record<string, string | number | undefined>, text: string) => svg(ctx.doc, "text", { "font-size": 10, ...attrs }, text)
     : (attrs: Record<string, string | number | undefined>, text: string) => h(ctx.doc, "span", attrs, text);
-  const out: Child[] = [make({ "data-pw": "provenance-badge", "data-provenance": item.provenance, ...where(8, 34) }, item.provenance)];
-  if (item.provenance === "inferred" && typeof item.reason === "string") out.push(make({ "data-pw": "inferred-reason", ...where(8, 46) }, item.reason));
-  item.evidence.forEach((source, index) => {
-    const open = ctx.ui.sourceDetail === source ? { "aria-expanded": "true" } : {}; // present only while the detail is shown: the goldens pin aria-expanded on every other control
-    out.push(inSvg
-      ? svg(ctx.doc, "text", { "data-pw": "evidence-link", "data-source": source, "font-size": 10, ...open, ...where(60 + index * 30, 34) }, source)
-      : h(ctx.doc, "button", { type: "button", "data-pw": "evidence-link", "data-source": source, ...open }, source));
-  });
+  const out: Child[] = [make({ "data-pw": "provenance-badge", "data-provenance": item.provenance, ...whereAt(at, 8, 34) }, item.provenance)];
+  if (item.provenance === "inferred" && typeof item.reason === "string") out.push(make({ "data-pw": "inferred-reason", ...whereAt(at, 8, 46) }, item.reason));
   return out;
+}
+
+/**
+ * One control per evidence source id. In HTML a native button. In an SVG a `<text>` made a button (review round 2, S9): role, tabindex 0 and a
+ * name that says which source it shows and for which item, because several items cite the same source. An SVG control must not sit inside a
+ * role="button" graph node (nested interactive controls), so graph nodes place theirs beside the node, at absolute coordinates.
+ */
+function evidenceLinks(ctx: ComponentContext, item: Item, inSvg: boolean, at?: Position): Child[] {
+  const owner = typeof item.label === "string" ? item.label : item.id;
+  return item.evidence.map((source, index) => {
+    const open = ctx.ui.sourceDetail === source ? { "aria-expanded": "true" } : {}; // present only while the detail is shown: the goldens pin aria-expanded on every other control
+    return inSvg
+      ? svg(ctx.doc, "text", { "data-pw": "evidence-link", "data-source": source, role: "button", tabindex: 0, "aria-label": `Evidence ${source} of ${owner}`, "font-size": 10, ...open, ...whereAt(at, 60 + index * 30, 34) }, source)
+      : h(ctx.doc, "button", { type: "button", "data-pw": "evidence-link", "data-source": source, ...open }, source);
+  });
+}
+
+function badge(ctx: ComponentContext, item: Item, inSvg: boolean, at?: Position): Child[] {
+  return [...provenanceParts(ctx, item, inSvg, at), ...evidenceLinks(ctx, item, inSvg, at)];
 }
 
 /** The actions button (and, while open, its menu as the next sibling) of an item that has an entity or an anchor. */
@@ -269,13 +285,15 @@ function renderGraphParts(ctx: ComponentContext): GraphParts {
     const at = place.get(node.id) as { x: number; y: number };
     const label = typeof node.label === "string" ? node.label : node.id;
     const mark = data.focus !== undefined && data.focus.node === node.id ? "focus" : undefined;
-    return svg(ctx.doc, "g", {
+    // the node is a button, so its evidence controls are its siblings, drawn at the same place (review round 2, S9)
+    return [svg(ctx.doc, "g", {
       "data-pw": "graph-node", "data-id": node.id, "data-provenance": node.provenance, "data-group": typeof node.group === "string" ? node.group : undefined, "data-x": at.x, "data-y": at.y,
       "data-status": mark, role: "button", tabindex: 0, transform: `translate(${at.x} ${at.y})`,
     },
     svg(ctx.doc, "rect", { width: 160, height: 40, rx: 4, fill: "none", stroke: "currentColor", "stroke-width": mark === undefined ? 1 : 3 }),
     svg(ctx.doc, "text", { x: 8, y: 16, "font-size": 12 }, label),
-    ...badge(ctx, node, true, { x: 0, y: 0 }));
+    ...provenanceParts(ctx, node, true, { x: 0, y: 0 })),
+    ...evidenceLinks(ctx, node, true, at)];
   });
   const edgeElements = visibleEdges.map((edge) => {
     const d = route.get(edge.id) ?? "";
@@ -290,7 +308,7 @@ function renderGraphParts(ctx: ComponentContext): GraphParts {
     "data-pw": "graph", role: "group", "aria-label": ctx.envelope.title, width: layout.width, height: layout.height, viewBox: `0 0 ${layout.width} ${layout.height}`,
   },
   svg(ctx.doc, "text", { "data-pw": "layout-info", "data-layout": layout.layout, "data-layout-version": ctx.layoutVersion, x: 0, y: 10, "font-size": 1, opacity: 0 }, `${layout.width} x ${layout.height}`),
-  ...rows, ...edgeElements);
+  ...rows.flat(), ...edgeElements);
   const edgeList = h(ctx.doc, "div", { "data-pw": "graph-edge-list" },
     ...visibleEdges.map((edge) => h(ctx.doc, "div", { "data-pw": "graph-edge-item", "data-id": edge.id }, `${edge.from} -${edge.relation}-> ${edge.to}`, ...actions(ctx, edge))));
   return { relationFilters, graph: root, edgeList, omitted };

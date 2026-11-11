@@ -42,7 +42,8 @@ const entityRefOf = (item: AnyItem): EntityRef | undefined => {
 };
 const available = (view: RankedView): boolean => view.availability.status === "available";
 
-interface FocusSpec { pane: string | null; selector: string; selection: [number | null, number | null] | null }
+/** Where focus goes after a render: the `nth` element matching `selector` in the pane (the first when absent), with the text selection of a field restored. */
+interface FocusSpec { pane: string | null; selector: string; nth?: number; selection?: [number | null, number | null] | null }
 /** Attributes that identify a control among its siblings, in the order they are matched. */
 const IDENTITY = ["data-id", "data-item", "data-definition-id", "data-pane-index", "data-source", "data-view-id", "data-kind", "data-direction"] as const;
 
@@ -57,7 +58,7 @@ export async function mountViewer(container: HTMLElement, options: MountOptions)
   let state: InspectorState = initialInspectorState();
   let lastError: { code: string; message: string } | null = null;
   let activePane: number | null = null;
-  let pendingFocus: { pane: string | null; selector: string } | null = null;
+  let pendingFocus: FocusSpec | null = null;
   let destroyed = false;
 
   const entities = new Map<string, Result<Entity>>();
@@ -324,13 +325,13 @@ export async function mountViewer(container: HTMLElement, options: MountOptions)
       selection: typeof input.selectionStart === "number" ? [input.selectionStart, input.selectionEnd] : null,
     };
   }
-  function restoreFocus(spec: FocusSpec | { pane: string | null; selector: string } | null): void {
+  function restoreFocus(spec: FocusSpec | null): void {
     if (spec === null) return;
     const scope = spec.pane === null ? container : container.querySelector(`[data-pw="pane"][data-pane-index="${spec.pane}"]`) ?? container;
-    const target = scope.querySelector<HTMLElement>(spec.selector);
+    const target = (spec.nth !== undefined && spec.nth >= 0 ? scope.querySelectorAll<HTMLElement>(spec.selector)[spec.nth] : scope.querySelector<HTMLElement>(spec.selector)) ?? null;
     if (target === null) return;
     target.focus();
-    const range = (spec as FocusSpec).selection;
+    const range = spec.selection;
     if (range !== undefined && range !== null && range[0] !== null && range[1] !== null) { try { (target as HTMLInputElement).setSelectionRange(range[0], range[1]); } catch { /* not a text input */ } }
   }
 
@@ -535,7 +536,9 @@ export async function mountViewer(container: HTMLElement, options: MountOptions)
         if (sourceId !== null) {
           // review S9: show (or hide) what the view declares about this source
           ui.sourceDetail = ui.sourceDetail === sourceId ? null : sourceId;
-          pendingFocus = { pane: String(index), selector: `[data-pw="evidence-link"][data-source=${JSON.stringify(sourceId)}]${control.hasAttribute("data-kind") ? `[data-kind=${JSON.stringify(control.getAttribute("data-kind"))}]` : ""}` };
+          const selector = `[data-pw="evidence-link"][data-source=${JSON.stringify(sourceId)}]${control.hasAttribute("data-kind") ? `[data-kind=${JSON.stringify(control.getAttribute("data-kind"))}]` : ""}`;
+          // several controls may name the same source (every graph node citing it): focus returns to the one that was activated, by its place among them
+          pendingFocus = { pane: String(index), selector, nth: Array.from(control.closest('[data-pw="pane"]')?.querySelectorAll(selector) ?? []).indexOf(control) };
           render();
         }
         return;

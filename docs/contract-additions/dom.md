@@ -79,7 +79,7 @@ per evidence id (`data-source`, text = id, declared order), `no-target`, `action
   (`role=menuitem`, `tabindex=-1`, `data-kind`) in the order `open-entity` (item has an entity), `open-source`
   (item has an anchor, or is a source annotation). Enter/Space on the button opens it and focuses the first item;
   ArrowDown/Up move; Escape closes it and focuses the invoking button. **[contract]** for Escape and focus return.
-* In graphs the SVG items carry only badge/reason/evidence-links; the actions of an edge live on its
+* In graphs the SVG items carry only badge/reason/evidence-links (a node's evidence links are the node's following siblings, review round 2 S9); the actions of an edge live on its
   `graph-edge-item` (HTML list). Graph nodes open their entity on Enter/click.
 * Enter, or a click, on a focused `row`/`node`/`field`/`graph-node` selects it (`aria-selected="true"`, pane
   selection `[id]`) and opens its entity in the next pane (red-contract 4 `select`).
