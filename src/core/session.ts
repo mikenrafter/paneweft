@@ -10,6 +10,8 @@
 //
 // CLAIM(atomic-manifest): the manifest is replaced atomically (write a temp file, fsync, rename), so a crash or injected failure
 //   leaves the previous state fully readable [design section 5; session.test.ts, MC16, MC20].
+// CLAIM(durable-objects): objects are fsynced (file, then the objects directory and the session directory) BEFORE the manifest that names them
+//   is written, so a power loss cannot leave a durable manifest pointing at objects that never reached the disk [session.durability.test.ts, T10].
 // CLAIM(snapshot-immutable): a stored (viewId, snapshotId) never changes; different content under the same key is
 //   SNAPSHOT_CONFLICT, identical content is idempotent [design section 4; MC20].
 // CLAIM(process-lock): every mutation holds the session write lock (write-lock.ts, flock) from BEFORE it reads mutable state until after the
@@ -22,7 +24,7 @@
 //   details.cause "flock-missing" (util-linux `flock` not on PATH), "flock-failed" or "lock-file-unavailable" otherwise. None of them mutates.
 // Errors: methods return Result<T>; they never throw for domain failures. Readers that return plain arrays throw a
 //   `SessionStorageError` only when the manifest itself is unreadable.
-import { mkdir, open, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import type { Bundle, Entity, EntityRef, Envelope, ViewDefinition } from "./wire.ts";
@@ -387,7 +389,13 @@ class DirectorySession implements Session {
           if (existing === text) return hash; // already stored, byte-identical: nothing to write
           await mkdir(join(this.dir, OBJECTS), { recursive: true });
           const temporary = `${target}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
-          await writeFile(temporary, text);
+          const handle = await open(temporary, "wx");
+          try {
+            await handle.writeFile(text);
+            await handle.sync(); // the bytes are on disk before the name that will point at them exists
+          } finally {
+            await handle.close();
+          }
           await rename(temporary, target);
           writes += 1;
           await this.hooks.afterWrite?.({ count: writes, path: target });
@@ -395,6 +403,11 @@ class DirectorySession implements Session {
         };
         const built = await build(current, stage);
         if ("error" in built) return built.error;
+        // CLAIM(durable-objects): every object the new manifest names is durable (file synced above; directory entries synced here) before the manifest is written
+        if (writes > 0) {
+          await syncDirectory(join(this.dir, OBJECTS));
+          await syncDirectory(this.dir); // the objects directory itself may be new
+        }
         await this.hooks.beforeManifestSwap?.({ operation });
         await this.swapManifest({ ...built.manifest, generation: current.generation + 1 }, operation);
         return ok(built.value);
@@ -621,6 +634,16 @@ class DirectorySession implements Session {
 
   async close(): Promise<void> {
     this.closed = true;
+  }
+}
+
+/** fsync of a directory: makes the entries created or renamed in it durable. */
+async function syncDirectory(path: string): Promise<void> {
+  const handle = await open(path, "r");
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
   }
 }
 
