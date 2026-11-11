@@ -43,7 +43,10 @@ D4: "A short reply includes gap counts and at least the first named gap, with a 
 ## 4. Text and JSON item grammar (what RC3 does not fix)
 All are body lines after `<returned>/<matched> matched <unit> returned; <omitted> omitted` (+ optional notice line).
 * **list** row (RC3): `<first cell> -> <kind>:<entity id>; <provenance>; <evidence ids>`, `-> (no entity)` without entity;
-  an inferred row's line also contains its `reason`.
+  an inferred row's line also contains its `reason`. Every other declared column follows as ` | <key>=<value> ...` in declared
+  order (strings JSON-quoted, other scalars as JSON, absent cells not printed); a string over 160 characters is cut as
+  `"<159 characters>…"[+N chars]` and the page gets one line `clipped: <n> cell(s) over 160 characters ...` after the notice.
+  JSON items are not clipped (#13). Tree nodes print their other columns the same way, after the state bracket.
 * **tree** (preorder over `roots`): `<2 spaces per depth><first cell> [<state>; children=<n>]`, state `expanded` (complete,
   has children), `leaf` (complete, none), `not_loaded` (printed `children=?`; never `leaf`); tree ancestors kept by a filter
   add ` [context]`.

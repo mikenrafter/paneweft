@@ -74,6 +74,30 @@ const entityPart = (item: AnyItem): string => {
   const entity = entityOf(item);
   return entity === undefined ? "(no entity)" : `${entity.kind}:${entity.id}`;
 };
+/** Longest cell value (in characters) a text line prints; a longer one is cut with a marker that counts what was left out (#13). */
+const CELL_CLIP_POINTS = 160;
+
+/**
+ * The columns after `skip` (the one already printed as the row's name) as ` | key=value ...` in declared order; strings are JSON-quoted so a
+ * separator inside a value cannot be misread. A value over CELL_CLIP_POINTS is cut as `"head…"[+N chars]`. Absent cells are not printed.
+ * `clipped` counts the cut cells so the page can say so (#13: text used to print the first column only).
+ */
+function otherColumns(cells: Record<string, Scalar>, columns: Array<{ key: string }>, skip: string | undefined): { text: string; clipped: number } {
+  const parts: string[] = [];
+  let clipped = 0;
+  for (const { key } of columns) {
+    if (key === skip || !Object.hasOwn(cells, key)) continue;
+    const value = cells[key] as Scalar;
+    if (typeof value !== "string") { parts.push(`${key}=${JSON.stringify(value)}`); continue; }
+    const points = Array.from(value);
+    if (points.length <= CELL_CLIP_POINTS) { parts.push(`${key}=${JSON.stringify(value)}`); continue; }
+    clipped++;
+    parts.push(`${key}=${JSON.stringify(`${points.slice(0, CELL_CLIP_POINTS - 1).join("")}…`)}[+${points.length - (CELL_CLIP_POINTS - 1)} chars]`);
+  }
+  return { text: parts.length === 0 ? "" : ` | ${parts.join(" ")}`, clipped };
+}
+const clippedLine = (clipped: number): string[] => (clipped === 0 ? [] : [`clipped: ${clipped} cell${clipped === 1 ? "" : "s"} over ${CELL_CLIP_POINTS} characters (marked [+N chars]; the full values are in --format json)`]);
+
 const trailer = (item: AnyItem): string => `${item.provenance}; ${item.evidence.join(",")}${item.reason === undefined ? "" : `; ${oneLine(item.reason)}`}`;
 
 function strings(item: AnyItem): string[] {
@@ -191,12 +215,16 @@ function listEntries(data: any, query: ViewQuery): Built {
     return byKey !== 0 ? byKey : compareCodeUnits(a.id, b.id);
   });
   const firstKey = columns[0]?.key;
+  let clipped = 0;
   const lines = rows.map((row) => {
     const cells = (row.cells ?? {}) as Record<string, Scalar>;
-    const head = firstKey !== undefined && Object.hasOwn(cells, firstKey) ? show(cells[firstKey]) : (row.label ?? row.id);
-    return entry(row.id, row, `${oneLine(head)} -> ${entityPart(row)}; ${trailer(row)}`);
+    const named = firstKey !== undefined && Object.hasOwn(cells, firstKey);
+    const head = named ? show(cells[firstKey as string]) : (row.label ?? row.id);
+    const others = otherColumns(cells, columns, named ? firstKey : undefined);
+    clipped += others.clipped;
+    return entry(row.id, row, `${oneLine(head)} -> ${entityPart(row)}; ${trailer(row)}${others.text}`);
   });
-  return { total: data.rows.length, matched: rows.length, entries: lines, bodyPrelude: [], jsonExtras: {}, footer: none, order };
+  return { total: data.rows.length, matched: rows.length, entries: lines, bodyPrelude: clippedLine(clipped), jsonExtras: {}, footer: none, order };
 }
 
 function treeEntries(data: any, query: ViewQuery): Built {
@@ -235,17 +263,21 @@ function treeEntries(data: any, query: ViewQuery): Built {
   const entries: Entry[] = [];
   const columns = data.columns as Array<{ key: string }>;
   const firstKey = columns[0]?.key;
+  let clipped = 0;
   for (const { node, depth } of preorder) {
     if (!keep.has(node.id)) continue;
     const context = !matchSet.has(node.id);
     const cells = (node.cells ?? {}) as Record<string, Scalar>;
-    const name = firstKey !== undefined && Object.hasOwn(cells, firstKey) ? show(cells[firstKey]) : (node.label ?? node.id);
+    const named = firstKey !== undefined && Object.hasOwn(cells, firstKey);
+    const name = named ? show(cells[firstKey as string]) : (node.label ?? node.id);
+    const others = otherColumns(cells, columns, named ? firstKey : undefined);
+    clipped += others.clipped;
     const children = (node.children as string[]) ?? [];
     const state = node.childrenState === "not_loaded" ? "not_loaded; children=?" : `${children.length > 0 ? "expanded" : "leaf"}; children=${children.length}`;
-    const text = `${"  ".repeat(depth)}${oneLine(name)} [${state}; ${trailer(node)}]${context ? " [context]" : ""}`;
+    const text = `${"  ".repeat(depth)}${oneLine(name)} [${state}; ${trailer(node)}]${others.text}${context ? " [context]" : ""}`;
     entries.push(entry(node.id, context ? { ...node, context: true } : node, text, { countable: !context }));
   }
-  return { total: nodes.length, matched: matchSet.size, entries, bodyPrelude: [], jsonExtras: {}, footer: none, order: null };
+  return { total: nodes.length, matched: matchSet.size, entries, bodyPrelude: clippedLine(clipped), jsonExtras: {}, footer: none, order: null };
 }
 
 function graphEntries(data: any, query: ViewQuery): Built {

@@ -49,13 +49,12 @@ describe("[#13] list text carries every declared column", () => {
     expect(okText(await env.call("inspect_view", ARGS("modules"))).raw).toContain("\nmcp.rs -> code/module:mcp; read; s1\n");
   });
 
-  // why: JSON already kept the cells; the finding asks that both forms be complete. Pin the cells and add the column declaration so a
-  //   consumer can tell which keys are columns and in which order without the view.
-  it("[#13] JSON items carry every cell and the reply names the columns in order", async () => {
+  // why: JSON already kept the cells; the finding asks that both forms be complete. Pin that every cell of every column is in the item. (A
+  //   `columns` member in the header was tried and dropped: it is mandatory-part bytes, which the 2048-byte floor cannot afford for a wide list.)
+  it("[#13] JSON items carry every cell of every column", async () => {
     const env = await open(bundleOf([messages()]));
     const reply = okJson(await env.call("inspect_view", { ...ARGS("messages"), format: "json" }));
     expect(reply.items.map((item: { cells: unknown }) => item.cells)).toEqual(MESSAGE_ROWS.map((r) => r.cells));
-    expect(reply.columns).toEqual(COLUMNS);
   });
 
   // why: a cell longer than the clip would make every row huge. It is cut at 160 characters with a marker that states how many were left
