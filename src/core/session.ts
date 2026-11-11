@@ -65,6 +65,14 @@ export interface SessionTestHooks {
   afterMutexStaleObserved?: (info: { operation: string }) => void | Promise<void>;
   /** S2 round 2: `target` (the main lock or the recovery mutex) was just renamed to a tombstone and has not been verified yet. */
   afterDisplaced?: (info: { operation: string; target: "lock" | "recovery" }) => void | Promise<void>;
+  /** S2 flock: the lock helper was spawned (its pid), before the lock is known to be held. Reported while the helper may still be waiting. */
+  afterHelperSpawned?: (info: { operation: string; helperPid: number }) => void | Promise<void>;
+  /** S2 flock: the helper reported the lock acquired; nothing mutable has been read yet. */
+  afterLockAcquired?: (info: { operation: string }) => void | Promise<void>;
+  /** S2 flock: the new manifest is written and synced under a temporary name; the rename (the commit point) has not happened. */
+  beforeManifestRename?: (info: { operation: string }) => void | Promise<void>;
+  /** S2 flock: the rename happened, so the mutation is committed; the lock is still held. */
+  afterManifestRename?: (info: { operation: string }) => void | Promise<void>;
   /** Called immediately before the manifest swap of a mutation; throwing simulates a failed save. */
   beforeManifestSwap?: (info: { operation: string }) => void | Promise<void>;
   /** Called after each file written while staging a mutation. */
