@@ -336,7 +336,7 @@ describe("mcp: sessions and registration over the wire", () => {
     }
   });
 
-  // why: register_view is MCP-only (no CLI command) and must follow the registry revision protocol of red-contract 5:
+  // why: register_view (CLI twin: `paneweft register`, S9; parity in test/parity.test.ts) must follow the registry revision protocol of red-contract 5:
   //      expectedRevision = current -> success and revision+1; a stale one -> CONFLICT with details.currentRevision.
   // proves: CLAIM(MC12)
   it("[MC12] register_view: current revision succeeds, the stale revision is CONFLICT {currentRevision}, the next one succeeds", async () => {

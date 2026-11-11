@@ -29,8 +29,9 @@ export const TOOL_NAMES_LITERAL = [
 ] as const;
 export type ToolNameLiteral = (typeof TOOL_NAMES_LITERAL)[number];
 
-/** CLI words per tool (red-contract section 9). register_view has no CLI command. */
-export const CLI_WORDS: Record<Exclude<ToolNameLiteral, "register_view">, string[]> = {
+/** CLI words per tool (red-contract section 9; `register` added by S9). */
+export const CLI_WORDS: Record<ToolNameLiteral, string[]> = {
+  register_view: ["register"],
   list_components: ["components"],
   describe_component: ["describe"],
   validate: ["validate"],

@@ -4,7 +4,7 @@
 // Method: every request is a committed file under fixtures/wire. The CLI reads the file with --args-file; the MCP
 // client sends the parsed same JSON as tools/call arguments. Each case asserts (a) byte-identical bodies and
 // (b) the contract's literal values, so two copies of one wrong generator cannot pass (test-quality 3 "parity").
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { openSession } from "../src/core/session.ts";
@@ -25,7 +25,7 @@ const readDir = lazyShared(() => seedClosed(dirs("parity-read"), { extraViews: F
 const readMcp = sharedMcp(readDir);
 
 interface Pair { cli: CliRun; mcp: McpTextResult }
-type CliTool = Exclude<ToolNameLiteral, "register_view">;
+type CliTool = ToolNameLiteral;
 
 async function readPair(tool: CliTool, file: string, session = true): Promise<Pair> {
   const dir = await readDir();
@@ -34,13 +34,13 @@ async function readPair(tool: CliTool, file: string, session = true): Promise<Pa
   return { cli, mcp };
 }
 /** For mutating requests: two identically seeded, separate sessions so that neither transport sees the other's write. */
-async function freshPair(tool: CliTool, file: string): Promise<Pair & { cliDir: string; mcpDir: string }> {
+async function freshPair(tool: CliTool, file: string, args?: { path: string; json: Record<string, any> }): Promise<Pair & { cliDir: string; mcpDir: string }> {
   const cliDir = await seedClosed(dirs("parity-cli"));
   const mcpDir = await seedClosed(dirs("parity-mcp"));
-  const cli = await spawnPaneweft(["--session", cliDir, ...CLI_WORDS[tool], "--args-file", wirePath(file)]);
+  const cli = await spawnPaneweft(["--session", cliDir, ...CLI_WORDS[tool], "--args-file", args?.path ?? wirePath(file)]);
   const connection = await connectMcp(mcpDir);
   try {
-    return { cli, mcp: await callTool(connection, tool, wireJson(file)), cliDir, mcpDir };
+    return { cli, mcp: await callTool(connection, tool, args?.json ?? wireJson(file)), cliDir, mcpDir };
   } finally {
     await connection.close();
   }
@@ -414,5 +414,64 @@ describe("the four visible states through CLI and MCP (MC4)", () => {
         expect(has, `notice of ${own} in the body of ${other}`).toBe(own === other);
       }
     }
+  });
+});
+
+describe("[S9] register: CLI `paneweft register` and MCP register_view are the same operation", () => {
+  // why: S9 adds `paneweft register --file` (design 5 lists no register command, so a registry could only be changed through MCP).
+  //   The arguments contain the registry REVISION, which depends on how the seed counted (store.md 5: not pinned), so the request
+  //   bytes are written per run from the revision a probe session reports, then given VERBATIM to both transports (--args-file
+  //   and tools/call). Three cases, as the brief names them: success, invalid definition, revision conflict. Each asserts byte-identical
+  //   bodies and exit code (0 / 1), and the contract's literal values, so two copies of one wrong generator cannot pass.
+  // proves: CLAIM(MC11) CLAIM(MC12) CLAIM(S9-register)
+  const definition = (id: string, extra: Record<string, unknown> = {}) => ({ id, entityKind: "vigil/watch", title: `Extra ${id}`, priority: 5, component: "list", requires: [], dataRole: "modules", ...extra });
+  async function revisionOfSeed(): Promise<number> {
+    const probe = must(await openSession(await seedClosed(dirs("parity-probe"))), "open probe");
+    const revision = (await probe.listDefinitions()).revision;
+    await probe.close();
+    return revision;
+  }
+  function requestFile(name: string, json: Record<string, any>) {
+    const path = join(dirs("parity-register-args"), name);
+    writeFileSync(path, JSON.stringify(json));
+    return { path, json };
+  }
+
+  it("[S9] success: expectedRevision = current -> identical JSON bodies, exit 0, revision + 1 on both sides", async () => {
+    const revision = await revisionOfSeed();
+    const pair = await freshPair("register_view", "", requestFile("ok.json", { definition: definition("def-extra"), expectedRevision: revision, format: "json" }));
+    expectParity(pair);
+    expect(pair.cli.exitCode).toBe(0);
+    const body = parseBody(pair.cli.stdout, "stdout");
+    expect(body.revision).toBe(revision + 1);
+    for (const dir of [pair.cliDir, pair.mcpDir]) {
+      const session = must(await openSession(dir), "reopen");
+      const stored = await session.listDefinitions();
+      await session.close();
+      expect(stored.revision).toBe(revision + 1);
+      expect(stored.definitions.map((d) => d.id)).toContain("def-extra");
+    }
+  });
+  it("[S9] invalid definition: component 'matrix' -> VALIDATION_FAILED with UNKNOWN_COMPONENT at /definition/component, identical, exit 1, registry unchanged", async () => {
+    const revision = await revisionOfSeed();
+    const pair = await freshPair("register_view", "", requestFile("bad.json", { definition: definition("def-bad", { component: "matrix" }), expectedRevision: revision, format: "json" }));
+    expectParity(pair);
+    expect(pair.cli.exitCode).toBe(1);
+    const body = parseBody(pair.cli.stdout, "stdout");
+    expect(body.code).toBe("VALIDATION_FAILED");
+    expect(issuePairs(body)).toEqual([["UNKNOWN_COMPONENT", "/definition/component"]]);
+    const session = must(await openSession(pair.cliDir), "reopen");
+    expect((await session.listDefinitions()).revision).toBe(revision);
+    await session.close();
+  });
+  it("[S9] revision conflict: a stale expectedRevision -> CONFLICT {currentRevision}, identical, exit 1, retryable", async () => {
+    const revision = await revisionOfSeed();
+    const pair = await freshPair("register_view", "", requestFile("stale.json", { definition: definition("def-stale"), expectedRevision: revision + 7, format: "json" }));
+    expectParity(pair);
+    expect(pair.cli.exitCode).toBe(1);
+    const body = parseBody(pair.cli.stdout, "stdout");
+    expect(body.code).toBe("CONFLICT");
+    expect(body.details).toEqual({ currentRevision: revision });
+    expect(body.retryable).toBe(true);
   });
 });

@@ -15,13 +15,13 @@ import { issuePairs, parseBody, runnerRegistryFor, seedClosed, wireJson, wirePat
 
 const makeTemp = useTempDirs();
 
-/** The twelve commands of red-contract 9, pinned by name (an emptied list must not pass). */
-const COMMANDS = ["components", "describe", "validate", "render", "open", "navigate", "inspect", "search", "notebook", "example", "serve", "mcp"];
+/** The thirteen commands of red-contract 9 (`register` added by S9), pinned by name (an emptied list must not pass). */
+const COMMANDS = ["components", "describe", "validate", "render", "register", "open", "navigate", "inspect", "search", "notebook", "example", "serve", "mcp"];
 
 describe("cli: help and unknown commands", () => {
   // why: an agent discovers the surface through `--help`; a command missing from it is undiscoverable (red-contract 9).
   // proves: CLAIM(MC11)
-  it("[MC11] `paneweft --help` exits 0 and lists all twelve commands on stdout, nothing on stderr", async () => {
+  it("[MC11] `paneweft --help` exits 0 and lists all thirteen commands on stdout, nothing on stderr", async () => {
     const run = await runCliInProcess(["--help"]);
     expect(run.exitCode).toBe(0);
     expect(run.stderr).toBe("");
@@ -347,3 +347,38 @@ describe("cli: examples and runners (MC17)", () => {
   });
 });
 
+describe("cli: register (S9)", () => {
+  // why: S9. `paneweft register --file DEF.json --expected-revision N` is sugar for the register_view arguments
+  //   {definition: <file contents>, expectedRevision: N}. Success persists the definition and prints the new revision (revision+1);
+  //   a stale revision is exit 1 with CONFLICT {currentRevision}; a missing --file or --expected-revision is a USAGE error (exit 2, stderr,
+  //   empty stdout) - not an operation error - and nothing is registered in any failing case.
+  // proves: CLAIM(S9-register) CLAIM(MC12) CLAIM(MC11)
+  it("[S9] register --file/--expected-revision: success, stale revision CONFLICT, and usage errors", async () => {
+    const dir = await seedClosed(makeTemp("cli-register"));
+    const probe = must(await openSession(dir), "open");
+    const revision = (await probe.listDefinitions()).revision;
+    await probe.close();
+    const file = join(makeTemp("cli-register-file"), "def.json");
+    writeFileSync(file, JSON.stringify({ id: "def-cli", entityKind: "vigil/watch", title: "From the CLI", priority: 5, component: "list", requires: [], dataRole: "modules" }));
+
+    const stale = await runCliInProcess(["--session", dir, "register", "--file", file, "--expected-revision", String(revision + 3), "--format", "json"]);
+    expect(stale.exitCode).toBe(1);
+    expect(parseBody(stale.stdout).code).toBe("CONFLICT");
+    expect(parseBody(stale.stdout).details).toEqual({ currentRevision: revision });
+
+    const noFile = await runCliInProcess(["--session", dir, "register", "--expected-revision", String(revision)]);
+    expect([noFile.exitCode, noFile.stdout]).toEqual([2, ""]);
+    expect(noFile.stderr).toContain("--file");
+    const noRevision = await runCliInProcess(["--session", dir, "register", "--file", file]);
+    expect([noRevision.exitCode, noRevision.stdout]).toEqual([2, ""]);
+    expect(noRevision.stderr).toContain("--expected-revision");
+
+    const ok = await runCliInProcess(["--session", dir, "register", "--file", file, "--expected-revision", String(revision), "--format", "json"]);
+    expect(ok.exitCode).toBe(0);
+    expect(parseBody(ok.stdout).revision).toBe(revision + 1);
+    const after = must(await openSession(dir), "reopen");
+    const stored = await after.listDefinitions();
+    await after.close();
+    expect([stored.revision, stored.definitions.some((d) => d.id === "def-cli")]).toEqual([revision + 1, true]);
+  });
+});
