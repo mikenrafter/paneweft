@@ -60,9 +60,10 @@ export interface WriteLockOptions {
 }
 
 interface HelperOutcome {
+  /** False when the process could not be started (ENOENT, EACCES ...); then `spawnError` says why and there is no exit status. */
+  started: boolean;
   code: number | null;
   signal: NodeJS.Signals | null;
-  /** Set when the process could not be started (ENOENT, EACCES ...). */
   spawnError: NodeJS.ErrnoException | null;
   stderr: string;
 }
@@ -117,21 +118,27 @@ function watch(child: ChildProcess): Promise<HelperOutcome> {
     child.stderr?.setEncoding("utf8");
     child.stderr?.on("data", (chunk: string) => { if (stderr.length < STDERR_KEPT_CHARS) stderr += chunk.slice(0, STDERR_KEPT_CHARS - stderr.length); });
     child.stderr?.on("error", () => undefined);
+    const finish = (code: number | null, signal: NodeJS.Signals | null): void => resolve({ started: child.pid !== undefined, code, signal, spawnError, stderr });
     child.once("error", (error: NodeJS.ErrnoException) => {
       spawnError = error;
-      if (child.pid === undefined) resolve({ code: null, signal: null, spawnError, stderr }); // never started: there will be no exit
+      if (child.pid !== undefined) return; // it started: its exit and 'close' follow
+      // It never started, so there is no exit. Node closes the stderr socketpair it had already made a moment AFTER 'error'; answering before that
+      // would return with a descriptor still open (CLAIM(flock-no-leak)), so wait for the stream's own close.
+      const stream = child.stderr;
+      if (stream === null || stream.destroyed) finish(null, null);
+      else { stream.once("close", () => finish(null, null)); stream.destroy(); }
     });
-    // 'close' follows 'exit' once stderr ended, so the kept stderr is complete.
-    child.once("close", (code, signal) => resolve({ code, signal, spawnError, stderr }));
+    // 'close' follows 'exit' once stdio ended, so the kept stderr is complete and no pipe of ours is left open.
+    child.once("close", finish);
   });
 }
 
 function assertAcquired(result: HelperOutcome, waitMs: number): void {
-  if (result.spawnError !== null && result.code === null && result.signal === null) {
-    if (result.spawnError.code === "ENOENT") {
+  if (!result.started) {
+    if (result.spawnError?.code === "ENOENT") {
       throw new WriteLockError("flock-missing", "the `flock` program was not found on PATH; the session write lock needs util-linux (install the util-linux package)");
     }
-    throw new WriteLockError("flock-failed", `cannot start the \`flock\` program: ${describe(result.spawnError)}`);
+    throw new WriteLockError("flock-failed", `cannot start the \`flock\` program: ${describe(result.spawnError ?? "no process was created")}`);
   }
   if (result.signal !== null) {
     throw new WriteLockError("flock-failed", `the \`flock\` helper was killed by ${result.signal} before it reported the lock${tail(result.stderr)}`);
