@@ -4,10 +4,12 @@
 // resolveSourceAnchor (anchors.ts), currentFileHash (freshness.ts) and the viewer's static files (server.ts).
 // Every swap test asserts the swap fired (no vacuous pass) and has a control with a VALID internal symlink that must still be read.
 // proves: CLAIM(anchor-roots) CLAIM(contained-assets) CLAIM(confined-read)
+import { execFileSync } from "node:child_process";
 import { mkdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveSourceAnchor } from "./anchors.ts";
+import { readConfinedFile } from "./confined-read.ts";
 import { currentFileHash } from "./freshness.ts";
 import { sha256Hex } from "./digest.ts";
 import { swapAfterRealpath, type RealpathSwap } from "../../test/helpers/fs-swap.ts";
@@ -121,5 +123,17 @@ describe("[S1] the viewer serves a static file only from a handle verified insid
     const { server } = await viewers.start({}, { assetsDirectory: root });
     const reply = await rawRequest(server, "/assets/file-link.txt");
     expect(reply).toMatchObject({ status: 200, text: INSIDE });
+  });
+});
+
+describe("[S1] readConfinedFile refuses what is not a regular file inside the root", () => {
+  // why: a directory or FIFO opened by a path that passed the containment check must not hang, throw or return bytes.
+  it("a directory and a FIFO are not-found; a regular file is read; a missing root is root-inaccessible", async () => {
+    const { root, base } = world();
+    execFileSync("mkfifo", [join(root, "pipe")]);
+    expect(await readConfinedFile(root, "dir")).toEqual({ ok: false, reason: "not-found" });
+    expect(await readConfinedFile(root, "pipe")).toEqual({ ok: false, reason: "not-found" });
+    expect(await readConfinedFile(root, "f.txt")).toMatchObject({ ok: true, realPath: join(root, "f.txt") });
+    expect(await readConfinedFile(join(base, "no-such-root"), "f.txt")).toEqual({ ok: false, reason: "root-inaccessible" });
   });
 });

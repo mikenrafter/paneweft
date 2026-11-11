@@ -1,0 +1,92 @@
+// The one place that reads a file under a root the operator registered (review S1). Used by source anchors, freshness hashing and
+// the viewer's static files, so the confinement rule exists once.
+//
+// Why it exists: checking a canonical path and then reading by PATHNAME leaves a window in which a file, or any ancestor directory,
+// can be swapped for a symlink that leaves the root (check-to-use race). Reading by path is therefore never done here.
+// CLAIM(confined-read): bytes are returned only from a file handle whose own real path lies inside the real root, and are read from
+//   that handle, never from a pathname; so a swap after the check either fails the open or is caught by the handle check
+//   [design section 5; confined-read.test.ts S1].
+// How, in order:
+//   1. realpath of the root and of the target (lexical judgement is the caller's, see normaliseRelativePath);
+//   2. open the canonical path with O_NOFOLLOW (a leaf swapped for a symlink fails with ELOOP, and the resolution is retried so a
+//      swap to a VALID internal link is followed through the new canonical answer) and O_NONBLOCK (a FIFO cannot hang the open);
+//   3. ask the kernel where the OPEN handle lives (`realpath /proc/self/fd/<fd>`), which also catches a swapped ancestor directory,
+//      something O_NOFOLLOW on the leaf cannot see; refuse if that is outside the root or not a regular file;
+//   4. read from the handle.
+// Platform: step 3 needs Linux's /proc. Elsewhere the handle is compared by device and inode with the canonical path re-resolved after the
+// open, which narrows the window but does not close it; that weaker claim is deliberately not CLAIM(confined-read).
+// Errors: returns a reason, never throws and never echoes file content or the outside path:
+//   root-inaccessible (root cannot be resolved), not-found (missing, unreadable, or not a regular file), outside (leaves the root).
+import { constants } from "node:fs";
+import { open, realpath, stat } from "node:fs/promises";
+import { join, sep } from "node:path";
+
+export type ConfinedReason = "root-inaccessible" | "not-found" | "outside";
+export type CanonicalPath = { ok: true; path: string; root: string } | { ok: false; reason: ConfinedReason };
+export type ConfinedRead = { ok: true; bytes: Buffer; realPath: string } | { ok: false; reason: ConfinedReason };
+
+const OPEN_FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
+/** A swapped leaf is resolved again this many times before the read fails closed. */
+const MAX_ATTEMPTS = 3;
+
+const isInside = (root: string, path: string): boolean => path === root || path.startsWith(root.endsWith(sep) ? root : root + sep);
+
+/** The real, canonical path of `relative` under `root`, or why not. Reads nothing but the link structure. */
+export async function canonicalPathInside(root: string, relative: string): Promise<CanonicalPath> {
+  let realRoot: string;
+  try {
+    realRoot = await realpath(root);
+  } catch {
+    return { ok: false, reason: "root-inaccessible" };
+  }
+  let real: string;
+  try {
+    real = await realpath(join(realRoot, relative));
+  } catch {
+    return { ok: false, reason: "not-found" };
+  }
+  return isInside(realRoot, real) ? { ok: true, path: real, root: realRoot } : { ok: false, reason: "outside" };
+}
+
+/** Where the open handle really is, or null when that cannot be established (fail closed). */
+async function handleRealPath(handle: Awaited<ReturnType<typeof open>>, canonical: string): Promise<string | null> {
+  try {
+    return await realpath(`/proc/self/fd/${handle.fd}`);
+  } catch {
+    if (process.platform === "linux") return null; // /proc is expected here; without it nothing can be vouched for
+  }
+  try {
+    const [opened, again] = [await handle.stat(), await realpath(canonical)];
+    const current = await stat(again);
+    return current.dev === opened.dev && current.ino === opened.ino ? again : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The bytes of `relative` under `root` (a plain relative path the caller already judged lexically). */
+export async function readConfinedFile(root: string, relative: string): Promise<ConfinedRead> {
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    const located = await canonicalPathInside(root, relative);
+    if (!located.ok) return located;
+    let handle: Awaited<ReturnType<typeof open>>;
+    try {
+      handle = await open(located.path, OPEN_FLAGS);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ELOOP" && attempt < MAX_ATTEMPTS) continue; // the leaf became a symlink: resolve again
+      return { ok: false, reason: (error as NodeJS.ErrnoException).code === "ELOOP" ? "outside" : "not-found" };
+    }
+    try {
+      const opened = await handleRealPath(handle, located.path);
+      if (opened === null) return { ok: false, reason: "not-found" };
+      if (!isInside(located.root, opened)) return { ok: false, reason: "outside" };
+      if (!(await handle.stat()).isFile()) return { ok: false, reason: "not-found" };
+      return { ok: true, bytes: await handle.readFile(), realPath: opened };
+    } catch {
+      return { ok: false, reason: "not-found" };
+    } finally {
+      await handle.close().catch(() => {});
+    }
+  }
+  return { ok: false, reason: "outside" }; // unreachable: the last attempt returns above
+}

@@ -4,13 +4,16 @@
 // The decision is made in two steps and neither echoes file content or the outside path in an error:
 //   1. lexically (no filesystem access): empty, NUL, any backslash, absolute, or a `..` segment => INVALID_PATH;
 //   2. canonically: realpath of the root and of the target; a target whose real path leaves the real root => PATH_OUTSIDE_ROOT.
-// The file is then read through its REAL path, so a symlink swapped in after the check cannot redirect the read.
-import { readFile, realpath } from "node:fs/promises";
-import { isAbsolute, join, sep } from "node:path";
+// The file is then read from an open handle whose real path is verified inside the root (confined-read.ts, CLAIM(confined-read)),
+// so a symlink swapped in for the file or an ancestor after the check cannot redirect the read.
+import { isAbsolute } from "node:path";
 import type { Anchor } from "./wire.ts";
 import type { RepositoryRegistration } from "./session.ts";
 import type { OperationError, Result } from "./errors.ts";
 import { sha256Hex } from "./digest.ts";
+import { readConfinedFile } from "./confined-read.ts";
+
+export { canonicalPathInside } from "./confined-read.ts";
 
 export interface NumberedLine { n: number; text: string }
 export interface ResolvedAnchor {
@@ -38,24 +41,6 @@ export function normaliseRelativePath(path: string): string | null {
   return segments.join("/");
 }
 
-/** The real, canonical path of `relative` under `root`, or why not. Reads nothing but the link structure. */
-export async function canonicalPathInside(root: string, relative: string): Promise<{ ok: true; path: string } | { ok: false; reason: "root-inaccessible" | "not-found" | "outside" }> {
-  let realRoot: string;
-  try {
-    realRoot = await realpath(root);
-  } catch {
-    return { ok: false, reason: "root-inaccessible" };
-  }
-  let real: string;
-  try {
-    real = await realpath(join(realRoot, relative));
-  } catch {
-    return { ok: false, reason: "not-found" };
-  }
-  const inside = real === realRoot || real.startsWith(realRoot.endsWith(sep) ? realRoot : realRoot + sep);
-  return inside ? { ok: true, path: real } : { ok: false, reason: "outside" };
-}
-
 /** Lines of a text file: terminators (\n, \r\n) excluded, no phantom line after a final terminator, empty file = no lines. */
 export function splitLines(text: string): string[] {
   if (text === "") return [];
@@ -70,17 +55,12 @@ export async function resolveSourceAnchor(repositories: RepositoryRegistration[]
   if (registration === undefined) return failure("REPOSITORY_NOT_REGISTERED", `repository "${anchor.repository}" is not registered with this session`);
   const relativePath = normaliseRelativePath(anchor.path);
   if (relativePath === null) return failure("INVALID_PATH", "the anchor path must be a plain relative path inside the repository (no absolute path, backslash, NUL byte or .. segment)");
-  const located = await canonicalPathInside(registration.root, relativePath);
-  if (!located.ok) {
-    if (located.reason === "outside") return failure("PATH_OUTSIDE_ROOT", "the anchor path resolves outside the registered repository root");
-    return failure("NOT_FOUND", located.reason === "root-inaccessible" ? `the root of repository "${anchor.repository}" is not accessible` : `no file "${relativePath}" in repository "${anchor.repository}"`);
+  const read = await readConfinedFile(registration.root, relativePath);
+  if (!read.ok) {
+    if (read.reason === "outside") return failure("PATH_OUTSIDE_ROOT", "the anchor path resolves outside the registered repository root");
+    return failure("NOT_FOUND", read.reason === "root-inaccessible" ? `the root of repository "${anchor.repository}" is not accessible` : `no file "${relativePath}" in repository "${anchor.repository}"`);
   }
-  let bytes: Buffer;
-  try {
-    bytes = await readFile(located.path);
-  } catch {
-    return failure("NOT_FOUND", `"${relativePath}" in repository "${anchor.repository}" is not a readable file`);
-  }
+  const bytes = read.bytes;
   const lines = splitLines(bytes.toString("utf8"));
   const [first, last] = anchor.lines;
   if (!Number.isInteger(first) || !Number.isInteger(last) || first < 1 || last < first || last > lines.length) {

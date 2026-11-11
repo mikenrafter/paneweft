@@ -12,10 +12,11 @@
 // CLAIM(no-read-before-deny): the registration check happens BEFORE any filesystem call for a repository, and a recorded path is
 //   judged lexically before it is touched, so nothing outside a registered root is read, stat'ed, listed or resolved
 //   [freshness.test.ts N3, observed with test/helpers/fs-spy.ts].
-import { readFile, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import type { Envelope } from "./wire.ts";
 import type { RepositoryRegistration } from "./session.ts";
-import { canonicalPathInside, normaliseRelativePath } from "./anchors.ts";
+import { normaliseRelativePath } from "./anchors.ts";
+import { readConfinedFile } from "./confined-read.ts";
 import { compareCodeUnits } from "./canonical.ts";
 import { sha256Hex } from "./digest.ts";
 
@@ -42,13 +43,9 @@ export async function currentFileHash(registered: RepositoryRegistration[], repo
   }
   const relative = normaliseRelativePath(path);
   if (relative === null) return { state: "present", sha256: null };
-  const located = await canonicalPathInside(registration.root, relative);
-  if (!located.ok) return located.reason === "root-inaccessible" ? { state: "root-inaccessible", root: registration.root } : { state: "present", sha256: null };
-  try {
-    return { state: "present", sha256: sha256Hex(await readFile(located.path)) };
-  } catch {
-    return { state: "present", sha256: null };
-  }
+  const read = await readConfinedFile(registration.root, relative);
+  if (!read.ok) return read.reason === "root-inaccessible" ? { state: "root-inaccessible", root: registration.root } : { state: "present", sha256: null };
+  return { state: "present", sha256: sha256Hex(read.bytes) };
 }
 
 export async function checkFreshness(freshness: Envelope["freshness"], registered: RepositoryRegistration[]): Promise<FreshnessResult> {

@@ -9,10 +9,11 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { randomBytes, timingSafeEqual } from "node:crypto";
-import { chmod, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
-import { extname, join, sep } from "node:path";
+import { chmod, readFile, rm, writeFile } from "node:fs/promises";
+import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { err, ok, type OperationError, type OperationErrorCode, type Result } from "../core/errors.ts";
+import { readConfinedFile } from "../core/confined-read.ts";
 import type { Session } from "../core/session.ts";
 import type { EntityRef } from "../core/wire.ts";
 import { createSessionSource } from "./session-source.ts";
@@ -81,23 +82,16 @@ async function readBody(request: IncomingMessage): Promise<{ ok: true; text: str
   return { ok: true, text: Buffer.concat(parts).toString("utf8") };
 }
 
-/** A static file strictly inside `root`, or null. The path is decoded once; anything that is not a plain relative file name is refused. */
-async function resolveAsset(root: string, encoded: string): Promise<{ file: string } | { status: 400 | 404 }> {
+/** A static file strictly inside `root`, read from a verified handle (CLAIM(confined-read)). The path is decoded once; anything that is not a plain relative file name is refused. */
+async function readAsset(root: string, encoded: string): Promise<{ file: string; bytes: Buffer } | { status: 400 | 404 }> {
   let decoded: string;
   try { decoded = decodeURIComponent(encoded); } catch { return { status: 400 }; }
   if (decoded.includes("\0")) return { status: 400 };
   if (decoded.includes("\\")) return { status: 404 };
   const segments = decoded.split("/");
   if (segments.some((segment) => segment === "" || segment === "." || segment === "..")) return { status: 404 };
-  try {
-    const base = await realpath(root);
-    const file = await realpath(join(base, ...segments));
-    if (!file.startsWith(base + sep)) return { status: 404 };
-    if (!(await stat(file)).isFile()) return { status: 404 };
-    return { file };
-  } catch {
-    return { status: 404 };
-  }
+  const read = await readConfinedFile(root, segments.join("/"));
+  return read.ok ? { file: read.realPath, bytes: read.bytes } : { status: 404 };
 }
 
 function excerptLines(text: string, first: number): Array<{ n: number; text: string }> {
@@ -226,9 +220,9 @@ export async function startViewer(options: ViewerServerOptions): Promise<Result<
     if (method !== "GET" && method !== "HEAD") return fail("NOT_FOUND", `no route ${method} ${rawPath}`);
     const asset = rawPath === "/" ? "index.html" : rawPath.startsWith("/assets/") ? rawPath.slice("/assets/".length) : null;
     if (asset === null) return fail("NOT_FOUND", `no route ${rawPath}`);
-    const found = await resolveAsset(assets, asset);
+    const found = await readAsset(assets, asset);
     if (!("file" in found)) return fail(found.status === 400 ? "INVALID_ARGUMENT" : "NOT_FOUND", `no asset ${rawPath}`, found.status);
-    return { status: 200, type: CONTENT_TYPES[extname(found.file)] ?? "application/octet-stream", body: await readFile(found.file), extra: PAGE_HEADERS };
+    return { status: 200, type: CONTENT_TYPES[extname(found.file)] ?? "application/octet-stream", body: found.bytes, extra: PAGE_HEADERS };
   }
 
   const server: Server = createServer((request: IncomingMessage, response: ServerResponse) => {
