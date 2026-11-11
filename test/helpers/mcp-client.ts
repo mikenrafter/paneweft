@@ -7,6 +7,8 @@ import { REPO_ROOT } from "./fixtures.ts";
 
 export interface McpTextResult { isError: boolean; text: string; blocks: number; raw: unknown }
 export interface McpConnection {
+  /** The `instructions` string the server returned in its initialize result, if any. */
+  instructions(): string | undefined;
   listTools(): Promise<Array<{ name: string; description?: string; inputSchema: Record<string, any> }>>;
   call(name: string, args: Record<string, unknown>): Promise<McpTextResult>;
   close(): Promise<void>;
@@ -32,6 +34,7 @@ export async function connectMcp(sessionDir: string | null, options: { timeoutMs
     if (timer) clearTimeout(timer);
   }
   return {
+    instructions: () => client.getInstructions(),
     async listTools() {
       const listed = await client.listTools();
       return listed.tools as Array<{ name: string; description?: string; inputSchema: Record<string, any> }>;
