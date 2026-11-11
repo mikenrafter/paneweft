@@ -56,12 +56,22 @@ export interface SessionTestHooks {
   afterStaleObserved?: (info: { operation: string }) => void | Promise<void>;
   /** S2: that contender's attempt to break the stale lock finished; `broke` says whether it removed the lock it had judged stale. */
   afterStaleResolved?: (info: { operation: string; broke: boolean }) => void | Promise<void>;
+  /** S2 round 2: this contender holds the recovery mutex, before it re-reads the main lock. */
+  afterRecoveryMutexTaken?: (info: { operation: string }) => void | Promise<void>;
+  /** S2 round 2: a contender found the recovery mutex abandoned (its holder is dead), before it takes the mutex away. */
+  afterMutexStaleObserved?: (info: { operation: string }) => void | Promise<void>;
+  /** S2 round 2: `target` (the main lock or the recovery mutex) was just renamed to a tombstone and has not been verified yet. */
+  afterDisplaced?: (info: { operation: string; target: "lock" | "recovery" }) => void | Promise<void>;
   /** Called immediately before the manifest swap of a mutation; throwing simulates a failed save. */
   beforeManifestSwap?: (info: { operation: string }) => void | Promise<void>;
   /** Called after each file written while staging a mutation. */
   afterWrite?: (info: { count: number; path: string }) => void | Promise<void>;
 }
-export interface SessionOptions { testHooks?: SessionTestHooks }
+export interface SessionOptions {
+  testHooks?: SessionTestHooks;
+  /** How long a mutation waits for a lock held by a live process before it answers CONFLICT. Default 15 seconds. */
+  lockWaitMs?: number;
+}
 
 export interface Session {
   readonly dir: string;
@@ -186,10 +196,12 @@ class DirectorySession implements Session {
   readonly dir: string;
   private readonly hooks: SessionTestHooks;
   private closed = false;
+  private readonly lockWaitMs: number;
 
   constructor(dir: string, options: SessionOptions) {
     this.dir = dir;
     this.hooks = options.testHooks ?? {};
+    this.lockWaitMs = options.lockWaitMs ?? LOCK_WAIT_MS;
   }
 
   // -- reading ------------------------------------------------------------------------------------------------------
@@ -348,7 +360,7 @@ class DirectorySession implements Session {
     await mkdir(this.dir, { recursive: true });
     const lock = join(this.dir, LOCK);
     const token = `${process.pid}-${randomBytes(8).toString("hex")}`;
-    const deadline = Date.now() + LOCK_WAIT_MS;
+    const deadline = Date.now() + this.lockWaitMs;
     let contended = false;
     for (;;) {
       try {
@@ -391,7 +403,7 @@ class DirectorySession implements Session {
     if (observed.kind === "gone") return true; // released or already recovered: just try to acquire
     if (observed.kind === "live") return false;
     await this.hooks.afterStaleObserved?.({ operation });
-    const broke = await removeObservedLock(lock, observed);
+    const broke = await removeObservedLock(lock, observed, this.hooks, operation);
     await this.hooks.afterStaleResolved?.({ operation, broke });
     return broke;
   }
@@ -672,15 +684,16 @@ async function inspectLock(lock: string): Promise<LockState> {
 }
 
 /** Removes `lock` iff it is still the dead lock `observed`; true only when this call removed it. See CLAIM(stale-lock-recovery). */
-async function removeObservedLock(lock: string, observed: { kind: "dead"; token: string | null }): Promise<boolean> {
+async function removeObservedLock(lock: string, observed: { kind: "dead"; token: string | null }, hooks: SessionTestHooks, operation: string): Promise<boolean> {
   const mutex = `${lock}.recovery`;
   try {
     await mkdir(mutex);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") await reapAbandonedRecovery(mutex);
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") await reapAbandonedRecovery(mutex, hooks, operation);
     return false; // somebody else is recovering (or the mutex could not be made): poll and judge again
   }
   try {
+    await hooks.afterRecoveryMutexTaken?.({ operation });
     const current = await inspectLock(lock);
     if (current.kind !== "dead" || current.token !== observed.token) return false; // gone, replaced or revived since it was judged
     const tombstone = `${lock}.stale.${process.pid}.${randomBytes(6).toString("hex")}`;
@@ -689,6 +702,7 @@ async function removeObservedLock(lock: string, observed: { kind: "dead"; token:
     } catch {
       return false;
     }
+    await hooks.afterDisplaced?.({ operation, target: "lock" });
     const held = await inspectLock(tombstone);
     if (held.kind === "dead" && held.token === observed.token) {
       await rm(tombstone, { recursive: true, force: true });
@@ -702,11 +716,13 @@ async function removeObservedLock(lock: string, observed: { kind: "dead"; token:
 }
 
 /** A recovery mutex left by a contender that died inside its few-millisecond section is removed once it is clearly abandoned. */
-async function reapAbandonedRecovery(mutex: string): Promise<void> {
+async function reapAbandonedRecovery(mutex: string, hooks: SessionTestHooks, operation: string): Promise<void> {
   try {
     if (Date.now() - (await stat(mutex)).mtimeMs < ABANDONED_RECOVERY_MS) return;
+    await hooks.afterMutexStaleObserved?.({ operation });
     const tombstone = `${mutex}.abandoned.${process.pid}.${randomBytes(6).toString("hex")}`;
     await rename(mutex, tombstone);
+    await hooks.afterDisplaced?.({ operation, target: "recovery" });
     await rm(tombstone, { recursive: true, force: true });
   } catch { /* another contender reaped it first */ }
 }

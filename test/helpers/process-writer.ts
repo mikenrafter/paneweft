@@ -4,7 +4,7 @@
 import { fork, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-export interface WriterEvent { event: string; pid?: number; broke?: boolean; result?: any }
+export interface WriterEvent { event: string; pid?: number; broke?: boolean; target?: string; result?: any }
 export interface ProcessWriter {
   /** The next unread event with this name; rejects if the child exits first without ever sending it. */
   waitFor(event: string): Promise<WriterEvent>;
@@ -44,6 +44,18 @@ export function spawnWriter(dir: string, job: unknown, registry: ChildProcess[])
     },
     release: (event) => { if (child.connected) child.send({ release: event }); },
   };
+}
+
+/** Passes the named barriers of `writer` as they occur (each as often as it occurs) without the test having to know whether they will occur at all. */
+export function autoRelease(writer: ProcessWriter, events: readonly string[]): void {
+  for (const event of events) {
+    void (async () => {
+      for (;;) {
+        try { await writer.waitFor(event); } catch { return; } // the writer exited
+        writer.release(event);
+      }
+    })();
+  }
 }
 
 /** Whichever writer sends `event` first, with the losers' waiters withdrawn. */
