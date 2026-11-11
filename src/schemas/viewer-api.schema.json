@@ -146,6 +146,7 @@
         "freshness": { "$ref": "#/$defs/FreshnessResult" },
         "contentHash": { "$ref": "urn:paneweft:schema:common:1#/$defs/Sha256" },
         "notebookRevision": { "type": "integer", "minimum": 1 },
+        "custom": { "description": "v1: a repo-owned renderer overlay on this stored view (state ready, untrusted, missing-asset, incompatible or failed, with the frame location and the objects the renderer may name). Absent for every view that has no renderer.", "type": "object" },
         "recordedRuns": {
           "description": "Example views with recorded runs: which run items of 'envelope' were recorded rather than stored in the envelope, and why a recorded run was left out.",
           "type": "object",

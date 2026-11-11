@@ -15,6 +15,7 @@ import { completenessLine, freshnessLine, summariseView, type RecordedRuns, type
 import { compareCodeUnits } from "../core/canonical.ts";
 import { HAS_EMPTY_STATE, newPaneUi, renderComponent, renderOpenedSource, renderSourceDetail, type ComponentContext, type PaneUi } from "./components.ts";
 import { append, h, type Child } from "./dom.ts";
+import { renderRendererHost } from "./renderer-host.ts";
 import type { ViewerSource, ViewModel } from "./source.ts";
 
 export interface MountOptions {
@@ -286,7 +287,18 @@ export async function mountViewer(container: HTMLElement, options: MountOptions)
       if (ui.error !== null) panelChildren.push(h(doc, "div", { "data-pw": "error", role: "alert", "data-code": ui.error.code }, `${ui.error.code}: ${ui.error.message}`));
       const message = HAS_EMPTY_STATE.has(view.envelope.component) ? emptyMessage(summary, ui.filterText !== "" || ui.hiddenRelations.size > 0 || ui.claimStatus !== "all") : null;
       if (message !== null) panelChildren.push(h(doc, "div", { "data-pw": "empty-state" }, message));
-      else panelChildren.push(renderComponent(context));
+      else if (view.custom !== undefined) {
+        const custom = view.custom;
+        panelChildren.push(renderRendererHost({
+          doc, custom, viewId: view.envelope.id, snapshotId: pane.snapshotId, locale, fallback: [renderComponent(context)].flatMap((node) => (node === null ? [] : [node])),
+          // the frame can only ask to open an object its view permits; opening is the existing item selection of the fallback
+          openObject: (objectId) => {
+            const target = custom.frame?.objects[objectId];
+            const item = target === undefined ? undefined : viewItems(view.envelope).find((candidate) => { const ref = entityRefOf(candidate); return ref !== undefined && ref.id === target.id && ref.kind === target.kind; });
+            if (item !== undefined) void enqueue(() => dispatch({ type: "select", paneIndex: index, itemId: item.id }));
+          },
+        }));
+      } else panelChildren.push(renderComponent(context));
       const resolved = ui.opened !== null && ui.opened.result.ok ? ui.opened.result.value : null;
       if (view.envelope.component !== "source" && resolved !== null && resolved.status === "resolved") opened = renderOpenedSource(context, resolved, ui.opened?.lines);
       if (ui.sourceDetail !== null) detail = renderSourceDetail(context, ui.sourceDetail);

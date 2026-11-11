@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:paneweft:schema:tool:view_result:1",
   "title": "view_result",
-  "description": "Reads a stored view of a run or job: bounded text, completeness, provenance, source anchors, object and run ids, the viewer link when a viewer runs, and the standard fallback text for custom renderers. Ambiguity lists candidates. Never executes code.",
+  "description": "Reads a stored view of a run or job: bounded text, completeness, provenance, source anchors, object and run ids, the viewer link when a viewer is open, and the standard fallback text for custom renderers. Ambiguity lists candidates. Never executes code.",
   "type": "object",
   "additionalProperties": false,
   "required": [

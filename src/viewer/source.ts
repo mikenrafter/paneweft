@@ -11,6 +11,8 @@ import type { RankOutput } from "../core/registry.ts";
 export interface ViewModel {
   envelope: Envelope; freshness: FreshnessResult; contentHash: string; notebookRevision?: number;
   /** Example views only: which run items of `envelope` were recorded (not written into the stored envelope), and why a recorded run was left out. */
+  /** v1: a repo-owned renderer overlay for this stored view (the envelope is its standard fallback). Set by the viewer server only. */
+  custom?: import("../v1/serve-renderer.ts").CustomRendering;
   recordedRuns?: { runs: Array<{ itemId: string; runId: string; contentHash: string }>; notice: string | null };
 }
 export interface SearchHit {

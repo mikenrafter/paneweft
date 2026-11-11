@@ -17,7 +17,12 @@ export interface Manifest {
   modules: ReadonlyArray<ManifestModule>;
 }
 
+/** The symbol under which a manifest carries its own catalogue compiler. The host's catalogue export imports the repository's manifest and
+ * calls this, so the SDK copy the repository resolved is the one that compiles (no second copy has to be resolvable from the host). */
+export const COMPILE = Symbol.for("paneweft.compile");
+
 export function defineManifest(manifest: Manifest): Manifest {
+  Object.defineProperty(manifest, COMPILE, { value: (declared?: ReadonlyArray<string>) => compileCatalogue(manifest, declared), enumerable: false });
   return manifest;
 }
 
