@@ -342,3 +342,21 @@ describe("[IV17] what a finished job leaves", () => {
     expect(statSync(join(FIXTURES, "v1/runners/fake-cargo.mjs")).isFile()).toBe(true);
   });
 });
+
+describe("[S1] a job id is a name, never a path", () => {
+  // why: S1. status and cancel took the caller's id straight into `jobs/<id>/`, so `../evil` read a record planted beside the jobs directory as a job.
+  // Rejects the implementation that joins the id without checking it against the request-id grammar.
+  // proves: CLAIM(S1-confinement)
+  it("answers NOT_FOUND for an id with path separators and reads nothing outside jobs/", async () => {
+    const { dir, service } = await world();
+    must(await service().collect(request("job-s1a")), "collect");
+    const planted = join(dir, "evil");
+    mkdirSync(planted, { recursive: true });
+    writeFileSync(join(planted, "intent.json"), readFileSync(join(dir, "jobs", "job-s1a", "intent.json")));
+    writeFileSync(join(planted, "state.json"), JSON.stringify({ schemaVersion: "paneweft.job/1", requestId: "evil", state: "succeeded", qexId: null, runId: null, history: [] }));
+    for (const hostile of ["../evil", "..", ".", "a/b", ""]) {
+      expect(mustFail(await service().status(hostile), `status ${JSON.stringify(hostile)}`).code).toBe("NOT_FOUND");
+      expect(mustFail(await service().cancel(hostile), `cancel ${JSON.stringify(hostile)}`).code).toBe("NOT_FOUND");
+    }
+  });
+});

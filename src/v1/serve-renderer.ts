@@ -6,7 +6,7 @@ import { randomBytes } from "node:crypto";
 import type { Session, ViewKey } from "../core/session.ts";
 import type { EntityRef } from "../core/wire.ts";
 import type { CustomOverlay } from "./capture.ts";
-import { readJsonFile, runDirectory } from "./read.ts";
+import { customFile, readJsonFile } from "./read.ts";
 import { SUPPORTED_RENDERER_API, createCapabilityIssuer, digestRenderer, openTrustStore, validateRendererPayload } from "./renderer.ts";
 
 /** The `custom` member of a view model: everything the browser needs to decide between the frame and the notice. */
@@ -42,7 +42,7 @@ export function createRendererServing(options: { session: Session; sessionDirect
     async custom(key) {
       if (!key.snapshotId.startsWith("snap-")) return undefined;
       const runId = key.snapshotId.slice(5);
-      const overlay = await readJsonFile<CustomOverlay>(join(runDirectory(options.session, runId), "customs", `${encodeURIComponent(key.viewId)}.json`));
+      const overlay = await readJsonFile<CustomOverlay>(customFile(options.session, runId, key.viewId));
       if (overlay === undefined) return undefined;
       const renderer = { id: overlay.renderer.id, apiVersion: overlay.renderer.apiVersion, assetDigest: overlay.renderer.assetDigest };
       const refuse = (state: CustomRendering["state"], message: string): CustomRendering => ({ state, renderer, message });

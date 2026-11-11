@@ -174,7 +174,12 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
   const deps: JobServiceDeps = { ...rawDeps, catalogueFor: rawDeps.catalogueFor ?? ((repo, adapter) => storedCatalogue(rawDeps.sessionDir, repo, adapter)) };
   const now = (): string => (deps.clock?.() ?? new Date()).toISOString();
   const crash = async (point: CrashPoint): Promise<void> => void (await deps.crashAt?.(point));
-  const jobDir = (id: string): string => join(deps.sessionDir, "jobs", id);
+  // S1: a job id from a caller names a directory only after it matched REQUEST_ID (no separators, no dot-only names); anything else is
+  // "no such job", never a path.
+  const jobDir = (id: string): string => {
+    if (!REQUEST_ID.test(id)) throw new RangeError(`"${id}" is not a job id`);
+    return join(deps.sessionDir, "jobs", id);
+  };
   const cancelWaitMs = deps.cancelWaitMs ?? 10_000;
 
   const readIntent = async (id: string): Promise<Intent | undefined> => {
@@ -598,6 +603,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     refreshCatalogue: (request) => begin("catalogue", request, {}),
 
     async status(id, options = {}) {
+      if (!REQUEST_ID.test(id)) return err("NOT_FOUND", `no collection job "${id}" in this session`);
       const wait = options.waitSeconds ?? 0;
       if (!Number.isInteger(wait) || wait < 0 || wait > 30) return err("INVALID_ARGUMENT", `waitSeconds must be an integer from 0 to 30 (got ${String(wait)}): a status wait is bounded to 30 seconds`, { errors: [{ code: "OUT_OF_RANGE", pointer: "/waitSeconds", constraint: "maximum: 30", hint: "Call again to keep waiting." }] });
       const deadline = Date.now() + wait * 1000;
@@ -655,6 +661,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     },
 
     async cancel(id) {
+      if (!REQUEST_ID.test(id)) return err("NOT_FOUND", `no collection job "${id}" in this session`);
       const intent = await readIntent(id);
       if (intent === undefined) return err("NOT_FOUND", `no collection job "${id}" in this session`);
       let state = await readState(id);

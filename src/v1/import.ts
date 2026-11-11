@@ -1,19 +1,22 @@
 // Atomic, idempotent import of one collection into a session (spec section 8; amendment S3; IV20).
 //
-// Order: validate EVERYTHING (run, graphs, cross references, the v0 preflight of the lowered bundle); write the v1 files, which are
-// invisible until their snapshot exists; then one v0 manifest swap (`importBundle`), which is the commit point. A crash before the
-// swap leaves nothing readable; a crash after it is a completed import that a retry recognises by its content digest.
-import { mkdir, open, rename, writeFile } from "node:fs/promises";
+// Order: validate EVERYTHING (run, graphs, cross references) outside any lock; then, under the v1 import lock, the conflict check, the v0
+// preflight of the lowered bundle (with the definition changes it implies), the v1 files and the receipt, which are invisible until their
+// snapshot exists; then one v0 manifest swap (`importBundle`) that publishes snapshot and definitions together: the commit point. A
+// crash before the swap leaves nothing readable and the registry untouched; a crash after it is a completed import that a retry
+// recognises by its receipt. Identifiers from the payload are path components only through `pathComponent` (S1).
+import { mkdir, open, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { canonicalJson } from "../core/canonical.ts";
+import { canonicalJson, compareCodeUnits } from "../core/canonical.ts";
 import { sha256Hex } from "../core/digest.ts";
+import { WriteLockError, withWriteLock } from "../core/write-lock.ts";
 import { err, ok, type Result, type ValidationIssue } from "../core/errors.ts";
 import type { Session, ViewKey } from "../core/session.ts";
 import type { Entity, EntityRef, Envelope, ViewDefinition } from "../core/wire.ts";
 import type { ObjectGraph } from "../generated/v1/ObjectGraph.ts";
 import type { TestRun } from "../generated/v1/TestRun.ts";
 import { entityOfObject, lowerViewRecord, validateObjectGraph } from "./capture.ts";
-import { committedImport, pageFile, runDirectory, snapshotOfRun, type ImportRecord, type Origin } from "./read.ts";
+import { captureFile, committedImport, customFile, pageFile, runDirectory, snapshotOfRun, v1Directory, type ImportRecord, type Origin } from "./read.ts";
 import { validateAgainstV1 } from "./schemas.ts";
 
 export type { Origin };
@@ -69,20 +72,58 @@ function validateRun(input: CollectionImport): Result<TestRun> {
   return ok(document);
 }
 
-/** Validates everything first (no write on any fault), then writes under the session write lock: objects, then one atomic manifest
- * swap. */
+const V1_LOCK_WAIT_MS = 15_000;
+
+/** Order of the two locks: the v1 lock first, the session write lock (taken inside `importBundle`) second, never the other way round. */
+async function withV1Lock<T>(session: Session, body: () => Promise<Result<T>>): Promise<Result<T>> {
+  await mkdir(v1Directory(session), { recursive: true });
+  try {
+    return await withWriteLock(v1Directory(session), { waitMs: V1_LOCK_WAIT_MS }, body);
+  } catch (cause) {
+    if (!(cause instanceof WriteLockError)) throw cause;
+    return err(cause.kind === "contended" ? "CONFLICT" : "STORAGE_FAILED", `the import lock of this session could not be taken: ${cause.message}`, { retryable: cause.kind === "contended" });
+  }
+}
+
+/** Validates everything first (no write on any fault), then commits as ONE unit under the v1 import lock: the conflict check against an
+ * earlier import of the run, the preflight (with the definition changes it implies), the artifacts, the receipt, and the single manifest
+ * swap that publishes the snapshot together with the changed definitions (S7).
+ *
+ * Why a lock of its own: the run directory and the receipt are v1 files the session lock does not cover. Two imports of one run id used to
+ * check the receipt, write the same files and race to the manifest, so the loser's files could replace the winner's. */
 export async function importCollection(session: Session, input: CollectionImport, options: { crashAt?: (point: ImportCrashPoint) => void | Promise<void> } = {}): Promise<Result<ImportReceipt>> {
-  const crash = async (point: ImportCrashPoint): Promise<void> => void (await options.crashAt?.(point));
   const run = validateRun(input);
   if (!run.ok) return run;
-  const snapshotId = snapshotOfRun(input.runId);
   const digest = sha256Hex(canonicalJson({ repo: input.repo, run: input.run, graphs: input.graphs }));
-  const existing = await committedImport(session, input.runId);
-  if (existing !== undefined) {
-    if (existing.digest !== digest || existing.origin !== input.origin) return err("CONFLICT", `run "${input.runId}" is already imported with different content or a different origin; a run id names one collection, use a new run id`, { details: { runId: input.runId, existingOrigin: existing.origin } });
-    return ok({ runId: existing.runId, snapshotId: existing.snapshotId, captureIds: existing.captureIds, viewKeys: existing.viewKeys, entities: existing.entities, alreadyImported: true });
-  }
+  // A committed import answers without any lock (the answer cannot change: a committed run id is never rewritten); it is checked again
+  // under the lock, which is the check that decides.
+  const settled = await settledAnswer(session, input, digest);
+  if (settled !== undefined) return settled;
+  // everything else that needs no shared state is decided before the lock is taken
+  const prepared = prepare(input, run.value);
+  if (!prepared.ok) return prepared;
+  return withV1Lock(session, () => commit(session, input, run.value, prepared.value, digest, options));
+}
 
+/** The answer for a run id whose import is already committed: the same receipt for the same content and origin, CONFLICT for anything else. */
+async function settledAnswer(session: Session, input: CollectionImport, digest: string): Promise<Result<ImportReceipt> | undefined> {
+  const existing = await committedImport(session, input.runId);
+  if (existing === undefined) return undefined;
+  if (existing.digest !== digest || existing.origin !== input.origin) return err("CONFLICT", `run "${input.runId}" is already imported with different content or a different origin; a run id names one collection, use a new run id`, { details: { runId: input.runId, existingOrigin: existing.origin } });
+  return ok({ runId: existing.runId, snapshotId: existing.snapshotId, captureIds: existing.captureIds, viewKeys: existing.viewKeys, entities: existing.entities, alreadyImported: true });
+}
+
+interface Prepared {
+  graphs: ObjectGraph[];
+  captureIds: string[];
+  entities: Entity[];
+  definitions: Map<string, ViewDefinition>;
+  views: Envelope[];
+  overlays: Array<{ viewId: string; overlay: unknown }>;
+}
+
+function prepare(input: CollectionImport, run: TestRun): Result<Prepared> {
+  const snapshotId = snapshotOfRun(input.runId);
   const graphs: ObjectGraph[] = [];
   const faults: ValidationIssue[] = [];
   for (const [index, document] of input.graphs.entries()) {
@@ -93,7 +134,7 @@ export async function importCollection(session: Session, input: CollectionImport
   if (faults.length > 0) return err("VALIDATION_FAILED", `a captured object graph is not admissible (${faults.length} fault${faults.length === 1 ? "" : "s"})`, { errors: faults });
   const captureIds = graphs.map((graph) => graph.captureId);
   if (new Set(captureIds).size !== captureIds.length) return err("VALIDATION_FAILED", "two graphs carry the same capture id", { errors: [issue("DUPLICATE_ID", "/graphs", "capture ids are unique within a run", "Each invocation publishes its own capture.")] });
-  for (const [index, invocation] of run.value.invocations.entries()) {
+  for (const [index, invocation] of run.invocations.entries()) {
     const reference = invocation.result;
     if (reference === null || reference === undefined) continue;
     const graph = graphs.find((candidate) => candidate.captureId === reference.captureId);
@@ -102,8 +143,8 @@ export async function importCollection(session: Session, input: CollectionImport
     }
   }
 
-  const startedAt = run.value.invocations.map((invocation) => invocation.startedAt).filter((time): time is string => typeof time === "string").sort()[0] ?? new Date(0).toISOString();
-  const finishedAt = run.value.invocations.map((invocation) => invocation.finishedAt).filter((time): time is string => typeof time === "string").sort().slice(-1)[0] ?? startedAt;
+  const startedAt = run.invocations.map((invocation) => invocation.startedAt).filter((time): time is string => typeof time === "string").sort()[0] ?? new Date(0).toISOString();
+  const finishedAt = run.invocations.map((invocation) => invocation.finishedAt).filter((time): time is string => typeof time === "string").sort().slice(-1)[0] ?? startedAt;
   // The run itself is an entity: its snapshot exists even when no capture could be imported (a failing run still imports).
   const entities: Entity[] = [{ repository: input.repo, id: input.runId, kind: "paneweft/test-run", snapshotId, label: `run ${input.runId}`, dataRoles: [], relations: [] }];
   const definitions = new Map<string, ViewDefinition>();
@@ -113,7 +154,7 @@ export async function importCollection(session: Session, input: CollectionImport
   for (const graph of graphs) {
     for (const object of graph.objects) entities.push(entityOfObject(input.repo, graph, object.id));
     for (const view of graph.views) {
-      const lowered = lowerViewRecord(graph, view, { repo: input.repo, snapshotId, runnerId: run.value.runner.id, startedAt, finishedAt, generatedAt });
+      const lowered = lowerViewRecord(graph, view, { repo: input.repo, snapshotId, runnerId: run.runner.id, startedAt, finishedAt, generatedAt });
       if (!lowered.ok) return lowered;
       views.push(lowered.value.envelope);
       if (lowered.value.overlay !== undefined) overlays.push({ viewId: lowered.value.envelope.id, overlay: lowered.value.overlay });
@@ -122,51 +163,61 @@ export async function importCollection(session: Session, input: CollectionImport
       definitions.set(lowered.value.definition.id, lowered.value.definition);
     }
   }
-  // A view whose title or priority was edited since an earlier collection changes its registered definition: replace it explicitly,
-  // as the v0 registry requires, so recollecting after an edit works.
+  return ok({ graphs, captureIds, entities, definitions, views, overlays });
+}
+
+async function commit(session: Session, input: CollectionImport, run: TestRun, prepared: Prepared, digest: string, options: { crashAt?: (point: ImportCrashPoint) => void | Promise<void> }): Promise<Result<ImportReceipt>> {
+  const crash = async (point: ImportCrashPoint): Promise<void> => void (await options.crashAt?.(point));
+  const snapshotId = snapshotOfRun(input.runId);
+  const { graphs, captureIds, entities, definitions, views, overlays } = prepared;
+  const settled = await settledAnswer(session, input, digest);
+  if (settled !== undefined) return settled;
+  // A view whose title or priority was edited since an earlier collection changes its registered definition. The replacement is part of the
+  // import's own manifest swap, so a refused or interrupted import leaves the registry alone.
   const registered = await session.listDefinitions();
-  let revision = registered.revision;
-  for (const definition of definitions.values()) {
+  const replaceDefinitions = [...definitions.values()].filter((definition) => {
     const current = registered.definitions.find((candidate) => candidate.id === definition.id);
-    if (current === undefined || canonicalJson(current) === canonicalJson(definition)) continue;
-    const replaced = await session.registerView(definition, revision);
-    if (!replaced.ok) return replaced;
-    revision = replaced.value.revision;
-  }
+    return current !== undefined && canonicalJson(current) !== canonicalJson(definition);
+  });
   const bundle = { schemaVersion: "paneweft.bundle/1" as const, entities, definitions: [...definitions.values()], views };
-  const checked = await session.preflight(bundle);
+  const checked = await session.preflight(bundle, { replaceDefinitions });
   if (!checked.ok) return checked;
 
   await crash("before-write");
   const base = runDirectory(session, input.runId);
-  const stored: TestRun = { ...run.value, meta: { origin: input.origin, importedAt: new Date().toISOString(), jobId: input.jobId } };
-  for (const graph of graphs) {
-    await writeDurably(join(base, "captures", `${graph.captureId}.json`), JSON.stringify(graph));
-    for (const page of graph.pages) await writeDurably(pageFile(session, page.pageId), JSON.stringify(page));
+  const stored: TestRun = { ...run, meta: { origin: input.origin, importedAt: new Date().toISOString(), jobId: input.jobId } };
+  try {
+    for (const graph of graphs) {
+      await writeDurably(captureFile(session, input.runId, graph.captureId), JSON.stringify(graph));
+      for (const page of graph.pages) await writeDurably(pageFile(session, page.pageId), JSON.stringify(page));
+    }
+    for (const { viewId, overlay } of overlays) await writeDurably(customFile(session, input.runId, viewId), JSON.stringify(overlay));
+    await writeDurably(join(base, "run.json"), JSON.stringify(stored));
+    // The receipt names the content this run id is claimed by. It is written BEFORE the commit and counts only once the snapshot is in the
+    // manifest (readers require both), so no window exists in which a committed snapshot has no record of whose content it is.
+    const viewKeys = [...new Map(views.map((envelope) => [`${envelope.snapshotId}\u0000${envelope.id}`, { viewId: envelope.id, snapshotId: envelope.snapshotId }])).values()].sort((a, b) => compareCodeUnits(a.viewId, b.viewId) || compareCodeUnits(a.snapshotId, b.snapshotId));
+    const receipt: ImportRecord = {
+      runId: input.runId,
+      repo: input.repo,
+      origin: input.origin,
+      jobId: input.jobId,
+      digest,
+      snapshotId,
+      captureIds,
+      viewKeys,
+      entities: entities.map((entity) => ({ repository: entity.repository, id: entity.id, kind: entity.kind })),
+      importedAt: stored.meta?.importedAt ?? new Date().toISOString(),
+    };
+    await writeDurably(join(base, "import.json"), JSON.stringify(receipt));
+    await crash("after-objects");
+    const imported = await session.importBundle(bundle, { replaceDefinitions });
+    if (!imported.ok) return imported;
+    await crash("after-manifest");
+    return ok({ runId: receipt.runId, snapshotId, captureIds, viewKeys: imported.value.views, entities: receipt.entities, alreadyImported: false });
+  } catch (cause) {
+    if (cause instanceof Error && (cause as NodeJS.ErrnoException).code !== undefined) return err("STORAGE_FAILED", `the import of run "${input.runId}" could not be stored: ${cause.message}`);
+    throw cause;
   }
-  for (const { viewId, overlay } of overlays) await writeDurably(join(base, "customs", `${encodeURIComponent(viewId)}.json`), JSON.stringify(overlay));
-  await writeDurably(join(base, "run.json"), JSON.stringify(stored));
-  await crash("after-objects");
-  const imported = await session.importBundle(bundle);
-  if (!imported.ok) return imported;
-  const receipt: ImportRecord = {
-    runId: input.runId,
-    repo: input.repo,
-    origin: input.origin,
-    jobId: input.jobId,
-    digest,
-    snapshotId,
-    captureIds,
-    viewKeys: imported.value.views,
-    entities: entities.map((entity) => ({ repository: entity.repository, id: entity.id, kind: entity.kind })),
-    importedAt: stored.meta?.importedAt ?? new Date().toISOString(),
-  };
-  // The receipt is written AFTER the commit and is what makes the run visible to readers (they require both the snapshot and this
-  // record). A crash between the swap and this write is recovered by the retry: it finds no record, repeats the idempotent steps, and
-  // writes it.
-  await writeDurably(join(base, "import.json"), JSON.stringify(receipt));
-  await crash("after-manifest");
-  return ok({ runId: receipt.runId, snapshotId, captureIds, viewKeys: receipt.viewKeys, entities: receipt.entities, alreadyImported: false });
 }
 
 export type { TestRun };

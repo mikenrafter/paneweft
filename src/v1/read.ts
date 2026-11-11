@@ -1,8 +1,9 @@
 // Reading imported collections: objects, backlinks, stored pages, run records (IV10, IV11).
 // The v1 files live beside the v0 store under <session>/v1 and are visible ONLY through a committed snapshot of the v0 manifest:
 // that manifest swap is the commit point of an import, so an interrupted import leaves nothing readable.
+import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import { compareCodeUnits } from "../core/canonical.ts";
 import { err, ok, type Result } from "../core/errors.ts";
 import type { Session, ViewKey } from "../core/session.ts";
@@ -62,10 +63,34 @@ export interface ImportRecord {
   importedAt: string;
 }
 
+// S1: an identifier from a payload (run id, capture id, page id, view id) is a NAME, never a path. `pathComponent` maps any non-empty string to
+// one file-name component, injectively and reversibly enough to compare (`%` is always escaped, so no two ids share a component), and
+// `within` refuses a path that leaves its root, so a bug in one caller cannot become a write outside the store.
+const COMPONENT_LIMIT = 160;
+
+/** One safe, injective file-name component for `id`: percent-escapes everything but unreserved characters, escapes dot-only names, and
+ * falls back to `%h-<sha256>` (never produced by escaping, since `h` is not a hex digit) for names too long for a file system. */
+export function pathComponent(id: string): string {
+  if (id.length === 0) throw new RangeError("an identifier used as a path component cannot be empty");
+  let escaped = encodeURIComponent(id).replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
+  if (/^\.+$/.test(escaped)) escaped = escaped.replaceAll(".", "%2E");
+  return escaped.length > COMPONENT_LIMIT ? `%h-${createHash("sha256").update(id).digest("hex")}` : escaped;
+}
+
+/** `join(root, ...parts)` where every part is a path component already; throws if the result is not strictly inside `root`. */
+export function within(root: string, ...parts: string[]): string {
+  const path = join(root, ...parts);
+  const inside = relative(root, path);
+  if (inside === "" || inside === ".." || inside.startsWith(`..${sep}`) || inside.startsWith(sep)) throw new RangeError(`the path "${path}" is not inside "${root}"`);
+  return path;
+}
+
 export const v1Directory = (session: Pick<Session, "dir">): string => join(session.dir, "v1");
-export const runDirectory = (session: Pick<Session, "dir">, runId: string): string => join(v1Directory(session), "runs", runId);
+export const runDirectory = (session: Pick<Session, "dir">, runId: string): string => within(join(v1Directory(session), "runs"), pathComponent(runId));
 export const snapshotOfRun = (runId: string): string => `snap-${runId}`;
-export const pageFile = (session: Pick<Session, "dir">, pageId: string): string => join(v1Directory(session), "pages", `${pageId.replace(/^sha256:/, "")}.json`);
+export const pageFile = (session: Pick<Session, "dir">, pageId: string): string => within(join(v1Directory(session), "pages"), `${pathComponent(pageId.replace(/^sha256:/, ""))}.json`);
+export const captureFile = (session: Pick<Session, "dir">, runId: string, captureId: string): string => within(join(runDirectory(session, runId), "captures"), `${pathComponent(captureId)}.json`);
+export const customFile = (session: Pick<Session, "dir">, runId: string, viewId: string): string => within(join(runDirectory(session, runId), "customs"), `${pathComponent(viewId)}.json`);
 
 export async function readJsonFile<T>(path: string): Promise<T | undefined> {
   try {
@@ -93,7 +118,7 @@ export function openV1Reader(session: Session): V1Reader {
       if (runId === undefined) return notFound(`snapshot "${key.snapshotId}"`);
       const record = await committedImport(session, runId);
       if (record === undefined || !record.captureIds.includes(key.captureId)) return notFound(`capture "${key.captureId}" of snapshot "${key.snapshotId}"`);
-      const graph = await readJsonFile<ObjectGraph>(join(runDirectory(session, runId), "captures", `${key.captureId}.json`));
+      const graph = await readJsonFile<ObjectGraph>(captureFile(session, runId, key.captureId));
       const object = graph?.objects.find((candidate) => candidate.id === key.objectId);
       if (graph === undefined || object === undefined) return notFound(`object "${key.objectId}" of capture "${key.captureId}"`);
       const backlinks: Backlink[] = [];
@@ -126,7 +151,10 @@ export function openV1Reader(session: Session): V1Reader {
       }
       const runs: Array<{ runId: string; snapshotId: string; origin: StoredRun["origin"] }> = [];
       for (const name of names.sort(compareCodeUnits)) {
-        const record = await committedImport(session, name);
+        // the receipt names the run; a directory is that run's only if the receipt's id maps back to the directory's name
+        const named = await readJsonFile<ImportRecord>(join(v1Directory(session), "runs", name, "import.json")).catch(() => undefined);
+        if (typeof named?.runId !== "string" || named.runId.length === 0 || pathComponent(named.runId) !== name) continue;
+        const record = await committedImport(session, named.runId);
         if (record !== undefined) runs.push({ runId: record.runId, snapshotId: record.snapshotId, origin: record.origin });
       }
       return ok(runs);

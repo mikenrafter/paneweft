@@ -20,7 +20,7 @@ import type { TestRun } from "../generated/v1/TestRun.ts";
 import { loadAdapters, type AdapterRecord } from "./adapters.ts";
 import { compareFingerprints, computeFingerprint, type Fingerprint } from "./fingerprint.ts";
 import type { JobService } from "./jobs.ts";
-import { committedImport, openV1Reader, runDirectory, readJsonFile } from "./read.ts";
+import { captureFile, committedImport, openV1Reader, readJsonFile } from "./read.ts";
 import { V1_READ_ONLY_TOOLS, V1_TOOL_NAMES, createV1SchemaRegistry, loadV1SchemaDocuments, validateAgainstV1, type V1ToolName } from "./schemas.ts";
 
 export interface V1Context {
@@ -566,7 +566,7 @@ async function findDiagnostic(call: Call, id: string): Promise<{ diagnostic: Dia
     for (const entry of runs.value) {
       const record = await committedImport(session, entry.runId);
       for (const captureId of record?.captureIds ?? []) {
-        const graph = await readJsonFile<{ diagnostics: Diagnostic[] }>(join(runDirectory(session, entry.runId), "captures", `${captureId}.json`));
+        const graph = await readJsonFile<{ diagnostics: Diagnostic[] }>(captureFile(session, entry.runId, captureId));
         const found = graph?.diagnostics.find((candidate) => candidate.id === id);
         if (found !== undefined) return { diagnostic: found, runId: entry.runId };
       }
