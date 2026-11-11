@@ -108,10 +108,13 @@ describe("[IV12] a trusted renderer under production headers", () => {
     const expected = rendererResponseHeaders();
     for (const [name, value] of Object.entries(expected)) expect(frameDocument!.headers[name.toLowerCase()], name).toBe(value);
     expect(Object.keys(frameDocument!.headers).filter((h) => h.startsWith("access-control-"))).toEqual([]);
-    const assets = s.responses.filter((r) => /\/renderer\/.*\.(js|css)$/.test(r.url));
+    const isAsset = (r: { url: string }) => /\/renderer\/.*\.(js|css)$/.test(r.url);
+    // The iframe exists before its assets arrive; retain the exact asset assertion after waiting.
+    await expect.poll(() => s.responses.filter(isAsset).length, { timeout: 10_000 }).toBeGreaterThanOrEqual(2);
+    const assets = s.responses.filter(isAsset);
     expect(assets.map((r) => r.url.split("/").pop()).sort()).toEqual(["bundle.js", "style.css"]);
     for (const asset of [frameDocument!, ...assets]) { expect(asset.status).toBe(200); expect(asset.requestHeaders.authorization, "no bearer on frame asset requests").toBeUndefined(); }
-    const parent = s.responses.find((r) => r.url === `${s.server.origin}/`);
+    const parent = s.responses.find((r) => r.url.split("#")[0] === `${s.server.origin}/`);
     expect(parent?.headers["content-security-policy"], "the parent page CSP").toContain("frame-src 'self'");
     const html = await s.page.evaluate(async (url: string) => (await fetch(url)).text(), `${s.server.origin}${attributes.src}`);
     expect(html, "classic scripts only: no module scripts, no inline script").not.toMatch(/type=["']module["']|<script>[^<]/);
@@ -127,7 +130,8 @@ describe("[IV12] a trusted renderer under production headers", () => {
     await expectAppears("three card items", () => frame.waitForFunction(() => document.querySelectorAll('[data-pw="card-item"]').length === 3, { timeout: 10_000 }));
     expect(await frame.$$eval('[data-pw="card-item"]', (els: Element[]) => els.map((e: Element) => e.getAttribute("aria-label")))).toEqual(["original index: 4", "container ID: firefox-container-3", "backup name: Work"]);
     const before = (await s.page.$$('[data-pw="pane"]')).length;
-    await (await frame.$('[data-id="container"]'))!.focus();
+    // Puppeteer's ElementHandle.focus rejects SVG elements; focus the same item inside the frame.
+    await frame.evaluate(() => (document.querySelector('[data-id="container"]') as unknown as { focus(): void }).focus());
     await s.page.keyboard.press("Enter");
     await expectAppears("a second pane opens", () => s.page.waitForFunction((n: number) => document.querySelectorAll('[data-pw="pane"]').length > n, { timeout: 10_000 }, before));
     const text = await s.page.$eval('[data-pw="viewer"]', (el) => el.textContent ?? "");

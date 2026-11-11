@@ -1,32 +1,66 @@
 //! The artifact protocol between a test worker and the host collector (docs/v1-red-contract.md section 7).
 mod support;
 use paneweft::artifacts::{staging_from_env, Staging, ENV_ATTEMPT, ENV_CATALOGUE, ENV_COLLECT, ENV_RUN_ID, ENV_STAGING_DIR};
-use paneweft::example::take_invocations;
+use paneweft::example::{invoke, take_invocations};
+use paneweft::{ExampleDescriptor, ExampleKind, Inspectable, SourceLocation};
 use serde_json::{json, Value as Json};
 use std::path::{Path, PathBuf};
 use support::{WatchFile, WatchStatus, ENVIRONMENT};
 
 paneweft::test_adapter!();
 
-#[paneweft::example(id = "watch.pending", claims = ["VW1"])]
+// Register these fixtures explicitly so their native test wrappers can hold ENVIRONMENT around the
+// entire invocation, including started/completion writes outside the example body. Locking only
+// the body would still let another test write into with_collection's staging directory.
+#[paneweft::linkme::distributed_slice(paneweft::catalogue::EXAMPLE_DESCRIPTORS)]
+#[linkme(crate = paneweft::linkme)]
+static PENDING: ExampleDescriptor = ExampleDescriptor {
+    id: "watch.pending", type_id: WatchFile::PANEWEFT_TYPE_ID, claims: &["VW1"],
+    module: module_path!(), source: SourceLocation { file: file!(), line: line!() },
+    test_name: concat!(module_path!(), "::paneweft_example_pending_watch"), kind: ExampleKind::Example,
+};
+
 fn pending_watch() -> WatchFile {
-    let watch = WatchFile::pending();
-    paneweft::check_eq!("VW1", watch.status, WatchStatus::Pending);
-    watch
+    invoke(&PENDING, || {
+        let watch = WatchFile::pending();
+        paneweft::check_eq!("VW1", watch.status, WatchStatus::Pending);
+        watch
+    })
+}
+
+#[test]
+fn paneweft_example_pending_watch() {
+    let _guard = ENVIRONMENT.lock().unwrap_or_else(|e| e.into_inner());
+    let _ = pending_watch();
 }
 
 static STAGING_SEEN_DURING_BODY: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 
-#[paneweft::example(id = "watch.observed-midflight", claims = ["VW3"])]
+#[paneweft::linkme::distributed_slice(paneweft::catalogue::EXAMPLE_DESCRIPTORS)]
+#[linkme(crate = paneweft::linkme)]
+static OBSERVING: ExampleDescriptor = ExampleDescriptor {
+    id: "watch.observed-midflight", type_id: WatchFile::PANEWEFT_TYPE_ID, claims: &["VW3"],
+    module: module_path!(), source: SourceLocation { file: file!(), line: line!() },
+    test_name: concat!(module_path!(), "::paneweft_example_observing_watch"), kind: ExampleKind::Example,
+};
+
 fn observing_watch() -> WatchFile {
-    if let Some(staging) = staging_from_env() {
-        let mut names: Vec<String> = std::fs::read_dir(staging.dir.join("invocations")).map(|d| d.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
-        names.sort();
-        *STAGING_SEEN_DURING_BODY.lock().unwrap() = names;
-    }
-    let watch = WatchFile::pending();
-    paneweft::check!("VW3", true);
-    watch
+    invoke(&OBSERVING, || {
+        if let Some(staging) = staging_from_env() {
+            let mut names: Vec<String> = std::fs::read_dir(staging.dir.join("invocations")).map(|d| d.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+            names.sort();
+            *STAGING_SEEN_DURING_BODY.lock().unwrap() = names;
+        }
+        let watch = WatchFile::pending();
+        paneweft::check!("VW3", true);
+        watch
+    })
+}
+
+#[test]
+fn paneweft_example_observing_watch() {
+    let _guard = ENVIRONMENT.lock().unwrap_or_else(|e| e.into_inner());
+    let _ = observing_watch();
 }
 
 fn with_collection<R>(run_id: &str, body: impl FnOnce(&Path) -> R) -> R {

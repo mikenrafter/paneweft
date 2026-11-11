@@ -22,14 +22,11 @@ pub fn load(relative: &str) -> Json {
 /// Process-wide guard for tests that set environment variables.
 pub static ENVIRONMENT: Mutex<()> = Mutex::new(());
 
-/// Unwraps a result and fails by assertion (not by a thrown stub error) with the stub's message.
+/// Unwraps a result and panics with context and the error when it fails.
 pub fn must<T, E: std::fmt::Debug>(result: Result<T, E>, what: &str) -> T {
     match result {
         Ok(value) => value,
-        Err(error) => {
-            assert!(false, "{what}: expected Ok, got {error:?}");
-            unreachable!()
-        }
+        Err(error) => panic!("{what}: expected Ok, got {error:?}"),
     }
 }
 
@@ -210,6 +207,9 @@ impl Inspectable for Event {
     fn views(&self, cx: &mut Context) -> ViewSetResult {
         const META: ViewMeta = ViewMeta { id: "event.details", title: "Event", question: "Which event is this, and was it redelivered?", component: "shape", priority: 10 };
         cx.label(&self.event_id);
+        // Object hashes include captured fields; redeliveries with different ticks must remain distinguishable.
+        cx.field("tick", self.tick);
+        cx.field("redelivered", self.redelivered);
         let mut details = cx.details();
         details.field("event_id", self.event_id.as_str());
         details.field("tick", self.tick);

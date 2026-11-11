@@ -158,7 +158,7 @@ describe("[IV18] instrumentation compile and typecheck", () => {
     writeFileSync(join(dir, "Cargo.toml"), manifest.replace("../../../crates/paneweft", join(REPO_ROOT, "crates/paneweft")));
     const source = readFileSync(join(dir, "src/lib.rs"), "utf8");
     writeFileSync(join(dir, "src/lib.rs"), source.replace("pub tick: u64,", "pub tick_count: u64,"));
-    const adapter: AdapterRecord = { ...cargo, workspaceRoot: dir, executable: "/home/user/.cargo/bin/cargo" };
+    const adapter: AdapterRecord = { ...cargo, workspaceRoot: dir, executable: process.env.PANEWEFT_CARGO ?? "cargo" };
     const report = must(await checkInstrumentation(adapter), "check");
     expect(report.ok).toBe(false);
     const diagnostic = report.diagnostics.find((d) => d.category === "compiler");

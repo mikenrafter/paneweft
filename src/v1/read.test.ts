@@ -111,7 +111,7 @@ describe("[IV11] objects, aliases, cycles and snapshots", () => {
 
 describe("[S12] text and browser carry the same domain facts", () => {
   // why: S12 / IV21. The text form of the events view carries, per row, the event id, its tick and its redelivered flag, in the v0
-  // row grammar; the three rows below are written out by hand from the fixture (two events share the id e-1 and differ in tick).
+  // row grammar (src/core/operations.columns.test.ts and operations.column-keys.test.ts); the three rows below are written out by hand from the fixture (two events share the id e-1 and differ in tick).
   // proves: CLAIM(S12-text-completeness) CLAIM(IV21)
   it("text lists every event with tick and redelivered", async () => {
     const { session } = await open();
@@ -120,9 +120,9 @@ describe("[S12] text and browser carry the same domain facts", () => {
     expect(outcome.ok, outcome.body.slice(0, 300)).toBe(true);
     const lines = outcome.body.split("\n");
     for (const expected of [
-      "e-1 -> vigil/watch/event:inv-1.o2; observed; run | tick=3 | redelivered=false",
-      "e-1 -> vigil/watch/event:inv-1.o4; observed; run | tick=6 | redelivered=true",
-      "e-2 -> vigil/watch/event:inv-1.o3; observed; run | tick=5 | redelivered=true",
+      "e-1 -> vigil/watch/event:inv-1.o2; observed; run | tick=3 redelivered=false",
+      "e-1 -> vigil/watch/event:inv-1.o4; observed; run | tick=6 redelivered=true",
+      "e-2 -> vigil/watch/event:inv-1.o3; observed; run | tick=5 redelivered=true",
     ]) expect(lines, expected).toContain(expected);
   });
 
@@ -157,7 +157,7 @@ describe("[S12] text and browser carry the same domain facts", () => {
     for (let page = 0; page < 200; page += 1) {
       const outcome = await executeOperation(session, "inspect_view", { viewId: "inv-1.o1.watch.events", snapshotId: "snap-run-1", maxBytes: 2048, ...(cursor === undefined ? {} : { cursor }) });
       expect(outcome.ok, outcome.body.slice(0, 200)).toBe(true);
-      for (const line of outcome.body.split("\n")) { const m = /^(e-\d\d) -> .*\| tick=(\d+) \| redelivered=(true|false)$/.exec(line); if (m) seen.add(`${m[1]}:${m[2]}:${m[3]}`); }
+      for (const line of outcome.body.split("\n")) { const m = /^(e-\d\d) -> .*\| tick=(\d+) redelivered=(true|false)$/.exec(line); if (m) seen.add(`${m[1]}:${m[2]}:${m[3]}`); }
       const next = /^cursor: (.+)$/m.exec(outcome.body)?.[1];
       if (next === undefined) break;
       cursor = next;

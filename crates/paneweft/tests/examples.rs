@@ -70,7 +70,7 @@ fn each_call_builds_a_fresh_value() {
 #[test]
 fn an_invocation_with_no_recorded_check_passes_but_is_not_verified() {
     reset();
-    let _ = invoke(&DESCRIPTOR_A, || WatchFile::pending());
+    let _ = invoke(&DESCRIPTOR_A, WatchFile::pending);
     let invocations = take_invocations();
     assert_eq!(invocations.len(), 1);
     assert_eq!(invocations[0].native, NativeOutcome::Passed);
@@ -140,7 +140,7 @@ fn a_recursive_example_call_stops_with_its_path() {
     reset();
     // The depth counter is test scaffolding: it keeps a missing recursion guard an assertion failure instead of a stack overflow
     // that would abort the whole test binary. A correct guard stops the recursion at the second entry of ex.a, long before 20.
-    thread_local!(static DEPTH: std::cell::Cell<u32> = std::cell::Cell::new(0));
+    thread_local!(static DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) });
     fn deeper() -> bool {
         DEPTH.with(|d| { d.set(d.get() + 1); d.get() > 20 })
     }
@@ -157,7 +157,7 @@ fn a_recursive_example_call_stops_with_its_path() {
             a()
         })
     }
-    let outcome = catch_unwind(AssertUnwindSafe(|| a()));
+    let outcome = catch_unwind(AssertUnwindSafe(a));
     assert!(outcome.is_err());
     let invocations = take_invocations();
     assert!(invocations.len() <= 8, "the recursion must be cut, got {} invocations", invocations.len());
@@ -192,7 +192,7 @@ fn expect_failure_fails_on_unexpected_success() {
     reset();
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         invoke(&DEAD_END, || {
-            let _ = expect_failure(Matcher::Any, || invoke(&DESCRIPTOR_B, || WatchFile::pending()));
+            let _ = expect_failure(Matcher::Any, || invoke(&DESCRIPTOR_B, WatchFile::pending));
             WatchFile::pending()
         })
     }));
