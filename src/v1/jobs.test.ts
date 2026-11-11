@@ -185,6 +185,23 @@ describe("[N2][S2] cancellation", () => {
     expect(qex.jobs()[0].state).toBe("killed");
   });
 
+  // why: S5. The fake's delayed starter ignored a job that was killed while it waited out its start delay and launched it anyway, so
+  // the test that cancels a `starting` job proved nothing: it asserted before the delay expired. Here the delay is waited out and
+  // the runner must never have executed; the job stays killed.
+  // Rejects a starter that begins a job whose recorded state is no longer queued/starting.
+  // proves: CLAIM(N2-cancellation) CLAIM(S5-fake-fidelity)
+  it("never starts a job that was killed during its start delay", async () => {
+    const { qex, service } = await world();
+    qex.control({ startDelayMs: 600 });
+    must(await service().collect(request("job-k2")), "collect");
+    await vi.waitFor(() => expect(qex.jobs()[0]?.state).toBe("starting"), { timeout: 10_000, interval: 10 });
+    const result = must(await service().cancel("job-k2"), "cancel");
+    expect(result).toMatchObject({ outcome: "cancelled", qexActions: ["cancel", "kill"] });
+    await new Promise((resolve) => setTimeout(resolve, 1400));
+    expect(qex.executions(), "the runner never began").toHaveLength(0);
+    expect(qex.jobs()[0].state).toBe("killed");
+  });
+
   // why: S2 / N2 running + descendants. Cancelling a running job kills the PROCESS GROUP: a grandchild that appends a heartbeat stops
   // (the file stops growing after cancel returns). Killing only the waiter would leave it running (S2: never assume that stops the job).
   // proves: CLAIM(S2-cancel-through-qex) CLAIM(N2-cancellation) CLAIM(IV17)
@@ -358,5 +375,43 @@ describe("[S1] a job id is a name, never a path", () => {
       expect(mustFail(await service().status(hostile), `status ${JSON.stringify(hostile)}`).code).toBe("NOT_FOUND");
       expect(mustFail(await service().cancel(hostile), `cancel ${JSON.stringify(hostile)}`).code).toBe("NOT_FOUND");
     }
+  });
+});
+
+describe("[S4] a job qex stopped with a signal still imports", () => {
+  const heartbeat = async (world_: Awaited<ReturnType<typeof world>>, name: string) => {
+    const { qex, dir } = world_;
+    qex.scenario({ mode: "heartbeat", heartbeatFile: join(dir, `hb-${name}`), readyFile: join(dir, `ready-${name}`) });
+    return join(dir, `ready-${name}`);
+  };
+
+  // why: S4. Real qex reports a killed job as state killed, exit_code null, signal 15 (a number). The job service passed the number into the
+  // string-only test-run schema, so a collection that somebody killed (not through paneweft) could not be imported and status threw.
+  // The fake now speaks the real shapes (src/v1/qex.contract.test.ts pins them against captured output).
+  // proves: CLAIM(S4-real-qex) CLAIM(IV17)
+  it("imports a collection that was killed from outside, with the signal named", async () => {
+    const w = await world();
+    const ready = await heartbeat(w, "kill");
+    const started = must(await w.service().collect(request("job-sig")), "collect");
+    await vi.waitFor(() => expect(existsSync(ready)).toBe(true), { timeout: 15_000, interval: 25 });
+    must(await w.qex.client.kill(started.qexId!), "an operator kills the job");
+    const view = await settle(w.service(), "job-sig", ["failed", "cancelled"]);
+    const run = must(await openV1Reader(w.session).run("run-job-sig"), "the run imported");
+    expect(run.run.collection.exitCode).toBeNull();
+    expect(run.run.collection.signal).toBe("SIGKILL");
+    expect(view.snapshotIds).toEqual(["snap-run-job-sig"]);
+  });
+
+  // why: S4. A job qex stopped at its time limit has state timeout, exit_code null and signal 15. It imports as a timed-out collection.
+  // proves: CLAIM(S4-real-qex) CLAIM(IV17)
+  it("imports a collection that hit its time limit as timed-out", async () => {
+    const w = await world();
+    w.qex.control({ timeoutAfterMs: 500 });
+    await heartbeat(w, "limit");
+    must(await w.service().collect(request("job-lim")), "collect");
+    const view = await settle(w.service(), "job-lim", ["failed"]);
+    expect(view.collectionStatus).toBe("timed-out");
+    const run = must(await openV1Reader(w.session).run("run-job-lim"), "the run imported");
+    expect(run.run.collection).toMatchObject({ status: "timed-out", timedOut: true, exitCode: null, signal: "SIGTERM" });
   });
 });

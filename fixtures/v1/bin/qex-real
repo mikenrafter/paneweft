@@ -1,0 +1,26 @@
+#!/usr/bin/env node
+// Replays VERBATIM output of the real qex (fixtures/v1/qex-real, captured from qex 0.33.0) for the verbs the client uses, so that the client
+// is tested against what qex prints, not against a model of it. $QEX_REAL_CASE selects the job: ok | killed | segv. Every argv is appended
+// to $QEX_REAL_CALLS. Like the real thing, `wait` prints JSON only with --json and ends with the exit code 0 (job ok), 125 (killed) or 98
+// (a signal that is not TERM or KILL).
+import { appendFileSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = join(dirname(fileURLToPath(import.meta.url)), "..", "qex-real");
+const argv = process.argv.slice(2);
+if (process.env.QEX_REAL_CALLS) appendFileSync(process.env.QEX_REAL_CALLS, JSON.stringify(argv) + "\n");
+const which = process.env.QEX_REAL_CASE ?? "ok";
+const read = (name) => readFileSync(join(here, name), "utf8");
+const [command, ...rest] = argv;
+const json = rest.includes("--json");
+const EXIT = { ok: 0, killed: 125, segv: 98 };
+const record = JSON.parse(read(`status-${which}.json`));
+switch (command) {
+  case "submit": process.stdout.write(`${JSON.parse(read("submit.json")).id}\n`); break;
+  case "status": process.stdout.write(json ? read(`status-${which}.json`) : `${record.id.slice(0, 8)}: ${record.state}\n`); break;
+  case "wait": process.stdout.write(json ? read(`wait-${which}.json`) : `${record.id.slice(0, 8)}: ${record.state} — a command stopped the job\n`); process.exitCode = EXIT[which]; break;
+  case "list": process.stdout.write(JSON.stringify(["ok", "killed", "segv"].map((name) => JSON.parse(read(`status-${name}.json`))))); break;
+  case "cancel": case "kill": break;
+  default: console.error(`qex-real: unsupported command ${command}`); process.exitCode = 121;
+}

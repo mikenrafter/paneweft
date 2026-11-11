@@ -1,6 +1,7 @@
 // The qex client: the queue is the supervisor that outlives MCP clients (amendments S2, S3, N1, N2).
 // Spawns the `qex` found on the given PATH with a literal argument vector; no shell.
 import { execFile } from "node:child_process";
+import { constants } from "node:os";
 import { err, ok, type Result } from "../core/errors.ts";
 
 export interface QexJob {
@@ -12,6 +13,15 @@ export interface QexJob {
   dedupe_key: string | null;
   cwd?: string;
   command?: string[];
+}
+
+/** The usual name of a signal number (Linux), `SIG<number>` for a number without one, a string as given, null for no signal. Real qex reports
+ * the signal that stopped a job as a NUMBER; every consumer here (the test-run schema, diagnostics) speaks names. */
+export function signalName(signal: unknown): string | null {
+  if (typeof signal === "string") return signal.length === 0 ? null : signal;
+  if (typeof signal !== "number" || !Number.isInteger(signal) || signal <= 0) return null;
+  const named = Object.entries(constants.signals).find(([, number]) => number === signal);
+  return named === undefined ? `SIG${signal}` : named[0];
 }
 
 export const QEX_TERMINAL_STATES: ReadonlyArray<QexJob["state"]> = ["completed", "failed", "killed", "timeout", "expired", "oom", "cancelled", "skipped"];
@@ -45,12 +55,13 @@ function execute(executable: string, args: string[], env: NodeJS.ProcessEnv | un
 
 function waitFor(executable: string, id: string, timeoutMs: number, env: NodeJS.ProcessEnv | undefined): Promise<Result<QexJob | undefined>> {
   return new Promise((resolve) => {
-    execFile(executable, ["wait", id], { env, timeout: timeoutMs, killSignal: "SIGKILL", encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
+    execFile(executable, ["wait", "--json", id], { env, timeout: timeoutMs, killSignal: "SIGKILL", encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }, (error, stdout) => {
       if (error !== null && (error as { killed?: boolean }).killed === true) return resolve(ok(undefined));
-      // `qex wait` exits with the job's own status, so a nonzero exit is not a failure to wait; what matters is the job it printed.
+      // `qex wait --json` prints an ARRAY with one record per awaited job, and exits with the job's own status (0 to 96), 98 for a signal and
+      // 125 for a kill, a cancel or a time limit, so a nonzero exit is not a failure to wait; what matters is the record it printed.
       try {
-        const job = toJob(JSON.parse(stdout));
-        resolve(ok(job));
+        const printed = JSON.parse(stdout) as unknown;
+        resolve(ok(toJob(Array.isArray(printed) ? printed.find((record) => (record as { id?: unknown } | null)?.id === id) ?? printed[0] : printed)));
       } catch {
         resolve(ok(undefined));
       }
@@ -69,7 +80,7 @@ function toJob(value: unknown): QexJob | undefined {
   if (candidate === null || typeof candidate !== "object") return undefined;
   const job = candidate as Partial<QexJob>;
   if (typeof job.id !== "string" || typeof job.state !== "string") return undefined;
-  return { ...(job as QexJob), exit_code: job.exit_code ?? null, signal: job.signal ?? null, dedupe_key: job.dedupe_key ?? null };
+  return { ...(job as QexJob), exit_code: job.exit_code ?? null, signal: signalName((job as { signal?: unknown }).signal), dedupe_key: job.dedupe_key ?? null };
 }
 
 /** Spawns the `qex` found on `env.PATH` (tests put the fake first). No shell. */
