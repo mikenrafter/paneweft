@@ -23,7 +23,8 @@ import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import type { Bundle, Entity, EntityRef, Envelope, ViewDefinition } from "./wire.ts";
 import type { OperationError, Result, ValidationIssue } from "./errors.ts";
-import { canonicalJson, canonicalSha256, compareCodeUnits, sha256Hex } from "./canonical.ts";
+import { canonicalJson, compareCodeUnits } from "./canonical.ts";
+import { canonicalSha256, sha256Hex } from "./digest.ts";
 import { validateDefinition, validateRunOutput, validateSubmission, type DefinitionMetadata, type ReferenceContext } from "./validate.ts";
 
 export interface ViewKey { viewId: string; snapshotId: string }

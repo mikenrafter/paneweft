@@ -3,8 +3,8 @@
 //   unordered lookup tables; keep ordered arrays ordered"); two documents that differ only in key order must
 //   hash alike, two that differ in content must not.
 // Invariants: pure; `undefined` object members are dropped exactly like JSON.stringify does.
-// Mating parts: Session (content hashes), RecordedRun.contentHash. Independent oracle: test/helpers/store-canon.ts.
-import { createHash } from "node:crypto";
+// Pure and browser-safe on purpose (the viewer bundle imports it); the sha256 digests live in digest.ts (node only).
+// Mating parts: digest.ts (content hashes). Independent oracle: test/helpers/store-canon.ts.
 
 function sortKeys(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(sortKeys);
@@ -18,14 +18,6 @@ function sortKeys(value: unknown): unknown {
 
 export function canonicalJson(value: unknown): string {
   return JSON.stringify(sortKeys(value));
-}
-
-export function sha256Hex(bytes: string | Uint8Array): string {
-  return createHash("sha256").update(bytes).digest("hex");
-}
-
-export function canonicalSha256(value: unknown): string {
-  return sha256Hex(canonicalJson(value));
 }
 
 /** Code-unit string order, the single comparison used wherever "sorted" is promised. */
