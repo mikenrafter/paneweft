@@ -1,0 +1,15 @@
+[package]
+name = "paneweft-macros"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "Attribute macros of the paneweft SDK: views, view, example."
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"

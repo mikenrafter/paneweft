@@ -1,0 +1,11 @@
+# The release recipe: depends on watchfile WITHOUT the paneweft feature. The resolved normal dependency graph must not contain paneweft.
+[package]
+name = "release-clean"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+watchfile = { path = "../watchfile" }
+
+[workspace]

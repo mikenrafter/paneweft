@@ -1,0 +1,19 @@
+[package]
+name = "paneweft"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "Paneweft Rust SDK: typed views and executable examples that live beside the code they explain. Development-only: gate every use behind a cargo feature."
+
+[dependencies]
+paneweft-macros = { path = "../paneweft-macros" }
+linkme = "0.3"
+serde_json = "1"
+sha2 = "0.10"
+
+[dev-dependencies]
+linkme = "0.3"
+base64 = "0.22"
+tempfile = "3"
+sha2 = "0.10"

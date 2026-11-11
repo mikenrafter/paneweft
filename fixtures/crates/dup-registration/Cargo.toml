@@ -1,0 +1,11 @@
+# Two modules declare the same view id: the catalogue export must report BOTH sources (IV3).
+[package]
+name = "dup-registration"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+paneweft = { path = "../../../crates/paneweft" }
+
+[workspace]

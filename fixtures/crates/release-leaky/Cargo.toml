@@ -1,0 +1,11 @@
+# The control: ACCIDENTAL feature activation through a dependency (cargo features are additive). The release graph reaches paneweft.
+[package]
+name = "release-leaky"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+watchfile = { path = "../watchfile", features = ["paneweft"] }
+
+[workspace]
