@@ -126,7 +126,15 @@ export function freshnessLine(freshness: FreshnessResult): string {
   switch (freshness.status) {
     case "fresh": return "fresh";
     case "stale": return `stale (changed: ${freshness.changedPaths.map((entry) => entry.path).join(", ")})`;
-    case "unknown": return `unknown (inaccessible: ${freshness.inaccessibleRoots.join(", ")})`;
+    case "unknown": {
+      const tooLarge = (freshness.unverified ?? []).filter((entry) => entry.code === "FILE_TOO_LARGE");
+      const files = tooLarge.flatMap((entry) => (entry.paths ?? []).map((path) => `${entry.repository}:${path}`));
+      const parts = [
+        ...(freshness.inaccessibleRoots.length > 0 || tooLarge.length === 0 ? [`inaccessible: ${freshness.inaccessibleRoots.join(", ")}`] : []),
+        ...(tooLarge.length > 0 ? [`too large to hash: ${files.join(", ")}`] : []),
+      ];
+      return `unknown (${parts.join("; ")})`;
+    }
     case "unverified": return `unverified (${freshness.unverified.map((entry) => `${entry.repository}: ${entry.reason}`).join("; ")})`;
   }
 }

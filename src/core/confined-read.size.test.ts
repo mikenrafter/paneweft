@@ -129,7 +129,7 @@ describe("freshness and anchors answer for a file over the limit", () => {
     expect(result.status).toBe("unknown");
     if (result.status !== "unknown") return;
     expect(result.inaccessibleRoots).toEqual([]);
-    expect(result.unverified).toEqual([{ repository: "r", code: "FILE_TOO_LARGE", reason: expect.stringContaining("over.bin") }]);
+    expect(result.unverified).toEqual([{ repository: "r", code: "FILE_TOO_LARGE", paths: ["over.bin"], reason: expect.stringContaining("over.bin") }]);
     expect(freshnessLine(result)).toMatch(/^unknown \(too large to hash: r:over\.bin\)$/);
   });
 

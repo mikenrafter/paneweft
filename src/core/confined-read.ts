@@ -16,16 +16,27 @@
 // Platform: step 3 needs Linux's /proc/self/fd. v0 confined reads are Linux-only (review round 2, S1): anywhere else, or when /proc cannot
 // be used, nothing is opened and the read fails closed with `unsupported-platform`. A weaker fallback (device/inode against a re-resolved
 // pathname) was removed because it leaves the check-to-use window open, which this module exists to close.
+// Size: the opened handle is fstat'ed BEFORE anything is read; a file over MAX_CONFINED_FILE_BYTES (16 MiB) is `too-large` and never read.
+//   The read itself is also bounded (chunks, counted), so a file that grows after the fstat cannot be pulled into memory either.
+//   Hashing streams in 64 KiB chunks and holds no more than one chunk.
+// CLAIM(bounded-confined-read): no confined read or hash buffers more than MAX_CONFINED_FILE_BYTES, whatever the file does after the fstat
+//   [confined-read.size.test.ts].
 // Errors: returns a reason, never throws and never echoes file content or the outside path:
 //   root-inaccessible (root cannot be resolved), not-found (missing, unreadable, or not a regular file), outside (leaves the root),
-//   unsupported-platform (no /proc/self/fd: the read is refused rather than weakened).
+//   unsupported-platform (no /proc/self/fd: the read is refused rather than weakened), too-large (over the cap).
+import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { open, realpath } from "node:fs/promises";
 import { join, sep } from "node:path";
 
-export type ConfinedReason = "root-inaccessible" | "not-found" | "outside" | "unsupported-platform";
+export type ConfinedReason = "root-inaccessible" | "not-found" | "outside" | "unsupported-platform" | "too-large";
 export type CanonicalPath = { ok: true; path: string; root: string } | { ok: false; reason: ConfinedReason };
 export type ConfinedRead = { ok: true; bytes: Buffer; realPath: string } | { ok: false; reason: ConfinedReason };
+export type ConfinedHash = { ok: true; sha256: string; size: number; realPath: string } | { ok: false; reason: ConfinedReason };
+
+/** The largest file a confined read or hash will take: 16 MiB (a source file, a recorded anchor target or a viewer asset is far smaller). */
+export const MAX_CONFINED_FILE_BYTES = 16 * 1024 * 1024;
+const CHUNK_BYTES = 64 * 1024;
 
 const OPEN_FLAGS = constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
 /** A swapped leaf is resolved again this many times before the read fails closed. */
@@ -72,13 +83,18 @@ async function handleRealPath(handle: Awaited<ReturnType<typeof open>>): Promise
   }
 }
 
-/** The bytes of `relative` under `root` (a plain relative path the caller already judged lexically). */
-export async function readConfinedFile(root: string, relative: string): Promise<ConfinedRead> {
+type Handle = Awaited<ReturnType<typeof open>>;
+
+/**
+ * Opens `relative` under `root` as a handle verified inside the root and fstat'ed as a regular file of at most MAX_CONFINED_FILE_BYTES, then
+ * runs `use` on it; the handle is closed afterwards. `use` returns null when the content grew past the cap while it was being read.
+ */
+async function withVerifiedHandle<T>(root: string, relative: string, use: (handle: Handle, info: { realPath: string; size: number }) => Promise<T | null>): Promise<{ ok: true; value: T } | { ok: false; reason: ConfinedReason }> {
   if (!confinedReadsSupported()) return { ok: false, reason: "unsupported-platform" };
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     const located = await canonicalPathInside(root, relative);
     if (!located.ok) return located;
-    let handle: Awaited<ReturnType<typeof open>>;
+    let handle: Handle;
     try {
       handle = await open(located.path, OPEN_FLAGS);
     } catch (error) {
@@ -89,8 +105,11 @@ export async function readConfinedFile(root: string, relative: string): Promise<
       const opened = await handleRealPath(handle);
       if (opened === null) return { ok: false, reason: "not-found" };
       if (!isInside(located.root, opened)) return { ok: false, reason: "outside" };
-      if (!(await handle.stat()).isFile()) return { ok: false, reason: "not-found" };
-      return { ok: true, bytes: await handle.readFile(), realPath: opened };
+      const info = await handle.stat(); // fstat of the open handle, before any read
+      if (!info.isFile()) return { ok: false, reason: "not-found" };
+      if (info.size > MAX_CONFINED_FILE_BYTES) return { ok: false, reason: "too-large" };
+      const value = await use(handle, { realPath: opened, size: info.size });
+      return value === null ? { ok: false, reason: "too-large" } : { ok: true, value };
     } catch {
       return { ok: false, reason: "not-found" };
     } finally {
@@ -100,7 +119,36 @@ export async function readConfinedFile(root: string, relative: string): Promise<
   return { ok: false, reason: "outside" }; // unreachable: the last attempt returns above
 }
 
-/** T4 red stub: replaced by the real streaming hash in the fix commit. */
-export async function hashConfinedFile(_root: string, _relative: string): Promise<{ ok: true; sha256: string; size: number } | { ok: false; reason: ConfinedReason }> {
-  throw new Error("NOT_IMPLEMENTED");
+/** Reads the handle chunk by chunk, calling `take` on each; false once more than MAX_CONFINED_FILE_BYTES came out (the file grew after the fstat). */
+async function drain(handle: Handle, take: (chunk: Buffer) => void): Promise<boolean> {
+  const chunk = Buffer.allocUnsafe(CHUNK_BYTES);
+  let total = 0;
+  for (;;) {
+    const { bytesRead } = await handle.read(chunk, 0, CHUNK_BYTES, null);
+    if (bytesRead === 0) return true;
+    total += bytesRead;
+    if (total > MAX_CONFINED_FILE_BYTES) return false;
+    take(chunk.subarray(0, bytesRead));
+  }
+}
+
+/** The bytes of `relative` under `root` (a plain relative path the caller already judged lexically), or why not. At most MAX_CONFINED_FILE_BYTES. */
+export async function readConfinedFile(root: string, relative: string): Promise<ConfinedRead> {
+  const read = await withVerifiedHandle(root, relative, async (handle, info) => {
+    const parts: Buffer[] = [];
+    const within = await drain(handle, (chunk) => void parts.push(Buffer.from(chunk))); // copy: the chunk buffer is reused
+    return within ? { bytes: Buffer.concat(parts), realPath: info.realPath } : null;
+  });
+  return read.ok ? { ok: true, bytes: read.value.bytes, realPath: read.value.realPath } : read;
+}
+
+/** sha256 of `relative` under `root`, streamed through the verified handle in 64 KiB chunks; at most MAX_CONFINED_FILE_BYTES. */
+export async function hashConfinedFile(root: string, relative: string): Promise<ConfinedHash> {
+  const hashed = await withVerifiedHandle(root, relative, async (handle, info) => {
+    const hash = createHash("sha256");
+    let size = 0;
+    const within = await drain(handle, (chunk) => { hash.update(chunk); size += chunk.length; });
+    return within ? { sha256: hash.digest("hex"), size, realPath: info.realPath } : null;
+  });
+  return hashed.ok ? { ok: true, ...hashed.value } : hashed;
 }

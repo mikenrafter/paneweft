@@ -11,7 +11,7 @@ import type { Anchor } from "./wire.ts";
 import type { RepositoryRegistration } from "./session.ts";
 import type { OperationError, Result } from "./errors.ts";
 import { sha256Hex } from "./digest.ts";
-import { readConfinedFile, UNSUPPORTED_PLATFORM_MESSAGE } from "./confined-read.ts";
+import { MAX_CONFINED_FILE_BYTES, readConfinedFile, UNSUPPORTED_PLATFORM_MESSAGE } from "./confined-read.ts";
 
 export { canonicalPathInside } from "./confined-read.ts";
 
@@ -49,7 +49,7 @@ export function splitLines(text: string): string[] {
   return lines;
 }
 
-/** Errors: PATH_OUTSIDE_ROOT, INVALID_PATH, REPOSITORY_NOT_REGISTERED, NOT_FOUND, LINES_OUT_OF_RANGE, UNSUPPORTED_PLATFORM (not Linux). */
+/** Errors: PATH_OUTSIDE_ROOT, INVALID_PATH, REPOSITORY_NOT_REGISTERED, NOT_FOUND, LINES_OUT_OF_RANGE, UNSUPPORTED_PLATFORM (not Linux), FILE_TOO_LARGE (over 16 MiB). */
 export async function resolveSourceAnchor(repositories: RepositoryRegistration[], anchor: Anchor): Promise<Result<ResolvedAnchor>> {
   const registration = repositories.find((candidate) => candidate.id === anchor.repository);
   if (registration === undefined) return failure("REPOSITORY_NOT_REGISTERED", `repository "${anchor.repository}" is not registered with this session`);
@@ -59,6 +59,7 @@ export async function resolveSourceAnchor(repositories: RepositoryRegistration[]
   if (!read.ok) {
     if (read.reason === "outside") return failure("PATH_OUTSIDE_ROOT", "the anchor path resolves outside the registered repository root");
     if (read.reason === "unsupported-platform") return failure("UNSUPPORTED_PLATFORM", UNSUPPORTED_PLATFORM_MESSAGE);
+    if (read.reason === "too-large") return failure("FILE_TOO_LARGE", `"${relativePath}" is larger than ${MAX_CONFINED_FILE_BYTES} bytes, the most a source anchor reads`);
     return failure("NOT_FOUND", read.reason === "root-inaccessible" ? `the root of repository "${anchor.repository}" is not accessible` : `no file "${relativePath}" in repository "${anchor.repository}"`);
   }
   const bytes = read.bytes;

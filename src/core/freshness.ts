@@ -5,8 +5,8 @@
 // `serve` flags). A root recorded inside a submitted envelope never authorises filesystem access: such a
 // repository is `unverified` with a reason and nothing is read, probed or hashed for it.
 // fresh: every repository is registered and every recorded file hashes the same.
-// stale: at least one differs or is gone (changedPaths). unknown: a registered root is inaccessible and
-// nothing is known stale. unverified: some repository is not registered, or its files cannot be read on this platform
+// stale: at least one differs or is gone (changedPaths). unknown: a registered root is inaccessible, or a recorded file is over the
+// 16 MiB confined-read cap and was not hashed (an `unverified` entry with code FILE_TOO_LARGE names it), and nothing is known stale. unverified: some repository is not registered, or its files cannot be read on this platform
 // (UNSUPPORTED_PLATFORM, confined reads are Linux-only), and nothing is stale or unknown.
 // Precedence stale > unknown > unverified > fresh; `unverified` lists are attached whenever non-empty.
 //
@@ -17,13 +17,18 @@ import { stat } from "node:fs/promises";
 import type { Envelope } from "./wire.ts";
 import type { RepositoryRegistration } from "./session.ts";
 import { normaliseRelativePath } from "./anchors.ts";
-import { readConfinedFile, UNSUPPORTED_PLATFORM_MESSAGE } from "./confined-read.ts";
+import { hashConfinedFile, MAX_CONFINED_FILE_BYTES, UNSUPPORTED_PLATFORM_MESSAGE } from "./confined-read.ts";
 import { compareCodeUnits } from "./canonical.ts";
-import { sha256Hex } from "./digest.ts";
 
 export interface ChangedPath { repository: string; path: string; recordedSha256: string; currentSha256: string | null }
 /** A repository whose freshness was not checked. `code` is machine readable, `reason` is for people. */
-export interface UnverifiedRepository { repository: string; code: "REPOSITORY_NOT_REGISTERED" | "UNSUPPORTED_PLATFORM"; reason: string }
+export interface UnverifiedRepository {
+  repository: string;
+  code: "REPOSITORY_NOT_REGISTERED" | "UNSUPPORTED_PLATFORM" | "FILE_TOO_LARGE";
+  reason: string;
+  /** FILE_TOO_LARGE only: the recorded files that were not hashed (the first 20, code-unit order). */
+  paths?: string[];
+}
 export type FreshnessResult =
   | { status: "fresh" }
   | { status: "stale"; changedPaths: ChangedPath[]; inaccessibleRoots: string[]; unverified?: UnverifiedRepository[] }
@@ -31,7 +36,7 @@ export type FreshnessResult =
   | { status: "unverified"; unverified: UnverifiedRepository[] };
 
 /** Where a registered root's file stands now. `sha256: null` means the file is gone, unreadable or unreachable from the root. */
-export type CurrentFile = { state: "unregistered" } | { state: "unsupported-platform" } | { state: "root-inaccessible"; root: string } | { state: "present"; sha256: string | null };
+export type CurrentFile = { state: "unregistered" } | { state: "unsupported-platform" } | { state: "root-inaccessible"; root: string } | { state: "too-large" } | { state: "present"; sha256: string | null };
 
 /** The sha256 of `path` under the operator-registered root of `repository`, judged lexically first and canonically second. */
 export async function currentFileHash(registered: RepositoryRegistration[], repository: string, path: string): Promise<CurrentFile> {
@@ -44,18 +49,20 @@ export async function currentFileHash(registered: RepositoryRegistration[], repo
   }
   const relative = normaliseRelativePath(path);
   if (relative === null) return { state: "present", sha256: null };
-  const read = await readConfinedFile(registration.root, relative);
-  if (!read.ok) {
-    if (read.reason === "unsupported-platform") return { state: "unsupported-platform" };
-    return read.reason === "root-inaccessible" ? { state: "root-inaccessible", root: registration.root } : { state: "present", sha256: null };
+  const hashed = await hashConfinedFile(registration.root, relative);
+  if (!hashed.ok) {
+    if (hashed.reason === "unsupported-platform") return { state: "unsupported-platform" };
+    if (hashed.reason === "too-large") return { state: "too-large" };
+    return hashed.reason === "root-inaccessible" ? { state: "root-inaccessible", root: registration.root } : { state: "present", sha256: null };
   }
-  return { state: "present", sha256: sha256Hex(read.bytes) };
+  return { state: "present", sha256: hashed.sha256 };
 }
 
 export async function checkFreshness(freshness: Envelope["freshness"], registered: RepositoryRegistration[]): Promise<FreshnessResult> {
   const changedPaths: ChangedPath[] = [];
   const inaccessibleRoots: string[] = [];
   const unverified: UnverifiedRepository[] = [];
+  let tooLargeSeen = false;
   for (const record of freshness.repositories) {
     if (!registered.some((registration) => registration.id === record.id)) {
       unverified.push({
@@ -65,6 +72,7 @@ export async function checkFreshness(freshness: Envelope["freshness"], registere
       });
       continue; // CLAIM(no-read-before-deny): nothing below runs for this repository
     }
+    const tooLarge: string[] = [];
     for (const path of Object.keys(record.files).sort(compareCodeUnits)) {
       const recordedSha256 = record.files[path] as string;
       const current = await currentFileHash(registered, record.id, path);
@@ -76,8 +84,14 @@ export async function checkFreshness(freshness: Envelope["freshness"], registere
         if (!inaccessibleRoots.includes(current.root)) inaccessibleRoots.push(current.root);
         break; // the root cannot be read at all; one report per root, not one per file
       }
+      if (current.state === "too-large") { tooLarge.push(path); continue; } // not hashed: neither fresh nor stale
       const currentSha256 = current.state === "present" ? current.sha256 : null;
       if (currentSha256 !== recordedSha256) changedPaths.push({ repository: record.id, path, recordedSha256, currentSha256 });
+    }
+    if (tooLarge.length > 0) {
+      tooLargeSeen = true;
+      const shown = tooLarge.slice(0, 5).join(", ");
+      unverified.push({ repository: record.id, code: "FILE_TOO_LARGE", paths: tooLarge.slice(0, 20), reason: `repository "${record.id}": ${tooLarge.length} recorded file${tooLarge.length === 1 ? " is" : "s are"} over ${MAX_CONFINED_FILE_BYTES} bytes and not hashed, so ${tooLarge.length === 1 ? "its" : "their"} freshness is unknown: ${shown}${tooLarge.length > 5 ? ` (+${tooLarge.length - 5} more)` : ""}` });
     }
     // a registered repository with no recorded files still needs an accessible root to count as checked
     if (Object.keys(record.files).length === 0) {
@@ -91,7 +105,7 @@ export async function checkFreshness(freshness: Envelope["freshness"], registere
   }
   const extra = unverified.length > 0 ? { unverified } : {};
   if (changedPaths.length > 0) return { status: "stale", changedPaths, inaccessibleRoots, ...extra };
-  if (inaccessibleRoots.length > 0) return { status: "unknown", inaccessibleRoots, ...extra };
+  if (inaccessibleRoots.length > 0 || tooLargeSeen) return { status: "unknown", inaccessibleRoots, ...extra };
   if (unverified.length > 0) return { status: "unverified", unverified };
   return { status: "fresh" };
 }

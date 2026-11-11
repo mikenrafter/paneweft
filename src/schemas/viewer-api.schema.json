@@ -101,7 +101,7 @@
       "type": "array",
       "items": {
         "type": "object", "additionalProperties": false, "required": ["repository", "code", "reason"],
-        "properties": { "repository": { "type": "string" }, "code": { "enum": ["REPOSITORY_NOT_REGISTERED", "UNSUPPORTED_PLATFORM"] }, "reason": { "type": "string", "minLength": 1 } }
+        "properties": { "repository": { "type": "string" }, "code": { "enum": ["REPOSITORY_NOT_REGISTERED", "UNSUPPORTED_PLATFORM", "FILE_TOO_LARGE"] }, "reason": { "type": "string", "minLength": 1 }, "paths": { "type": "array", "items": { "type": "string" } } }
       }
     },
     "FreshnessResult": {
