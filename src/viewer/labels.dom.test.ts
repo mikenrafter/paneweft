@@ -12,6 +12,8 @@ import { useTempDirs } from "../../test/helpers/tmp.ts";
 const tmp = useTempDirs();
 useViewerCleanup();
 
+/** What the note prints: its direct text nodes (its <title> child holds the whole label for hover and assistive technology). */
+const printed = (note: Element): string => Array.from(note.childNodes).filter((n) => n.nodeType === 3).map((n) => n.textContent).join("");
 const LONG = "Hotswap first; standard claim: tabs.get -> activateStandard -> StandardHandler.activate -> parseBookmarkUrl";
 
 describe("[#9] shape fields show their path and label", () => {
@@ -47,7 +49,7 @@ describe("[#12] graph edges show their label", () => {
   // why: the finding. A short label is drawn whole next to the relation.
   it("[#12] a short label is drawn in an edge-note part, whole", async () => {
     const v = await open("startup path");
-    expect(text(edge(v, "e1").querySelector('[data-pw="edge-note"]'))).toBe("startup path");
+    expect(printed(edge(v, "e1").querySelector('[data-pw="edge-note"]') as Element)).toBe("startup path");
   });
 
   // why: a long label does not fit in the drawing: it is cut at 28 characters with the marker …, and the whole label is still reachable from the
@@ -55,7 +57,7 @@ describe("[#12] graph edges show their label", () => {
   it("[#12] a long label is cut in the drawing with … and kept whole in the note's title", async () => {
     const v = await open(LONG);
     const note = edge(v, "e1").querySelector('[data-pw="edge-note"]') as Element;
-    expect(Array.from(note.childNodes).filter((n) => n.nodeType === 3).map((n) => n.textContent).join("")).toBe(`${LONG.slice(0, 27)}…`);
+    expect(printed(note)).toBe(`${LONG.slice(0, 27)}…`);
     expect(note.querySelector("title")?.textContent).toBe(LONG);
   });
 

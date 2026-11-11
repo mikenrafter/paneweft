@@ -96,6 +96,8 @@ function otherColumns(cells: Record<string, Scalar>, columns: Array<{ key: strin
   }
   return { text: parts.length === 0 ? "" : ` | ${parts.join(" ")}`, clipped };
 }
+/** ` | label="..."` for an item that has a label the line does not already print (an edge, a shape field); whole, never clipped: the text form is where the full label lives (#9, #12). */
+const labelPart = (item: AnyItem): string => (typeof item.label === "string" ? ` | label=${JSON.stringify(item.label)}` : "");
 const clippedLine = (clipped: number): string[] => (clipped === 0 ? [] : [`clipped: ${clipped} cell${clipped === 1 ? "" : "s"} over ${CELL_CLIP_POINTS} characters (marked [+N chars]; the full values are in --format json)`]);
 
 const trailer = (item: AnyItem): string => `${item.provenance}; ${item.evidence.join(",")}${item.reason === undefined ? "" : `; ${oneLine(item.reason)}`}`;
@@ -299,7 +301,7 @@ function graphEntries(data: any, query: ViewQuery): Built {
     scope = edges.filter((edge) => ids.has(edge.id));
   }
   const kept = scope.filter((edge) => matches(edge, query.filter)).sort((a, b) => compareCodeUnits(a.id, b.id));
-  const lines = kept.map((edge) => entry(edge.id, edge, `${edge.from} -${edge.relation}-> ${edge.to}; ${trailer(edge)}`));
+  const lines = kept.map((edge) => entry(edge.id, edge, `${edge.from} -${edge.relation}-> ${edge.to}; ${trailer(edge)}${labelPart(edge)}`));
   return { total: edges.length, matched: kept.length, entries: lines, bodyPrelude: [], jsonExtras: {}, footer: none, order: null };
 }
 
@@ -339,7 +341,7 @@ function shapeEntries(data: any, query: ViewQuery): Built {
   const lines = fields.map((field) => {
     const example = "example" in field ? (field.example === null ? "example: null" : `example: ${JSON.stringify(field.example)}`) : "no example";
     const ref = field.ref === undefined ? "" : `; ref=${field.ref}`;
-    return entry(field.id, field, `${oneLine(String(field.path))}: ${field.type} (${field.presence}); ${trailer(field)}${ref}; ${example}`);
+    return entry(field.id, field, `${oneLine(String(field.path))}: ${field.type} (${field.presence}); ${trailer(field)}${ref}; ${example}${labelPart(field)}`);
   });
   return { total: data.fields.length, matched: fields.length, entries: lines, bodyPrelude: [`basis: ${data.basis}`], jsonExtras: { basis: data.basis }, footer: none, order: null };
 }

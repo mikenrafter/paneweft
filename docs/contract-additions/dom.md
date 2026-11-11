@@ -103,8 +103,8 @@ per evidence id (`data-source`, text = id, declared order), `no-target`, `action
   `data-id` = relation and `aria-label="Show <relation>"`, relations in code-unit order, all checked initially), `graph`, `graph-edge-list`. Inside
   `graph`: `layout-info` (text `W x H`), `graph-node*` and `graph-edge*` sorted by id independent of input order.
   `graph-node`: `role=button`, `tabindex=0`, `data-group` when grouped, `data-x`, `data-y`; text = label (else id).
-  `graph-edge`: children `edge-path` (`d`), `edge-label` (relation), then fact children.
-  `graph-edge-item`: text `<from> -<relation>-> <to>` (item ids), child `actions-button`.
+  `graph-edge`: children `edge-path` (`d`), `edge-label` (relation), `edge-note` when the edge has a `label` (at most 28 characters, `…` marks a cut, `<title>` child with the whole label; #12), then fact children.
+  `graph-edge-item`: text `<from> -<relation>-> <to>` (item ids), children `edge-list-label` (the whole label, when present; #12) and `actions-button`.
   An unchecked relation removes its edges from `graph` and from `graph-edge-list`; nodes stay.
   Focus mode: only `graphNeighborhood` nodes rendered, the focus node has `data-status="focus"`, and
   `omitted-neighborhood` (sibling of `graph`) reads `<k> nodes omitted by focus`.
@@ -117,7 +117,7 @@ per evidence id (`data-source`, text = id, declared order), `no-target`, `action
   the stored excerpt is shown) **[contract]**; `unknown` adds `unknown-notice` (text says the currency is unknown and
   why) (new); fresh adds neither.
 * **Shape**: pre-order flat `field`s like the tree (`aria-selected`, roving tabindex, `toggle` when it has
-  children, initially depth-0 expanded). Parts: `field-type`, `field-example` (`JSON.stringify` of the scalar, so
+  children, initially depth-0 expanded). Parts: `field-path` (the path as text; #9), `field-label` (when the field has a label; #9), `field-type`, `field-example` (`JSON.stringify` of the scalar, so
   the string `"null"` shows with quotes and `null` without; absent -> `no example`) **[contract]** for the last
   two, `field-ref` (text `ref: <path of the referenced field>`).
 * **Notebook**: `claim-filter` (`<select aria-label="Claim status">`: `all`, `supported`, `disputed`, `open`), then

@@ -69,8 +69,8 @@ expands, ArrowLeft collapses, Enter opens the entity.
 `graph` (`<svg role="img" aria-label=...>`) with `layout-info` (`data-layout`, `data-layout-version`,
 width/height as text `W x H`), `graph-node` (`<g>`; `data-id`, `data-x`, `data-y`, `data-group`,
 `tabindex`), `graph-edge` (`<g>`; `data-id`, `data-source`... not used; contains `edge-path` with `d`
-and `edge-label` with the relation text). Non-colour alternative: `graph-edge-list` (a list of
-`graph-edge-item`, `data-id`, text `from -relation-> to`). `relation-filter` lists one checkbox per
+and `edge-label` with the relation text; an edge with a `label` also has `edge-note`, the label cut at 28 characters with `…`, its `<title>` holding the whole label). Non-colour alternative: `graph-edge-list` (a list of
+`graph-edge-item`, `data-id`, text `from -relation-> to`, then `edge-list-label` with the whole label when the edge has one). `relation-filter` lists one checkbox per
 relation (`data-id` = relation). Cycles stay visible. Hidden-by-filter edges are absent from the SVG.
 Focus mode (`focus` in data) marks `graph-node` with `data-status="focus"` and omits nodes outside the
 neighbourhood, with `omitted-neighborhood` text stating how many were omitted.
@@ -87,7 +87,7 @@ lines only.
 ## Shape
 
 `shape` (`data-kind` = basis `declared`/`observed`) > `field` (`role="treeitem"`, `data-id`, `data-path`,
-`data-presence`, `aria-level`, `aria-expanded` when it has children) with `field-type` (text), `field-example`
+`data-presence`, `aria-level`, `aria-expanded` when it has children) with `field-path` (the field's path), `field-label` (its label, when it has one), `field-type` (text), `field-example`
 (text; absent example renders `no example`, `null` renders `null`, never conflated) and `field-ref` for
 recursive `ref`.
 

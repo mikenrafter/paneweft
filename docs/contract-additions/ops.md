@@ -46,7 +46,7 @@ All are body lines after `<returned>/<matched> matched <unit> returned; <omitted
   an inferred row's line also contains its `reason`. Every other declared column follows as ` | <key>=<value> ...` in declared
   order (strings JSON-quoted, other scalars as JSON, absent cells not printed); a string over 160 characters is cut as
   `"<159 characters>…"[+N chars]` and the page gets one line `clipped: <n> cell(s) over 160 characters ...` after the notice.
-  JSON items are not clipped (#13). Tree nodes print their other columns the same way, after the state bracket.
+  JSON items are not clipped (#13). A graph edge or shape field that has a `label` ends its line with ` | label="<label>"`, whole (#9, #12). Tree nodes print their other columns the same way, after the state bracket.
 * **tree** (preorder over `roots`): `<2 spaces per depth><first cell> [<state>; children=<n>]`, state `expanded` (complete,
   has children), `leaf` (complete, none), `not_loaded` (printed `children=?`; never `leaf`); tree ancestors kept by a filter
   add ` [context]`.

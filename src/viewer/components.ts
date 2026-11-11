@@ -240,6 +240,8 @@ function renderShape(ctx: ComponentContext): HTMLElement {
       tabindex: field.id === rove ? 0 : -1,
     },
     can && h(ctx.doc, "button", { type: "button", "data-pw": "toggle", "data-item": field.id, "aria-label": `Toggle ${field.id}` }),
+    h(ctx.doc, "span", { "data-pw": "field-path" }, String(field.path)),
+    typeof field.label === "string" && h(ctx.doc, "span", { "data-pw": "field-label" }, field.label),
     h(ctx.doc, "span", { "data-pw": "field-type" }, String(field.type)),
     h(ctx.doc, "span", { "data-pw": "field-example" }, "example" in field ? JSON.stringify(field.example) : "no example"),
     typeof field.ref === "string" && h(ctx.doc, "span", { "data-pw": "field-ref" }, `ref: ${pathOf.get(field.ref) ?? field.ref}`),
@@ -252,6 +254,14 @@ function renderShape(ctx: ComponentContext): HTMLElement {
 // ---- graph --------------------------------------------------------------------------------------------------------------------
 
 interface GraphParts { relationFilters: HTMLElement[]; graph: SVGElement; edgeList: HTMLElement; omitted: HTMLElement | null }
+
+/** Longest edge label (in characters) the drawing prints; the edge list and the note's <title> keep the whole label (#12). */
+const EDGE_NOTE_POINTS = 28;
+function edgeNote(ctx: ComponentContext, label: string, mid: Position): SVGElement {
+  const points = Array.from(label);
+  const shown = points.length <= EDGE_NOTE_POINTS ? label : `${points.slice(0, EDGE_NOTE_POINTS - 1).join("")}…`;
+  return svg(ctx.doc, "text", { "data-pw": "edge-note", x: mid.x, y: mid.y + 8, "font-size": 10, "data-truncated": points.length > EDGE_NOTE_POINTS ? "true" : undefined }, shown, svg(ctx.doc, "title", {}, label));
+}
 
 function renderGraphParts(ctx: ComponentContext): GraphParts {
   const data = ctx.envelope.data as { nodes: Item[]; edges: Item[]; layout: "layered" | "grid"; focus?: { node: string; direction: "in" | "out" | "both"; depth: number } };
@@ -302,6 +312,7 @@ function renderGraphParts(ctx: ComponentContext): GraphParts {
     return svg(ctx.doc, "g", { "data-pw": "graph-edge", "data-id": edge.id, "data-provenance": edge.provenance },
       svg(ctx.doc, "path", { "data-pw": "edge-path", d, fill: "none", stroke: "currentColor" }),
       svg(ctx.doc, "text", { "data-pw": "edge-label", x: mid.x, y: mid.y - 4, "font-size": 10 }, edge.relation),
+      typeof edge.label === "string" && edgeNote(ctx, edge.label, mid),
       ...badge(ctx, edge, true, { x: mid.x, y: mid.y - 22 }));
   });
   const root = svg(ctx.doc, "svg", {
@@ -310,7 +321,8 @@ function renderGraphParts(ctx: ComponentContext): GraphParts {
   svg(ctx.doc, "text", { "data-pw": "layout-info", "data-layout": layout.layout, "data-layout-version": ctx.layoutVersion, x: 0, y: 10, "font-size": 1, opacity: 0 }, `${layout.width} x ${layout.height}`),
   ...rows.flat(), ...edgeElements);
   const edgeList = h(ctx.doc, "div", { "data-pw": "graph-edge-list" },
-    ...visibleEdges.map((edge) => h(ctx.doc, "div", { "data-pw": "graph-edge-item", "data-id": edge.id }, `${edge.from} -${edge.relation}-> ${edge.to}`, ...actions(ctx, edge))));
+    ...visibleEdges.map((edge) => h(ctx.doc, "div", { "data-pw": "graph-edge-item", "data-id": edge.id }, `${edge.from} -${edge.relation}-> ${edge.to}`,
+      typeof edge.label === "string" && h(ctx.doc, "span", { "data-pw": "edge-list-label" }, edge.label), ...actions(ctx, edge))));
   return { relationFilters, graph: root, edgeList, omitted };
 }
 
