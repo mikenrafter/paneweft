@@ -29,9 +29,10 @@ export interface DiagnosticRecord {
   nextAction: string;
 }
 
-export class NotImplementedError extends Error {
-  constructor(what: string) {
-    super(`NOT_IMPLEMENTED: ${what}`);
-    this.name = "NotImplementedError";
+/** A fault in how a view uses the SDK (a bad column, a duplicate id, an unknown type). It becomes a diagnostic of `category`. */
+export class ViewError extends Error {
+  constructor(readonly category: DiagnosticRecord["category"], message: string) {
+    super(message);
+    this.name = "ViewError";
   }
 }

@@ -1,4 +1,4 @@
-// @paneweft/sdk. RED PHASE: signatures are the contract, bodies are compile-only stubs (grep NOT_IMPLEMENTED).
+// @paneweft/sdk. Development only: never import it from a production entry point.
 // The sentinel lets a bundle check prove that a production bundle does not contain the SDK (IV4).
 export const PANEWEFT_SDK_SENTINEL = "paneweft-sdk-sentinel-7f3a91";
 
