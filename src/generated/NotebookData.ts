@@ -39,12 +39,20 @@ export interface NotebookData {
     viewId?: string;
     statement?: string;
     status?: "supported" | "disputed" | "open";
-    supports?: {
-      [k: string]: unknown;
-    }[];
-    contradicts?: {
-      [k: string]: unknown;
-    }[];
+    supports?: (
+      | {
+          viewId: string;
+          itemId: string;
+        }
+      | string
+    )[];
+    contradicts?: (
+      | {
+          viewId: string;
+          itemId: string;
+        }
+      | string
+    )[];
     exampleId?: string;
   })[];
 }
