@@ -25,6 +25,7 @@ import type { Bundle, Entity, EntityRef, Envelope, ViewDefinition } from "./wire
 import type { OperationError, Result, ValidationIssue } from "./errors.ts";
 import { canonicalJson, compareCodeUnits } from "./canonical.ts";
 import { canonicalSha256, sha256Hex } from "./digest.ts";
+import { viewItems } from "./items.ts";
 import { validateDefinition, validateRunOutput, validateSubmission, type DefinitionMetadata, type ReferenceContext } from "./validate.ts";
 
 export interface ViewKey { viewId: string; snapshotId: string }
@@ -135,25 +136,7 @@ const byViewKey = (a: ViewKey, b: ViewKey): number => compareCodeUnits(a.viewId,
 const hashesLabel = (key: ViewKey): string => `${key.viewId}@${key.snapshotId}`;
 
 /** Items of a view that other views may point at (the item ids a ReferenceContext view lists). */
-function itemIdsOf(envelope: Envelope): string[] {
-  const data = envelope.data as Record<string, any> | undefined;
-  if (data === undefined) return [];
-  const ids: string[] = [];
-  const take = (items: unknown) => { for (const item of Array.isArray(items) ? items : []) if (item && typeof item.id === "string") ids.push(item.id); };
-  switch (envelope.component) {
-    case "list": take(data.rows); break;
-    case "tree": take(data.nodes); break;
-    case "graph": take(data.nodes); take(data.edges); break;
-    case "source": take([data.excerpt]); take(data.annotations); break;
-    case "shape": take(data.fields); break;
-    case "notebook": take(data.blocks); break;
-    case "example":
-      take([data.scenario]); take(data.runs);
-      for (const run of Array.isArray(data.runs) ? data.runs : []) take(run.assertions);
-      break;
-  }
-  return ids;
-}
+const itemIdsOf = (envelope: Envelope): string[] => viewItems(envelope).map((item) => item.id);
 
 /** View ids a submitted document's notebooks point at; only those views' items are loaded into the validation context. */
 function referencedViewIds(documents: unknown[]): { ids: Set<string>; examples: boolean } {
