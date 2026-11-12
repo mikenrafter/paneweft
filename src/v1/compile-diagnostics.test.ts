@@ -69,6 +69,8 @@ describe("[F6] compile diagnostics say what was left out and where the error is"
     expect(outside.nextAction).toMatch(/outside the repository root/);
     expect(outside.nextAction).not.toMatch(/Fix the named/);
     expect(own.nextAction).toMatch(/Fix the named property or type in the view source/);
+    // F5: an error in a repository file the instrumentation may not even import points at the adapter's tsconfig, the way to scope the typecheck
+    expect(own.nextAction).toMatch(/adapter with a `tsconfig`/);
   });
 
   // why: F6 for Rust. The same classification for a cargo log: a vendored SDK path, a path outside the root, and the author's file.
@@ -81,7 +83,8 @@ describe("[F6] compile diagnostics say what was left out and where the error is"
     ].join("\n");
     const found = compileDiagnostics({ log, typecheck: undefined, kind: "cargo", root: "/work/vigil" });
     expect(found.map((d) => d.source!.path)).toEqual(["src/watch.rs", "vendor/paneweft/paneweft/src/lib.rs", "/somewhere/else/lib.rs"]);
-    expect(found[0]!.nextAction).toMatch(/Fix the named property or type in the view source/);
+    expect(found[0]!.nextAction).toMatch(/Fix the named field or type in the view source/);
+    expect(found[0]!.nextAction, "cargo has no tsconfig to scope").not.toMatch(/tsconfig/);
     expect(found[1]!.nextAction).toMatch(/paneweft SDK/);
     expect(found[2]!.nextAction).toMatch(/outside the repository root/);
   });

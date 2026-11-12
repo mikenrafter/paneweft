@@ -22,6 +22,14 @@ export interface Adapter {
    * Manifest directory (cargo) or package directory (vitest), relative to workspaceRoot.
    */
   entry: string;
+  /**
+   * vitest-run/1 only (F5): the tsconfig the collection typechecks against, relative to the package directory (workspaceRoot/entry), no `..` segment, an existing file. Default tsconfig.json. A file that extends the repository's own and lists only what the instrumentation imports keeps unrelated type errors from blocking a collect.
+   */
+  tsconfig?: string;
+  /**
+   * vitest-run/1 only (F5): the vitest config the run uses (it lists the paneweft reporter), relative to the package directory, no `..` segment, an existing file. Default vitest.config.ts.
+   */
+  vitestConfig?: string;
   features: string[];
   /**
    * @minItems 1

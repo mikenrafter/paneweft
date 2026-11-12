@@ -3,7 +3,7 @@
 import { execFile } from "node:child_process";
 import { access, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
-import { dirname, isAbsolute, join, normalize, relative } from "node:path";
+import { dirname, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { compareCodeUnits } from "../core/canonical.ts";
@@ -52,6 +52,9 @@ export async function loadAdapters(sessionDir: string): Promise<Result<AdapterRe
 }
 
 /** Writes `<sessionDir>/adapters.json` atomically. CLI-only: no MCP tool calls it. A record replaces the one with its id. */
+/** The package directory of an adapter: workspaceRoot/entry. */
+const workspaceDirectory = (adapter: AdapterRecord): string => normalize(join(adapter.workspaceRoot, adapter.entry));
+
 export async function registerAdapter(sessionDir: string, record: unknown): Promise<Result<AdapterRecord>> {
   const issues = validateAgainstV1("urn:paneweft:schema:v1:adapter:1", record);
   if (issues.length > 0) return err("VALIDATION_FAILED", "the adapter record does not match paneweft.adapter/1", { errors: issues });
@@ -59,6 +62,14 @@ export async function registerAdapter(sessionDir: string, record: unknown): Prom
   const entry = normalize(adapter.entry);
   if (isAbsolute(adapter.entry) || entry === ".." || entry.startsWith("../") || entry.split("/").includes("..")) {
     return err("INVALID_ARGUMENT", `the adapter entry "${adapter.entry}" must stay inside the workspace root`, { errors: [{ code: "CONSTRAINT", pointer: "/entry", constraint: "relative to workspaceRoot, no .. segment", hint: "Use a directory below the workspace root, or register another root." }] });
+  }
+  // F5: the vitest adapter's own tsconfig and vitest config: files of the package directory, never anywhere else, and only for the adapter whose run reads them
+  for (const [field, label] of [["tsconfig", "tsconfig"], ["vitestConfig", "vitest config"]] as const) {
+    const named = adapter[field];
+    if (named === undefined) continue;
+    const problem = adapter.grammar !== "vitest-run/1" ? `only a vitest adapter names a ${label}; this adapter runs ${adapter.grammar}`
+      : await stat(resolve(workspaceDirectory(adapter), named)).then((info) => (info.isFile() ? undefined : `the ${label} "${named}" is not a file`), () => `the ${label} "${named}" does not exist under ${workspaceDirectory(adapter)}`);
+    if (problem !== undefined) return err("INVALID_ARGUMENT", problem, { errors: [{ code: "CONSTRAINT", pointer: `/${field}`, constraint: `a file below ${workspaceDirectory(adapter)}`, hint: `Name an existing file relative to the package directory, or leave ${field} out for the default.` }] });
   }
   // F30a: the executable is part of the record's identity; one that does not exist is refused now, not discovered by the first collect as a catch-all failure
   const runnable = await stat(adapter.executable).then((info) => info.isFile(), () => false) && await access(adapter.executable, fsConstants.X_OK).then(() => true, () => false);
@@ -190,11 +201,11 @@ export function buildProcess(adapter: AdapterRecord, selection: Selection, mode:
     }
     return ok({ executable: adapter.executable, argv, cwd: root, env: { CARGO_TERM_COLOR: "never", ...adapter.env?.set, ...env } });
   }
-  const argv = [VITEST_COLLECT_SCRIPT, "--staging", runtime.stagingDir, "--root", packageDir, "--tsconfig", "tsconfig.json"];
+  const argv = [VITEST_COLLECT_SCRIPT, "--staging", runtime.stagingDir, "--root", packageDir, "--tsconfig", adapter.tsconfig ?? "tsconfig.json"];
   if (mode === "catalogue") argv.push("--catalogue", "--manifest", "paneweft.views.ts");
   else {
     if (selection.examples.length === 0) return err("INVALID_ARGUMENT", "a vitest collection selects at least one example");
-    argv.push("--vitest", join(packageDir, "node_modules/vitest/vitest.mjs"), "--config", "vitest.config.ts", "--name-pattern", selection.examples.map((example) => `^${escapeRegex(example.selector.name)}$`).join("|"));
+    argv.push("--vitest", join(packageDir, "node_modules/vitest/vitest.mjs"), "--config", adapter.vitestConfig ?? "vitest.config.ts", "--name-pattern", selection.examples.map((example) => `^${escapeRegex(example.selector.name)}$`).join("|"));
   }
   return ok({ executable: adapter.executable, argv, cwd: packageDir, env: { ...adapter.env?.set, ...env } });
 }
@@ -442,7 +453,7 @@ export async function checkInstrumentation(adapter: AdapterRecord): Promise<Resu
   }
   const local = join(packageDir, "node_modules/typescript/lib/tsc.js");
   const tsc = await readFile(local).then(() => local, () => fileURLToPath(new URL("../../node_modules/typescript/lib/tsc.js", import.meta.url)));
-  const result = await execute(adapter.executable, [tsc, "--noEmit", "-p", "tsconfig.json", "--pretty", "false"], packageDir);
+  const result = await execute(adapter.executable, [tsc, "--noEmit", "-p", adapter.tsconfig ?? "tsconfig.json", "--pretty", "false"], packageDir);
   for (const line of `${result.stdout}\n${result.stderr}`.split("\n")) {
     const match = /^(.+?)\((\d+),(\d+)\): error (TS\d+): (.*)$/.exec(line);
     if (match === null) continue;

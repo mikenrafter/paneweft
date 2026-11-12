@@ -184,6 +184,8 @@ record's), then `env.set`. A CLI call from a login shell and an MCP call from a 
 `RUSTUP_HOME` (and `CARGO_HOME`): pin them with `env.set`. `adapter add` refuses an executable that is not an executable file. A job qex could not start (executable gone, rustup without a default) is a `runner` diagnostic that
 says so and names the owner action, not a compile error. A job is driven to its end by a detached driver process the CLI and the MCP server start (F20; `src/v1/driver.ts`), so it advances when nobody polls.
 
+A vitest adapter also names the files its collection reads (F5): `tsconfig` (default `tsconfig.json`; the typecheck that runs before vitest) and `vitestConfig` (default `vitest.config.ts`; the run, which lists the paneweft reporter). Both are paths relative to the package directory (`workspaceRoot/entry`), have no `..` segment, must be existing files (`adapter add` checks), and are refused on a cargo adapter. A `tsconfig` that `extends` the repository's own and lists only what the instrumentation imports keeps a type error in unrelated code (a script, a live test) from blocking every collect.
+
 ## 10. Catalogue, inventory, freshness
 
 **A collection resolves its example ids against the catalogue it exports (T4).** `collect` needs no owner-only catalogue step. When a stored catalogue exists

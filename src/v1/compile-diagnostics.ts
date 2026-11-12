@@ -24,6 +24,13 @@ const NEXT: Record<Where, string> = {
   outside: "This error is in a file outside the repository root, so it is not in the instrumentation. Fix it there, or exclude it from what the collection typechecks (the adapter's tsconfig), then run the collection again.",
 };
 
+/** F5: a TypeScript error in a repository file may be in code the instrumentation never imports; the owner can scope the typecheck with the adapter's tsconfig. */
+function nextFor(where: Where, kind: "cargo" | "vitest"): string {
+  if (where === "repository" && kind === "cargo") return "Fix the named field or type in the view source at the span, then run the collection again.";
+  if (where === "repository") return `${NEXT.repository} If the file has nothing to do with the instrumentation, the owner scopes the typecheck: register the adapter with a \`tsconfig\` that extends the repository's and lists only what the instrumentation imports.`;
+  return NEXT[where];
+}
+
 export function compileDiagnostics(input: { log: string; typecheck: { output: string } | undefined; kind: "cargo" | "vitest"; root: string }): Diagnostic[] {
   const { log, typecheck, kind, root } = input;
   const category = kind === "cargo" ? "compiler" : "typecheck";
@@ -38,7 +45,7 @@ export function compileDiagnostics(input: { log: string; typecheck: { output: st
     }
   }
   if (found.length === 0) return [{ id: "diag-compile-1", category, message: "the instrumentation did not compile", stderrSlice: (typecheck?.output ?? log).slice(-3500), nextAction: "Read the stderr slice; fix the first error, then run the collection again." } as Diagnostic];
-  const listed = found.slice(0, MAX_LISTED_COMPILE_ERRORS).map((error, index): Diagnostic => ({ id: `diag-compile-${index + 1}`, category, message: error.message.slice(0, 2000), source: { path: error.path, line: error.line, column: error.column }, nextAction: NEXT[whereIs(error.path, root)] } as Diagnostic));
+  const listed = found.slice(0, MAX_LISTED_COMPILE_ERRORS).map((error, index): Diagnostic => ({ id: `diag-compile-${index + 1}`, category, message: error.message.slice(0, 2000), source: { path: error.path, line: error.line, column: error.column }, nextAction: nextFor(whereIs(error.path, root), kind) } as Diagnostic));
   if (found.length <= MAX_LISTED_COMPILE_ERRORS) return listed;
   const counts: Record<Where, number> = { repository: 0, sdk: 0, outside: 0 };
   for (const error of found) counts[whereIs(error.path, root)] += 1;
