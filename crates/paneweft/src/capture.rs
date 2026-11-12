@@ -704,7 +704,9 @@ impl<'a> Context<'a> {
         }
         let reservation = Reservation { object: self.object, invocation: self.state.next_invocation };
         self.state.next_invocation += 1;
-        let charge = Rc::new(Charge::new(self.state.ledger.clone()));
+        // F18: a list view holds back half of the room for its own rows before the objects its rows reference are captured, so a large object keeps its main list
+        let escrow = if meta.component == "list" { self.state.ledger.spare() / crate::bounded::ROW_ESCROW_DIVISOR } else { 0 };
+        let charge = Rc::new(Charge::with_escrow(self.state.ledger.clone(), escrow));
         self.state.reservations.insert(reservation, (prepaid, charge.clone()));
         self.charge = Some(charge);
         self.view = Some(meta.id);

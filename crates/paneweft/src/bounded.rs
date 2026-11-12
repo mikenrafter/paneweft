@@ -125,24 +125,43 @@ impl Ledger {
 
 /// What one view has charged so far (its data and its stored pages). The capture settles it against the exact text of the record, or gives
 /// all of it back when the view fails.
+///
+/// A view may hold an *escrow*: bytes of the ledger taken when the view starts, before anything it references is captured. The view's own charges draw on its escrow
+/// first, so the objects a list references while its rows are being added cannot spend the room the rows need (F18). Whatever is left unspent is settled with the
+/// rest: `bytes()` counts the escrow and what was taken beyond it.
 #[derive(Debug)]
 pub(crate) struct Charge {
     ledger: Rc<Ledger>,
     bytes: Cell<u64>,
+    escrow: Cell<u64>,
 }
 
+/// The share of the room a list view holds back for its own rows when it starts: the denominator. The objects its rows reference get the other half.
+pub(crate) const ROW_ESCROW_DIVISOR: u64 = 2;
+
 impl Charge {
-    pub(crate) fn new(ledger: Rc<Ledger>) -> Charge { Charge { ledger, bytes: Cell::new(0) } }
+    pub(crate) fn new(ledger: Rc<Ledger>) -> Charge { Charge { ledger, bytes: Cell::new(0), escrow: Cell::new(0) } }
+
+    /// A charge that holds `escrow` bytes, taken from the ledger now; none when they do not fit.
+    pub(crate) fn with_escrow(ledger: Rc<Ledger>, escrow: u64) -> Charge {
+        let held = if escrow > 0 && ledger.take(escrow) { escrow } else { 0 };
+        Charge { ledger, bytes: Cell::new(held), escrow: Cell::new(held) }
+    }
 
     pub(crate) fn take(&self, bytes: u64) -> bool {
-        if !self.ledger.take(bytes) {
-            return false;
+        let from_escrow = bytes.min(self.escrow.get());
+        let rest = bytes - from_escrow;
+        if rest > 0 {
+            if !self.ledger.take(rest) {
+                return false;
+            }
+            self.bytes.set(self.bytes.get() + rest);
         }
-        self.bytes.set(self.bytes.get() + bytes);
+        self.escrow.set(self.escrow.get() - from_escrow);
         true
     }
 
-    pub(crate) fn spare(&self) -> u64 { self.ledger.spare() }
+    pub(crate) fn spare(&self) -> u64 { self.escrow.get() + self.ledger.spare() }
     pub(crate) fn bytes(&self) -> u64 { self.bytes.get() }
 }
 

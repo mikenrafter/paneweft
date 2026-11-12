@@ -92,17 +92,34 @@ export class Ledger {
 }
 
 /** What one view has charged so far (its data and its stored pages). The capture settles it against the exact text of the record, or gives all
- * of it back when the view fails. */
+ * of it back when the view fails.
+ *
+ * A view may hold an *escrow*: bytes of the ledger taken when the view starts, before anything it references is captured. The view's own charges draw on its escrow
+ * first, so the objects a list references while its rows are being added cannot spend the room the rows need (F18). Whatever is left unspent is settled with the rest:
+ * `bytes` counts the escrow and what was taken beyond it. */
 export class Charge {
-  bytes = 0;
-  constructor(private readonly ledger: Ledger) {}
-  spare(): number { return this.ledger.spare(); }
+  bytes: number;
+  private escrow: number;
+  constructor(private readonly ledger: Ledger, escrow = 0) {
+    const held = escrow > 0 && ledger.take(escrow) ? escrow : 0;
+    this.bytes = held;
+    this.escrow = held;
+  }
+  spare(): number { return this.escrow + this.ledger.spare(); }
   take(bytes: number): boolean {
-    if (!this.ledger.take(bytes)) return false;
-    this.bytes += bytes;
+    const fromEscrow = Math.min(bytes, this.escrow);
+    const rest = bytes - fromEscrow;
+    if (rest > 0) {
+      if (!this.ledger.take(rest)) return false;
+      this.bytes += rest;
+    }
+    this.escrow -= fromEscrow;
     return true;
   }
 }
+
+/** The share of the room a list view holds back for its own rows when it starts: the denominator. The objects its rows reference get the other half. */
+export const ROW_ESCROW_DIVISOR = 2;
 
 /** The marker for the current state of `ledger`. */
 export function markerFor(ledger: Ledger): Json {

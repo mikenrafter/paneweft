@@ -4,7 +4,7 @@
 // views and follows the references the views declare. Everything is bounded while it is built: a bound that bites yields a
 // not-captured reference and a named omission, never an error and never silence.
 import { AsyncLocalStorage } from "node:async_hooks";
-import { Charge, Ledger, emit, emitString, serializeGraph } from "./bounded.ts";
+import { Charge, Ledger, ROW_ESCROW_DIVISOR, emit, emitString, serializeGraph } from "./bounded.ts";
 import { Budget, DetailsBuilder, TableBuilder, canonicalJson, sha256Hex, type ViewResult, type StandardViewResult } from "./builders.ts";
 import { callerLine } from "./callsite.ts";
 import { applyLimitOverrides, defaultLimits } from "./limits.ts";
@@ -425,7 +425,8 @@ export class Capture {
     }
     context.currentView = definition.id;
     context.viewBestEffort = false;
-    context.charge = new Charge(this.ledger);
+    // F18: a list view holds back half of the room for its own rows before the objects its rows reference are captured, so a large object keeps its main list
+    context.charge = new Charge(this.ledger, definition.component === "list" ? Math.floor(this.ledger.spare() / ROW_ESCROW_DIVISOR) : 0);
     const charge = context.charge;
     let result: ViewResult;
     try {
