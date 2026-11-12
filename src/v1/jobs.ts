@@ -119,6 +119,9 @@ async function readJson<T>(path: string): Promise<T | undefined> {
   }
 }
 
+/** A waiting status that does not hold the lease reads the persisted state this often, and tries to take the lease over this often. */
+const STATUS_POLL_MS = 200;
+const STATUS_TAKEOVER_MS = 1000;
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 const localLeases = new Set<string>();
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -663,6 +666,22 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     return ok(view(id, created.value.intent, submitted.value, true));
   }
 
+  /** `result` with the log window the caller asked for (`maxLogBytes`, `logCursor`), whoever observed the job: the lease holder or a waiter that only reads. */
+  async function withLogSlice(id: string, result: JobView, state: State | undefined, options: { logCursor?: string; maxLogBytes?: number }): Promise<JobView> {
+    if (options.maxLogBytes === undefined && options.logCursor === undefined) return result;
+    const text = await readFile(join(jobDir(id), "job.log"), "utf8").catch(async () => {
+      if (!state?.qexId) return "";
+      const logs = await deps.qex.logs(state.qexId);
+      return logs.ok ? logs.value : "";
+    });
+    const requested = Number(options.logCursor ?? 0);
+    const from = Number.isFinite(requested) ? requested : 0;
+    const bytes = Buffer.from(text, "utf8");
+    const size = options.maxLogBytes ?? 4096;
+    result.log = { text: bytes.subarray(from, from + size).toString("utf8"), cursor: from + size < bytes.length ? String(from + size) : null };
+    return result;
+  }
+
   return {
     collect: (request) => begin("run", request, request as unknown as Record<string, unknown>),
     refreshCatalogue: (request) => begin("catalogue", request, {}),
@@ -672,27 +691,16 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
       const wait = options.waitSeconds ?? 0;
       if (!Number.isInteger(wait) || wait < 0 || wait > 30) return err("INVALID_ARGUMENT", `waitSeconds must be an integer from 0 to 30 (got ${String(wait)}): a status wait is bounded to 30 seconds`, { errors: [{ code: "OUT_OF_RANGE", pointer: "/waitSeconds", constraint: "maximum: 30", hint: "Call again to keep waiting." }] });
       const deadline = Date.now() + wait * 1000;
-      let stopped: QexJob | undefined;
       // A status that waits FOLLOWS the job: it holds the lease for the whole wait, is woken by qex the moment the job stops, and performs
       // the import itself. Other instances that look meanwhile observe the persisted state and never race it.
-      const followed = await withLease(id, async () => {
+      const follow = (): Promise<{ held: true; value: Result<JobView> } | { held: false }> => withLease(id, async () => {
+      let stopped: QexJob | undefined;
       for (;;) {
         const advanced = await advance(id, stopped);
         stopped = undefined;
         if (!advanced.ok) return advanced;
         const { intent, state } = advanced.value;
-        if ((state !== undefined && TERMINAL_JOB_STATES.includes(state.state)) || state?.state === "indeterminate" || Date.now() >= deadline) {
-          const result = view(id, intent, state, false);
-          if (options.maxLogBytes !== undefined || options.logCursor !== undefined) {
-            const text = await readFile(join(jobDir(id), "job.log"), "utf8").catch(async () => (state?.qexId ? ((await deps.qex.logs(state.qexId)).ok ? ((await deps.qex.logs(state.qexId)) as { value: string }).value : "") : ""));
-            const from = Number(options.logCursor ?? 0);
-            const bytes = Buffer.from(text, "utf8");
-            const size = options.maxLogBytes ?? 4096;
-            const slice = bytes.subarray(Number.isFinite(from) ? from : 0, (Number.isFinite(from) ? from : 0) + size);
-            result.log = { text: slice.toString("utf8"), cursor: (Number.isFinite(from) ? from : 0) + size < bytes.length ? String((Number.isFinite(from) ? from : 0) + size) : null };
-          }
-          return ok(result);
-        }
+        if ((state !== undefined && TERMINAL_JOB_STATES.includes(state.state)) || state?.state === "indeterminate" || Date.now() >= deadline) return ok(await withLogSlice(id, view(id, intent, state, false), state, options));
         // Event driven where qex offers it: the instance that waits is woken the moment the job stops and claims the import before any
         // poller could, so the waiter is the one that follows its job to the end.
         const qexId = state?.qexId;
@@ -707,9 +715,26 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
         await sleep(100);
       }
       });
+      const followed = await follow();
       if (followed.held) return followed.value;
-      const intent = await readIntent(id);
-      return intent === undefined ? err("NOT_FOUND", `no collection job "${id}" in this session`) : ok(view(id, intent, await readState(id), false));
+      // CLAIM(S41): another operation (in this process or another) holds the lease. A waiting status does not give up the wait: it polls the
+      // persisted state, which the holder writes, until the job is terminal or the deadline passes. A poll is two file reads; the lease is tried
+      // again only every TAKEOVER_MS, so a holder that went away without finishing the job (a status that did not wait) does not strand the wait,
+      // and no flock helper is spawned per poll.
+      let lastTried = Date.now();
+      for (;;) {
+        const intent = await readIntent(id);
+        if (intent === undefined) return err("NOT_FOUND", `no collection job "${id}" in this session`);
+        const state = await readState(id);
+        const remaining = deadline - Date.now();
+        if (remaining <= 0 || (state !== undefined && (TERMINAL_JOB_STATES.includes(state.state) || state.state === "indeterminate"))) return ok(await withLogSlice(id, view(id, intent, state, false), state, options));
+        await sleep(Math.min(STATUS_POLL_MS, remaining));
+        if (Date.now() - lastTried >= STATUS_TAKEOVER_MS && deadline - Date.now() > 0) {
+          lastTried = Date.now();
+          const taken = await follow();
+          if (taken.held) return taken.value;
+        }
+      }
     },
 
     async cancel(id) {

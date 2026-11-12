@@ -1,7 +1,10 @@
 // The collection job lifecycle through qex (S2, S3, N1, N2; IV17): two-phase submission, request dedupe, crash points, recovery,
 // cancellation in every state, descendants stopping, import after a failing run. A FAKE qex (fixtures/v1/bin/qex) is on PATH and the
 // registered adapter's executable is a fake cargo, so everything is deterministic and executions are countable.
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { fork, spawnSync, type ChildProcess } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { FIXTURES, fakeCargoAdapter, loadFixture, useFakeQex, useV1Sessions } from "../../test/helpers/v1-world.ts";
@@ -645,4 +648,83 @@ it("[S38] scopes submission and recovery identities to the session", async () =>
   const keys = [a, b].map((env) => JSON.parse(readFileSync(join(env.dir, "jobs/r1/intent.json"), "utf8")).dedupeKey);
   expect(keys[0]).not.toBe(keys[1]);
   await make(a).cancel("r1"); await make(b).cancel("r1");
+});
+
+// ---- S41: a waiting status waits whoever holds the lease -------------------------------------------------------------------------------
+
+const pause = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+/** The promise's value once it has settled, or "pending" when it has not within `ms`. */
+const within = async <T>(promise: Promise<T>, ms: number): Promise<T | "pending"> => Promise.race([promise, pause(ms).then(() => "pending" as const)]);
+
+// WHY CLAIM(S41): a status with waitSeconds returned at once with the persisted state whenever another operation held the lease, including
+// another waiting status (jobs.ts looked at `followed.held`, found false and answered immediately). Rejects that early return.
+it("[S41] a second waiting status in one process blocks until the job is terminal and returns the log window", async () => {
+  const w = await world();
+  w.qex.control({ hold: true });
+  const svc = w.service();
+  const collected = must(await svc.collect(request("s41")), "collect");
+  const first = svc.status("s41", { waitSeconds: 20 });
+  const second = svc.status("s41", { waitSeconds: 20, maxLogBytes: 64 });
+  expect(await within(second, 1500), "still queued: the waiting status keeps waiting").toBe("pending");
+  w.qex.release(collected.qexId!);
+  const [a, b] = [must(await first, "first"), must(await second, "second")];
+  expect([a.state, b.state]).toEqual(["succeeded", "succeeded"]);
+  expect(b.log?.text.length, "maxLogBytes applies on the waiting path").toBeGreaterThan(0);
+  expect(b.log!.text.length).toBeLessThanOrEqual(64);
+  expect(b.log!.cursor, "the log is longer than the 64 bytes asked for").not.toBeNull();
+});
+
+// WHY CLAIM(S41): the wait is bounded by its own deadline, not by the holder's: the second waits its seconds and then answers with what is persisted.
+it("[S41] a second waiting status that outlasts its deadline answers with the persisted state at the deadline", async () => {
+  const w = await world();
+  w.qex.control({ hold: true });
+  const svc = w.service();
+  must(await svc.collect(request("s41b")), "collect");
+  const first = svc.status("s41b", { waitSeconds: 20 });
+  const started = Date.now();
+  const second = must(await svc.status("s41b", { waitSeconds: 2 }), "second");
+  const elapsed = Date.now() - started;
+  expect(second.state).toBe("queued");
+  expect(elapsed).toBeGreaterThanOrEqual(1900);
+  expect(elapsed).toBeLessThan(5000);
+  must(await svc.cancel("s41b"), "cancel");
+  await first;
+});
+
+// WHY CLAIM(S41): the same across processes. A status in a CHILD process holds the lease and follows the job; the waiting status here only polls the
+// persisted state, so it neither returns early nor spawns a flock helper per poll. The shim `flock` counts the helpers this process starts.
+it("[S41] a waiting status blocks while another process holds the lease and does not spawn a flock helper per poll", async () => {
+  const w = await world();
+  w.qex.control({ hold: true });
+  const svc = w.service();
+  const collected = must(await svc.collect(request("s41c")), "collect");
+  const lock = join(w.dir, "jobs", "s41c", "import-lock", ".write.lock");
+  const child: ChildProcess = fork(fileURLToPath(new URL("../../test/helpers/job-status-child.ts", import.meta.url)), [w.dir, "s41c", JSON.stringify({ adapter: w.adapter, catalogue: join(FIXTURES, "v1/catalogues/watchfile.catalogue.json"), waitSeconds: 25 })], { execArgv: ["--import", "tsx"], env: w.qex.env, stdio: ["ignore", "inherit", "inherit", "ipc"] });
+  const childDone = new Promise<any>((resolve, reject) => { child.on("message", (m: any) => { if (m.event === "done") resolve(m.result); }); child.on("exit", (code) => reject(new Error(`child exited ${code} before done`))); });
+  childDone.catch(() => {});
+  const realFlock = spawnSync("sh", ["-c", "command -v flock"], { encoding: "utf8" }).stdout.trim();
+  const shimDir = mkdtempSync(join(tmpdir(), "flock-shim-"));
+  const counter = join(shimDir, "count");
+  writeFileSync(join(shimDir, "flock"), `#!/bin/sh\necho x >> ${counter}\nexec ${realFlock} "$@"\n`);
+  chmodSync(join(shimDir, "flock"), 0o755);
+  const held = (): boolean => existsSync(lock) && spawnSync(realFlock, ["--nonblock", lock, "true"]).status === 1;
+  try {
+    await vi.waitFor(() => expect(held(), "the child holds the lease").toBe(true), { timeout: 20_000, interval: 50 });
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${shimDir}:${savedPath}`;
+    const started = Date.now();
+    let second: Promise<any>;
+    try {
+      second = svc.status("s41c", { waitSeconds: 25, maxLogBytes: 64 }).then((r) => must(r, "second"));
+      expect(await within(second, 2600), "the second status keeps waiting while the child follows the job").toBe("pending");
+    } finally { process.env.PATH = savedPath; }
+    const heldFor = Date.now() - started;
+    const helpers = existsSync(counter) ? readFileSync(counter, "utf8").trim().split("\n").length : 0;
+    w.qex.release(collected.qexId!);
+    const [mine, theirs] = [await second!, await childDone];
+    expect(mine.state).toBe("succeeded");
+    expect(mine.log?.text.length ?? 0).toBeGreaterThan(0);
+    expect(theirs.value.state).toBe("succeeded");
+    expect(helpers, `${helpers} flock helpers in ${heldFor} ms of waiting: one per second at most, never one per poll`).toBeLessThanOrEqual(Math.ceil(heldFor / 1000) + 1);
+  } finally { child.kill("SIGKILL"); }
 });
