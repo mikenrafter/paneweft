@@ -6,6 +6,7 @@
 import { canonicalJson } from "../core/canonical.ts";
 import { sha256Hex } from "../core/digest.ts";
 import { err, ok, type Result, type ValidationIssue } from "../core/errors.ts";
+import { validateSubmission } from "../core/validate.ts";
 import type { Entity, EntityRef, Envelope, ViewDefinition } from "../core/wire.ts";
 import type { ObjectGraph, ObjectRecord, ViewRecord } from "../generated/v1/ObjectGraph.ts";
 import { LIMIT_NAMES, resolveRequestedLimits, type LimitName } from "./limits.ts";
@@ -378,6 +379,27 @@ export function lowerViewRecord(graph: ObjectGraph, view: ViewRecord, context: L
   } as unknown as Envelope;
   const definition: ViewDefinition = { id: view.viewId, entityKind: entity.kind, title: view.title, priority: view.priority, component: component as ViewDefinition["component"], requires: [], dataRole: view.viewId };
   return ok({ envelope, definition, entity, ...(overlay === undefined ? {} : { overlay }) });
+}
+
+/** CLAIM(T1-admission): what the import would do to a capture, done at admission. Every view record is lowered (custom views included) and the bundle those
+ * envelopes and the capture's entities make is checked by the v0 schemas (component schemas, sizes, references). A capture that fails here is refused as a
+ * failed capture with the fault's pointer, instead of passing admission and failing the whole run's import. Times and the snapshot are placeholders: they
+ * are not part of any v0 schema rule. */
+export function admitLowering(graph: ObjectGraph, context: { repo: string; snapshotId: string; runnerId: string }): Result<ObjectGraph> {
+  const at = new Date(0).toISOString();
+  const lowering: LowerContext = { ...context, startedAt: at, finishedAt: at, generatedAt: at };
+  const definitions = new Map<string, ViewDefinition>();
+  const views: Envelope[] = [];
+  for (const [index, view] of graph.views.entries()) {
+    const lowered = lowerViewRecord(graph, view, lowering);
+    if (!lowered.ok) return err("VALIDATION_FAILED", lowered.error.message, { errors: (lowered.error.errors ?? []).map((fault) => ({ ...fault, pointer: `/views/${index}${fault.pointer}` })) });
+    views.push(lowered.value.envelope);
+    definitions.set(lowered.value.definition.id, lowered.value.definition);
+  }
+  const bundle = { schemaVersion: "paneweft.bundle/1", entities: graph.objects.map((object) => entityOfObject(context.repo, graph, object.id)), definitions: [...definitions.values()], views };
+  const report = validateSubmission(bundle);
+  if (report.ok) return ok(graph);
+  return err("VALIDATION_FAILED", `the lowered views of the capture do not pass the v0 schemas (${report.errors.length} fault${report.errors.length === 1 ? "" : "s"})`, { errors: report.errors });
 }
 
 export type { EntityRef };

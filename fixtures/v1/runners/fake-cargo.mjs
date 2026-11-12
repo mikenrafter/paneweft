@@ -2,7 +2,8 @@
 // A deterministic stand-in for `cargo test` used as the registered cargo adapter executable in job-lifecycle tests.
 // It never compiles anything. Steered by $FAKE_RUNNER_SCENARIO (a JSON file, re-read at start):
 //   { "mode": "pass" | "fail" | "hang" | "heartbeat" , "heartbeatFile": path, "countFile": path,
-//     "padBytes": n (trailing JSON whitespace so each capture file is at least n bytes), "declaredCollectionBytes": n (the collectionBytes each capture declares) }
+//     "padBytes": n (trailing JSON whitespace so each capture file is at least n bytes), "declaredCollectionBytes": n (the collectionBytes each capture declares),
+//     "captureFile": path of a complete object graph that replaces the built-in one (captureId, runId and invocationId are stamped) }
 // Each execution appends one line to countFile (so a test can prove ONE execution) and writes worker artifacts in the layout of
 // docs/v1-red-contract.md section 7 when PANEWEFT_COLLECT=1. `hang` spawns a grandchild that appends to heartbeatFile.
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -48,7 +49,9 @@ if (scenario.mode === "hang" || scenario.mode === "heartbeat") {
     const exampleId = name.split("::").pop().replace(/^paneweft_example_/, "").replace(/_/g, ".");
     if (staging) {
       const captureId = id;
-      const capture = JSON.stringify({ schemaVersion: "paneweft.object-graph/1", captureId, runId: scenario.graphRunId ?? runId, invocationId: id, roots: ["o1"], objects: [{ id: "o1", typeId: "fixture::watch::WatchFile", domainKey: null, label: "watch", fields: {}, edges: [], views: [], contentHash: createHash("sha256").update('{"domainKey":null,"fields":{},"label":"watch","typeId":"fixture::watch::WatchFile"}').digest("hex") }], views: [], pages: [], diagnostics: [], limits: { depth: 4, objects: 1000, references: 4000, rootBytes: 2097152, stringBytes: 16384, pageRows: 100, collectionBytes: scenario.declaredCollectionBytes ?? 33554432, roots: 100, viewRows: 10000, viewBudgetMs: 100 }, completeness: { status: "complete" } });
+      const baseCapture = JSON.stringify({ schemaVersion: "paneweft.object-graph/1", captureId, runId: scenario.graphRunId ?? runId, invocationId: id, roots: ["o1"], objects: [{ id: "o1", typeId: "fixture::watch::WatchFile", domainKey: null, label: "watch", fields: {}, edges: [], views: [], contentHash: createHash("sha256").update('{"domainKey":null,"fields":{},"label":"watch","typeId":"fixture::watch::WatchFile"}').digest("hex") }], views: [], pages: [], diagnostics: [], limits: { depth: 4, objects: 1000, references: 4000, rootBytes: 2097152, stringBytes: 16384, pageRows: 100, collectionBytes: scenario.declaredCollectionBytes ?? 33554432, roots: 100, viewRows: 10000, viewBudgetMs: 100 }, completeness: { status: "complete" } });
+      // captureFile: a complete object graph a test built (the TS SDK, or by hand); only the ids that bind it to this run and invocation are stamped
+      const capture = scenario.captureFile ? JSON.stringify({ ...JSON.parse(readFileSync(scenario.captureFile, "utf8")), captureId, runId: scenario.graphRunId ?? runId, invocationId: id }) : baseCapture;
       writeFileSync(join(staging, "captures", `${captureId}.json`), capture + " ".repeat(Math.max(0, (scenario.padBytes ?? 0) - Buffer.byteLength(capture))));
       writeFileSync(join(staging, "invocations", `${id}.started.json`), JSON.stringify({ id, exampleId, attempt: 1, parent: null, startedAt: T }));
       writeFileSync(join(staging, "invocations", `${id}.json`), JSON.stringify({ id, exampleId, attempt: 1, parent: null, native: failing ? { outcome: "failed", message: "check failed" } : { outcome: "passed" }, capture: { outcome: "captured", captureId, diagnostics: [] }, checks: [{ claim: "C", passed: !failing }], result: { captureId, object: "o1" }, startedAt: T, finishedAt: T }));

@@ -19,7 +19,7 @@ import { validateAgainstV1 } from "./schemas.ts";
 import type { TestRun } from "../generated/v1/TestRun.ts";
 import { buildProcess, foldExactFilters, parseCargoLists, reconcile, selectExamples, type AdapterRecord, type ProcessSpec, type Selection } from "./adapters.ts";
 import { readStaging } from "./staging.ts";
-import { validateObjectGraph } from "./capture.ts";
+import { admitLowering, validateObjectGraph } from "./capture.ts";
 import { checkInventory, mergeCatalogue, type CataloguePart, type InventoryProblem } from "./catalogue.ts";
 import { qualifyDiagnosticId } from "./diagnostic-id.ts";
 import { compareFingerprints, computeFingerprint, sampleConsistency, type Fingerprint } from "./fingerprint.ts";
@@ -198,7 +198,16 @@ function inventoryMessage(problem: InventoryProblem): string {
 export function createJobService(rawDeps: JobServiceDeps): JobService {
   const deps: JobServiceDeps = { ...rawDeps, catalogueFor: rawDeps.catalogueFor ?? ((repo, adapter) => storedCatalogue(rawDeps.sessionDir, repo, adapter)) };
   const now = (): string => (deps.clock?.() ?? new Date()).toISOString();
-  const crash = async (point: CrashPoint): Promise<void> => void (await deps.crashAt?.(point));
+  // An error thrown by the test seam is a simulated crash of the process: it must reach the caller. Every other error of a finish is an import failure.
+  const injected = new WeakSet<object>();
+  const crash = async (point: CrashPoint): Promise<void> => {
+    try {
+      await deps.crashAt?.(point);
+    } catch (cause) {
+      if (typeof cause === "object" && cause !== null) injected.add(cause);
+      throw cause;
+    }
+  };
   // S1: a job id from a caller names a directory only after it matched REQUEST_ID (no separators, no dot-only names); anything else is
   // "no such job", never a path.
   const jobDir = (id: string): string => {
@@ -488,7 +497,10 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
       const graphBytes: number[] = [];
       const rejected = new Map<string, string>();
       for (const [captureId, { document, file, bytes }] of staging.captures) {
-        const checked = validateObjectGraph(document, { expectedRunId: runId, byteLength: bytes, ...(resolved.limits === undefined ? {} : { effective: resolved.limits.effective }), ...(adapter.limitCeilings === undefined ? {} : { ceilings: adapter.limitCeilings }) });
+        // CLAIM(T1-admission): admission includes what the import would do to the capture's views (their lowering and the v0 component schemas), so a capture
+        // the import would refuse is quarantined here, as a failed capture, and cannot fail the run's import.
+        const admitted = validateObjectGraph(document, { expectedRunId: runId, byteLength: bytes, ...(resolved.limits === undefined ? {} : { effective: resolved.limits.effective }), ...(adapter.limitCeilings === undefined ? {} : { ceilings: adapter.limitCeilings }) });
+        const checked = admitted.ok ? admitLowering(admitted.value, { repo: adapter.repo, snapshotId: snapshotOfRun(runId), runnerId: adapter.kind }) : admitted;
         if (checked.ok) {
           graphs.push(document);
           graphBytes.push(bytes);
@@ -544,10 +556,22 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
       await writeDurably(finalizedPath, JSON.stringify(finalized));
     }
     const imported = await importCollection(deps.session, { repo: adapter.repo, runId, jobId: id, origin: "host_collected", run: finalized.run, graphs: finalized.graphs, ...(resolved.limits === undefined ? {} : { effective: resolved.limits.effective }), ...(finalized.graphBytes === undefined ? {} : { graphBytes: finalized.graphBytes }), ...(adapter.limitCeilings === undefined ? {} : { ceilings: adapter.limitCeilings }) }, { crashAt: (point) => crash(`import:${point}` as CrashPoint) });
-    if (!imported.ok) throw new Error(`import of ${runId} failed: ${imported.error.message}`);
+    if (!imported.ok) {
+      const first = imported.error.errors[0];
+      throw new Error(`import of ${runId} failed: ${imported.error.message}${first === undefined ? "" : ` (${first.pointer}: ${first.constraint})`}`);
+    }
     await crash("import:before-terminal-state");
     const counts = finalized.run.collection.counts as unknown as Record<string, number>;
     return { status: finalized.run.collection.status, snapshotIds: [snapshotOfRun(runId)], diagnostics: finalized.diagnostics, counts };
+  }
+
+  /** The outcome of a finish that threw: `failed`, with the diagnostics the run had (finalized.json) and one that names the failure. */
+  async function failedFinish(id: string, intent: Intent, cause: unknown): Promise<{ status: "failed"; snapshotIds: string[]; diagnostics: Diagnostic[] }> {
+    const finalized = await readJson<{ diagnostics?: Diagnostic[] }>(join(jobDir(id), "finalized.json"));
+    const message = cause instanceof Error ? cause.message : String(cause);
+    const diagnostics: Diagnostic[] = [...(finalized?.diagnostics ?? []), { id: "diag-import-1", category: "runner", message: `the collection could not be imported: ${message}`.slice(0, 2000), invariant: "a finished collection imports as one unit", nextAction: "Read the message and fix its cause (the pointer names the member, a storage error the disk or the session), then recollect with a new request id." } as Diagnostic];
+    await writeDurably(join(jobDir(id), "diagnostics.json"), JSON.stringify(diagnostics));
+    return { status: "failed", snapshotIds: [], diagnostics };
   }
 
   /** Imports (or, for a catalogue job, stores) the results of a qex job that stopped, then writes the terminal state. */
@@ -567,8 +591,15 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
       }
       let outcome: { status: NonNullable<JobView["collectionStatus"]>; snapshotIds: string[]; diagnostics: Diagnostic[]; counts?: Record<string, number> };
       if (neverRan) outcome = { status: "cancelled", snapshotIds: [], diagnostics: [] };
-      else if (intent.params.mode === "catalogue") outcome = await finalizeCatalogue(id, intent, adapter, qexJob, log);
-      else outcome = await finalizeRun(id, intent, adapter, qexJob, log, cancelRequested || qexJob.state === "killed" && cancelRequested);
+      else {
+        // CLAIM(T1-terminal): a finish that fails (the import above all) ends the job `failed` with a diagnostic; it never leaves the job `importing`.
+        try {
+          outcome = intent.params.mode === "catalogue" ? await finalizeCatalogue(id, intent, adapter, qexJob, log) : await finalizeRun(id, intent, adapter, qexJob, log, cancelRequested || qexJob.state === "killed" && cancelRequested);
+        } catch (cause) {
+          if (typeof cause === "object" && cause !== null && injected.has(cause)) throw cause;
+          outcome = await failedFinish(id, intent, cause);
+        }
+      }
       const finalState: JobStateName = outcome.status === "succeeded" ? "succeeded" : outcome.status === "cancelled" ? "cancelled" : "failed";
       // every diagnostic of a job is stored with the job (a catalogue refresh included), and the ids handed out are qualified by the run (S13)
       if (intent.params.mode === "catalogue") await writeDurably(join(jobDir(id), "diagnostics.json"), JSON.stringify(outcome.diagnostics));

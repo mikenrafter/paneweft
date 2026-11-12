@@ -9,6 +9,9 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { FIXTURES, fakeCargoAdapter, loadFixture, useFakeQex, useV1Sessions } from "../../test/helpers/v1-world.ts";
 import { must, mustFail } from "../../test/helpers/must.ts";
+import { Capture, defineType } from "../../packages/paneweft-ts/src/index.ts";
+import { specLimits } from "../../packages/paneweft-ts/test/support.ts";
+import { err } from "../core/errors.ts";
 import { buildQexSubmitArgv, createJobService, type CrashPoint, type JobService } from "./jobs.ts";
 import { openV1Reader } from "./read.ts";
 
@@ -728,3 +731,72 @@ it("[S41] a waiting status blocks while another process holds the lease and does
     expect(helpers, `${helpers} flock helpers in ${heldFor} ms of waiting: one per second at most, never one per poll`).toBeLessThanOrEqual(Math.ceil(heldFor / 1000) + 1);
   } finally { child.kill("SIGKILL"); }
 });
+
+// ---- T1: admission lowers the views and checks the v0 component schemas; an import that fails still ends the job ------------------------------
+
+/** A graph written by the TS SDK: one object with a list view of `columns` text columns. */
+function wideListGraph(columns: number): any {
+  const Wide = defineType<{ n: number }>({ id: `t::Wide${columns}`, source: { path: "wide.ts", symbol: "Wide" } });
+  Wide.view({ id: "wide.rows", title: "Wide", question: "Which columns?", priority: 1, component: "list", render: (_spec, view) => {
+    const table = view.table();
+    for (let at = 0; at < columns; at += 1) table.textColumn(`c${at}`, `Column ${at}`);
+    table.row({ id: "r1", cells: {} });
+    return table.done();
+  } });
+  const capture = new Capture({ limits: specLimits() });
+  capture.publish({ n: 1 }, Wide);
+  return capture.finish().toJSON();
+}
+/** A graph with a shape view whose single field path is `bytes` long (the v0 shape schema allows 1024). */
+function longPathGraph(bytes: number): any {
+  const Deep = defineType<{ n: number }>({ id: "t::Deep", source: { path: "deep.ts", symbol: "Deep" } });
+  Deep.view({ id: "deep.details", title: "Deep", question: "What is it?", priority: 1, component: "shape", render: (_spec, view) => view.details().field("a", 1).done() });
+  const capture = new Capture({ limits: specLimits() });
+  capture.publish({ n: 1 }, Deep);
+  const graph = capture.finish().toJSON() as any;
+  graph.views[0].data.fields[1].path = `$.${"a".repeat(bytes - 2)}`;
+  return graph;
+}
+const writeGraph = (dir: string, name: string, graph: unknown): string => { const file = join(dir, `${name}.graph.json`); writeFileSync(file, JSON.stringify(graph)); return file; };
+
+describe("[T1] a capture that cannot be imported is refused at admission", () => {
+  // WHY CLAIM(T1-admission): `validateObjectGraph` accepted any view.data and the component schemas ran only in importCollection, so a list view with 65
+  // columns (schema maxItems 64) was admitted, the import failed, finish threw after writing finalized.json and the job stayed `importing` for ever.
+  // Rejects admission that checks the capture's own schema but not the lowered views.
+  for (const [name, graph] of [["65 textColumns", () => wideListGraph(65)], ["a shape field path over 1024 bytes", () => longPathGraph(1025)]] as const) {
+    it(`quarantines a capture with ${name} and the job ends failed`, async () => {
+      const { session, dir, qex, service } = await world();
+      qex.scenario({ captureFile: writeGraph(dir, "t1", graph()) });
+      must(await service().collect(request("t1")), "collect");
+      const view = await settle(service(), "t1", ["succeeded", "failed"]);
+      expect(view.state, JSON.stringify(view)).toBe("failed");
+      expect(view.diagnosticIds).toContain("run-t1:diag-inv-1");
+      expect(existsSync(join(dir, "jobs", "t1", "quarantine", "captures", "inv-1.json")), "the capture sits in quarantine").toBe(true);
+      const diagnostics = JSON.parse(readFileSync(join(dir, "jobs", "t1", "diagnostics.json"), "utf8"));
+      expect(diagnostics.find((d: any) => d.id === "diag-inv-1")).toMatchObject({ category: "output-schema" });
+      expect(must(await openV1Reader(session).run("run-t1"), "the run is recorded").run.invocations[0]!.capture.outcome).toBe("failed");
+    });
+  }
+
+  // WHY CLAIM(T1-terminal): whatever fails in the import after admission, finish records terminal `failed` with an import diagnostic; it does not
+  // rethrow and leave the job `importing`, where every status and cancel replied INTERNAL. Rejects a finish without a catch.
+  it("an import failure after admission ends the job failed, and status and cancel answer normally", async () => {
+    const { session, dir, qex, adapter } = await world();
+    const failing = new Proxy(session, { get: (target, property) => {
+      if (property === "importBundle") return async () => err("STORAGE_FAILED", "disk is full");
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    } });
+    const service = createJobService({ session: failing, sessionDir: dir, qex: qex.client, adapters: [adapter], catalogueFor: async () => catalogue, cancelWaitMs: 3000 });
+    must(await service.collect(request("t1b")), "collect");
+    const view = await settle(service, "t1b", ["succeeded", "failed"]);
+    expect(view.state).toBe("failed");
+    expect(view.collectionStatus).toBe("failed");
+    expect(view.diagnosticIds.some((id) => id.startsWith("run-t1b:diag-import")), JSON.stringify(view.diagnosticIds)).toBe(true);
+    const diagnostics = JSON.parse(readFileSync(join(dir, "jobs", "t1b", "diagnostics.json"), "utf8"));
+    expect(diagnostics.find((d: any) => d.id.startsWith("diag-import")).message).toContain("disk is full");
+    expect(must(await service.status("t1b"), "status again")).toMatchObject({ state: "failed" });
+    expect(must(await service.cancel("t1b"), "cancel")).toMatchObject({ outcome: "already-terminal", state: "failed" });
+  });
+});
+
