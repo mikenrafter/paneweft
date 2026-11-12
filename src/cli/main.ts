@@ -492,6 +492,9 @@ async function ownerCommand(parsed: Parsed, session: Session | null, dir: string
     if (!current.ok) return errorBody("INVALID_ARGUMENT", current.message, io);
     const update = updateInventory(stored.catalogue, current.value, parsed.values.has("--prune"));
     await writeDurably(resolve(root, INVENTORY_FILE), formatInventory(update.inventory, await readFile(resolve(root, INVENTORY_FILE), "utf8").catch(() => undefined)));
+    // the stored record carries the inventory it was exported against and the ids that file did not list; both now describe the file just written
+    const { inventoryDrift: _drift, ...record } = stored as unknown as Record<string, unknown>;
+    await writeDurably(resolve(sessionDir, "catalogues", repo, `${adapterId}.json`), JSON.stringify({ ...record, inventory: update.inventory }));
     const parts = [`inventory ${resolve(root, INVENTORY_FILE)}: added ${update.added.views.length} views and ${update.added.examples.length} examples`];
     if (update.changed.length > 0) parts.push(`updated the module or type of ${update.changed.join(", ")}`);
     if (update.pruned.length > 0) parts.push(`dropped ${update.pruned.join(", ")}`);

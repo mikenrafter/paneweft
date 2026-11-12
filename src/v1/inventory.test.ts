@@ -96,6 +96,25 @@ describe("[F27] collecting a new example is not blocked by the inventory", () =>
   });
 });
 
+describe("[F27] the update also brings the stored catalogue record in line", () => {
+  // why: F27, field data. After `inventory update` the discovery notice kept naming the id until the next collect, because the record still carried the drift it was stored with.
+  // The update rewrites the record's inventory and clears the drift.
+  // proves: CLAIM(F27-drift-reported)
+  it("clears the drift notice and records the new inventory", async () => {
+    const w = await authoring();
+    must(await w.service.collect(request("inv-4", ["watch.fresh"])), "collect");
+    await settle(w.service, "inv-4");
+    expect(w.stored().inventoryDrift).toBeDefined();
+    await w.session.close();
+    const updated = await runCliInProcess(["inventory", "update", "--repo", "vg", "--adapter", "cargo"], { env: { PANEWEFT_SESSION: w.dir } });
+    expect(updated.exitCode, updated.stderr).toBe(0);
+    expect(w.stored().inventoryDrift).toBeUndefined();
+    expect(w.stored().inventory.examples.map((example: any) => example.id)).toContain("watch.fresh");
+    const listed = await runCliInProcess(["examples", "--repo", "vg", "--format", "json"], { env: { PANEWEFT_SESSION: w.dir } });
+    expect(JSON.parse(listed.stdout).notices).toEqual([]);
+  });
+});
+
 describe("[F27] paneweft inventory update writes the file", () => {
   async function stored() {
     const world = await toolWorld();
