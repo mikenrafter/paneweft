@@ -2,12 +2,13 @@
 // cancellation in every state, descendants stopping, import after a failing run. A FAKE qex (fixtures/v1/bin/qex) is on PATH and the
 // registered adapter's executable is a fake cargo, so everything is deterministic and executions are countable.
 import { fork, spawnSync, type ChildProcess } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { FIXTURES, fakeCargoAdapter, loadFixture, useFakeQex, useV1Sessions } from "../../test/helpers/v1-world.ts";
+import { FIXTURES, fakeCargoAdapter, loadFixture, makeRepo, useFakeQex, useV1Sessions } from "../../test/helpers/v1-world.ts";
+import { useTempDirs } from "../../test/helpers/tmp.ts";
 import { must, mustFail } from "../../test/helpers/must.ts";
 import { Capture, defineType } from "../../packages/paneweft-ts/src/index.ts";
 import { specLimits } from "../../packages/paneweft-ts/test/support.ts";
@@ -886,5 +887,125 @@ describe("[T3] cancelled means the cancel stopped the job", () => {
     must(await service().collect(request("t3b")), "collect");
     await vi.waitFor(() => expect(existsSync(join(dir, "ready3"))).toBe(true), { timeout: 15_000, interval: 25 });
     expect(must(await service().cancel("t3b"), "cancel")).toMatchObject({ outcome: "cancelled", state: "cancelled", collectionStatus: "cancelled" });
+  });
+});
+
+// ---- T4: collect resolves example ids against the catalogue its own run exports ---------------------------------------------------------------
+
+const tmpDirs = useTempDirs();
+
+/** A session with NO stored catalogue (no owner step has run), a git copy of the watchfile crate as the repository, and a service that reads the stored catalogue. */
+async function freshWorld() {
+  const { session, dir } = await open();
+  const root = tmpDirs("t4root");
+  cpSync(join(FIXTURES, "crates/watchfile"), root, { recursive: true });
+  makeRepo(root, {});
+  const qex = fake();
+  const adapter = fakeCargoAdapter({ workspaceRoot: root });
+  const service = (extra: { crashAt?: (p: CrashPoint) => void | Promise<void> } = {}): JobService => createJobService({ session, sessionDir: dir, qex: qex.client, adapters: [adapter], cancelWaitMs: 3000, ...extra });
+  const stored = (): any => (existsSync(join(dir, "catalogues", "vg", "cargo.json")) ? JSON.parse(readFileSync(join(dir, "catalogues", "vg", "cargo.json"), "utf8")).catalogue : null);
+  /** What an agent's edit does to the compiled repository: a source changes and the export now declares `watch.fresh`. */
+  const declareFresh = (): void => {
+    writeFileSync(join(root, "src", "watch_fresh.rs"), "// the new example, implemented\n");
+    const base = catalogue.examples.find((example: any) => example.id === "watch.pending");
+    const extra = join(dir, "extra.catalogue.json");
+    writeFileSync(extra, JSON.stringify({ examples: [{ ...base, id: "watch.fresh", source: { path: "src/watch_fresh.rs", line: 1 }, selector: { ...base.selector, name: "tests::paneweft_example_watch_fresh" } }] }));
+    qex.scenario({ catalogueExtra: extra });
+  };
+  return { session, dir, root, qex, adapter, service, stored, declareFresh };
+}
+
+describe("[T4] a collect needs no owner-only catalogue step", () => {
+  // WHY CLAIM(T4-run-exports): collect resolved ids only against the stored catalogue, which only the owner-only `catalogue refresh` builds, so on a fresh
+  // repository the first collect answered NOT_FOUND ("no catalogue is stored ... run: paneweft catalogue refresh"). Rejects resolution before the run.
+  it("collects on a repository with no stored catalogue, and the catalogue the run exported becomes the stored one", async () => {
+    const w = await freshWorld();
+    expect(w.stored(), "no owner step has run").toBeNull();
+    must(await w.service().collect(request("t4a")), "collect");
+    const view = await settle(w.service(), "t4a", ["succeeded", "failed"]);
+    expect(view.state, JSON.stringify(view)).toBe("succeeded");
+    expect(w.stored().examples.map((example: any) => example.id)).toContain("watch.pending");
+    expect(w.qex.executions(), "one catalogue export, then the run").toHaveLength(2);
+    expect(must(await openV1Reader(w.session).run("run-t4a"), "run").run.examples.map((example: any) => [example.id, example.outcome])).toEqual([["watch.pending", "passed"]]);
+    // the stored catalogue is now proven fresh by its fingerprint: the next collect does not export again
+    must(await w.service().collect(request("t4b", { examples: ["watch.cancelled"] })), "second collect");
+    await settle(w.service(), "t4b", ["succeeded"]);
+    expect(w.qex.executions(), "no second export while the sources are unchanged").toHaveLength(3);
+  });
+
+  // WHY CLAIM(T4-run-exports): an agent scaffolds an example and implements it; the stored catalogue (an older export) does not declare it. The run's own
+  // export is authoritative for that run: it resolves the id and refreshes the stored catalogue. Rejects NOT_FOUND against the stale stored catalogue.
+  it("resolves a new example against the run's own export and refreshes the stored catalogue", async () => {
+    const w = await freshWorld();
+    must(await w.service().collect(request("t4c")), "collect");
+    await settle(w.service(), "t4c", ["succeeded"]);
+    expect(w.stored().examples.map((example: any) => example.id)).not.toContain("watch.fresh");
+    w.declareFresh();
+    must(await w.service().collect(request("t4d", { examples: ["watch.fresh"] })), "collect the new example");
+    const view = await settle(w.service(), "t4d", ["succeeded", "failed"]);
+    expect(view.state, JSON.stringify(view)).toBe("succeeded");
+    expect(w.stored().examples.map((example: any) => example.id), "the export refreshed the stored catalogue").toContain("watch.fresh");
+    expect(must(await openV1Reader(w.session).run("run-t4d"), "run").run.examples.map((example: any) => [example.id, example.outcome])).toEqual([["watch.fresh", "passed"]]);
+  });
+
+  // WHY CLAIM(T4-run-exports): an id that no export declares is still a refusal that names candidates, and nothing of the run executes: the job ends failed
+  // with a registration diagnostic after the export. Rejects a run started with an unresolved selector.
+  it("an id the run's export does not declare ends the job failed with candidates and runs nothing", async () => {
+    const w = await freshWorld();
+    must(await w.service().collect(request("t4e", { examples: ["watch.pendng"] })), "collect is accepted: the catalogue that decides does not exist yet");
+    const view = await settle(w.service(), "t4e", ["succeeded", "failed"]);
+    expect(view.state).toBe("failed");
+    const diagnostics = JSON.parse(readFileSync(join(w.dir, "jobs", "t4e", "diagnostics.json"), "utf8"));
+    expect(diagnostics[0]).toMatchObject({ category: "registration" });
+    expect(diagnostics[0].message).toContain("watch.pendng");
+    expect(diagnostics[0].message).toContain("watch.pending");
+    expect(w.qex.executions(), "only the export executed").toHaveLength(1);
+    expect(w.stored(), "the export still refreshed the stored catalogue").not.toBeNull();
+  });
+
+  // WHY CLAIM(T4-run-exports): a catalogue proven fresh by its fingerprint is the export of the very sources the run would see, so an unknown id is refused
+  // at once, without a queue job. Keeps the typo check cheap.
+  it("refuses an unknown id at once against a stored catalogue that is fresh", async () => {
+    const w = await freshWorld();
+    must(await w.service().collect(request("t4f")), "collect");
+    await settle(w.service(), "t4f", ["succeeded"]);
+    const refused = mustFail(await w.service().collect(request("t4g", { examples: ["watch.pendng"] })), "unknown id");
+    expect(refused.code).toBe("NOT_FOUND");
+    expect(refused.details).toMatchObject({ candidates: expect.arrayContaining(["watch.pending"]) });
+    expect(w.qex.executions()).toHaveLength(2);
+  });
+
+  // WHY CLAIM(T4-run-exports): an export that fails (the repository does not compile) ends the job failed, runs no example, and leaves the stored catalogue
+  // as it was.
+  it("an export that fails ends the job failed and stores nothing", async () => {
+    const w = await freshWorld();
+    w.qex.scenario({ exportExit: 101 });
+    must(await w.service().collect(request("t4h")), "collect");
+    const view = await settle(w.service(), "t4h", ["succeeded", "failed"]);
+    expect(view.state).toBe("failed");
+    expect(view.diagnosticIds.length).toBeGreaterThan(0);
+    expect(w.qex.executions()).toHaveLength(1);
+    expect(w.stored()).toBeNull();
+  });
+
+  // WHY CLAIM(T4-run-exports): cancel in the export stage cancels the job; no example ever starts.
+  it("cancel while the export is queued ends the job cancelled and runs no example", async () => {
+    const w = await freshWorld();
+    w.qex.control({ hold: true });
+    must(await w.service().collect(request("t4i")), "collect");
+    expect(must(await w.service().cancel("t4i"), "cancel")).toMatchObject({ outcome: "cancelled", state: "cancelled" });
+    expect(w.qex.executions()).toHaveLength(0);
+  });
+
+  // WHY CLAIM(T4-run-exports): a crash between the export's end and the run's submission is recovered from the files alone, with one export and one run.
+  it("recovers from a crash after the run stage was decided", async () => {
+    const w = await freshWorld();
+    const crashing = w.service({ crashAt: (point) => { if ((point as string) === "export:after-run-stage") throw new Error("crash"); } });
+    must(await crashing.collect(request("t4j")), "collect");
+    await expect(crashing.status("t4j", { waitSeconds: 20 })).rejects.toThrow("crash");
+    const view = await settle(w.service(), "t4j", ["succeeded", "failed"]);
+    expect(view.state, JSON.stringify(view)).toBe("succeeded");
+    expect(w.qex.executions(), "one export, one run").toHaveLength(2);
+    expect(w.qex.jobs()).toHaveLength(2);
   });
 });

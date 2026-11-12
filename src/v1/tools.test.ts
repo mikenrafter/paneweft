@@ -824,3 +824,52 @@ describe("[S16] discovery covers every registered catalogue", () => {
     expect(all.payload.items.map((item: any) => item.id).sort()).toEqual(["watch.events", "watch.status"]);
   });
 });
+
+describe("[T4] discovery and scaffolding on a repository whose catalogue is not stored yet", () => {
+  const bare = async () => {
+    const world = await toolWorld();
+    rmSync(join(world.dir, "catalogues"), { recursive: true, force: true });
+    return world;
+  };
+
+  // WHY CLAIM(T4-fresh-repo): list_types answered NOT_FOUND "ask the owner to run catalogue refresh" for a repository whose adapter is registered but whose
+  // catalogue is not stored yet, which stalled an agent at the first step of the skill. A missing catalogue is an ok, partial, unverified answer that says
+  // the first collect exports it (contract section 11: never a statement that nothing exists).
+  it("list_types, list_views_for_type and list_examples answer partial and unverified, naming the first collect", async () => {
+    const { okCall } = await bare();
+    const types = await okCall("list_types", { repo: "vg" });
+    expect(types.payload).toMatchObject({ completeness: { status: "partial" }, freshness: { status: "unverified" }, counts: { unit: "types", total: 0, returned: 0 } });
+    expect(types.payload.notices.join(" ")).toMatch(/first collect/);
+    expect(types.payload.notices.join(" ")).not.toMatch(/catalogue refresh/);
+    const views = await okCall("list_views_for_type", { repo: "vg", type: "vigil::watch::WatchFile" });
+    expect(views.payload).toMatchObject({ completeness: { status: "partial" }, freshness: { status: "unverified" }, counts: { unit: "views", total: 0 } });
+    expect(views.payload.notices.join(" ")).toMatch(/first collect/);
+    const examples = await okCall("list_examples", { repo: "vg" });
+    expect(examples.payload).toMatchObject({ completeness: { status: "partial" }, counts: { unit: "examples", total: 0 } });
+  });
+
+  // WHY CLAIM(T4-fresh-repo): scaffold_view needed a catalogue record to find the repository's adapter, so it failed on a fresh repository even with an
+  // explicit source (the spec's route for a type that is not catalogued yet). It takes the source as a candidate and the adapter from the owner's registration.
+  it("scaffold_view takes an explicit source when nothing is catalogued, and asks for one when it is missing", async () => {
+    const { okCall, call } = await bare();
+    const missing = await call("scaffold_view", { repo: "vg", type: "vigil::watch::WatchFile", question: "Which events survive?" });
+    expect(missing.outcome.ok).toBe(false);
+    expect(missing.payload.code).toBe("UNRESOLVED_TARGET");
+    expect(missing.payload.message).toMatch(/source/);
+    expect(missing.payload.message).not.toMatch(/refresh/);
+    const { payload } = await okCall("scaffold_view", { repo: "vg", type: "vigil::watch::WatchFile", question: "Which events survive?", source: { path: "src/watch.rs", symbol: "WatchFile" } });
+    expect(payload.tool).toBe("scaffold_view");
+    expect(payload.notices.join(" ")).toMatch(/not catalogued/);
+    expect(JSON.stringify(payload.details)).not.toMatch(/then refresh the catalogue/);
+  });
+
+  // WHY CLAIM(T4-fresh-repo): with no adapter registered there is nothing that could export a catalogue; that is the owner's decision and the answer names it.
+  it("without a registered adapter the answer names the owner action", async () => {
+    const { dir, call } = await bare();
+    writeFileSync(join(dir, "adapters.json"), JSON.stringify({ adapters: [] }));
+    const result = await call("list_types", { repo: "vg" });
+    expect(result.outcome.ok).toBe(false);
+    expect(result.payload.code).toBe("NOT_FOUND");
+    expect(result.payload.message).toMatch(/paneweft adapter add/);
+  });
+});

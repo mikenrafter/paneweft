@@ -37,4 +37,17 @@ describe("[IV22 groundwork] skills/paneweft-views/SKILL.md", () => {
     expect(commands.length).toBeGreaterThan(0);
     for (const word of commands) expect(known.has(word!), word).toBe(true);
   });
+
+  // why: T4. The steps never send an agent to an owner-only catalogue step: on a fresh repository the first collect exports the catalogue, and a new
+  // example needs no refresh. The owner's `catalogue refresh` is mentioned only as an owner command.
+  // proves: CLAIM(T4-fresh-repo) CLAIM(IV22-recipe)
+  it("needs no catalogue refresh on a fresh repository", () => {
+    const steps = skill.slice(skill.indexOf("\n1. "), skill.indexOf("Command recipe"));
+    expect(steps).not.toMatch(/refresh/i);
+    expect(steps).toMatch(/exports the catalogue/i);
+    expect(steps).toMatch(/no catalogue|not stored|fresh repo/i);
+    expect(steps).toMatch(/source/);
+    const recipe = skill.slice(skill.indexOf("Command recipe"));
+    expect(recipe.match(/paneweft catalogue refresh/g)?.length ?? 0, "refresh appears at most as an owner command").toBeLessThanOrEqual(1);
+  });
 });

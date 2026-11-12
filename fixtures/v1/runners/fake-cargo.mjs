@@ -3,6 +3,7 @@
 // It never compiles anything. Steered by $FAKE_RUNNER_SCENARIO (a JSON file, re-read at start):
 //   { "mode": "pass" | "fail" | "hang" | "heartbeat" , "heartbeatFile": path, "countFile": path,
 //     "padBytes": n (trailing JSON whitespace so each capture file is at least n bytes), "declaredCollectionBytes": n (the collectionBytes each capture declares),
+//     "catalogueExtra": path of {types?, views?, examples?} added to the catalogue the export writes; "exportExit": n (the catalogue export fails with this status),
 //     "captureFile": path of a complete object graph that replaces the built-in one (captureId, runId and invocationId are stamped) }
 // Each execution appends one line to countFile (so a test can prove ONE execution) and writes worker artifacts in the layout of
 // docs/v1-red-contract.md section 7 when PANEWEFT_COLLECT=1. `hang` spawns a grandchild that appends to heartbeatFile.
@@ -22,9 +23,12 @@ const T = "2026-11-11T12:00:00Z";
 
 if (process.env.PANEWEFT_CATALOGUE === "1") {
   // catalogue mode: export the catalogue part of the reviewed watchfile fixture; run no example
+  if (scenario.exportExit) { console.error("error: could not compile `watchfile` (fake export failure)"); process.exit(scenario.exportExit); }
   const catalogue = JSON.parse(readFileSync(join(new URL(".", import.meta.url).pathname, "../catalogues/watchfile.catalogue.json"), "utf8"));
+  // catalogueExtra: types, views and examples the "compiled" repository declares beyond the fixture (what an agent's edit adds); re-read at every start
+  const extra = scenario.catalogueExtra ? JSON.parse(readFileSync(scenario.catalogueExtra, "utf8")) : {};
   mkdirSync(join(staging, "catalogue"), { recursive: true });
-  writeFileSync(join(staging, "catalogue", "fake-lib.json"), JSON.stringify({ schemaVersion: "paneweft.catalogue-part/1", source: "lib", types: catalogue.types, views: catalogue.views, examples: catalogue.examples }));
+  writeFileSync(join(staging, "catalogue", "fake-lib.json"), JSON.stringify({ schemaVersion: "paneweft.catalogue-part/1", source: "lib", types: [...catalogue.types, ...(extra.types ?? [])], views: [...catalogue.views, ...(extra.views ?? [])], examples: [...catalogue.examples, ...(extra.examples ?? [])] }));
   process.exit(0);
 }
 

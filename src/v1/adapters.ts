@@ -96,6 +96,38 @@ function distance(a: string, b: string): number {
  * catalogue when one exists; unknown ids list candidates; argv-shaped ids, shell metacharacters, path separators and unknown
  * request members (executable, argv, runner, root) are refused with INVALID_ARGUMENT/FORBIDDEN_PROPERTY issues. */
 export function selectExamples(adapter: AdapterRecord, catalogue: Catalogue | null, request: Record<string, unknown>): Result<Selection> {
+  const checked = checkCollectRequest(request);
+  if (!checked.ok) return checked;
+  const { examples: ids, views } = checked.value;
+  const selected: Selection["examples"] = [];
+  for (const id of ids) {
+    const declared = catalogue?.examples.find((candidate) => candidate.id === id);
+    if (declared !== undefined) {
+      selected.push({ id, selector: declared.selector });
+      continue;
+    }
+    if (catalogue === null && adapter.kind === "vitest") {
+      selected.push({ id, selector: { runner: "vitest", name: `example:${id}` } });
+      continue;
+    }
+    if (catalogue === null) return err("NOT_FOUND", `no catalogue is stored for repository "${adapter.repo}" and adapter "${adapter.id}", so "${id}" cannot be resolved to a test`);
+    const known = catalogue.examples.map((candidate) => candidate.id);
+    const candidates = known.map((candidate) => ({ candidate, d: distance(id, candidate) })).sort((a, b) => a.d - b.d || compareCodeUnits(a.candidate, b.candidate)).slice(0, 5).map((entry) => entry.candidate);
+    return err("NOT_FOUND", `the example "${id}" is not declared in the catalogue (catalogue ${catalogue.digest.slice(0, 12)}, target ${catalogue.target.target ?? "all"}); pick one of the candidates, or declare the example in the repository and collect again (a collection exports the catalogue itself)`, { details: { candidates, unknown: id } });
+  }
+  const targets = new Set(selected.map((entry) => `${entry.selector.package ?? ""}\u0000${entry.selector.target ?? ""}`));
+  if (targets.size > 1) return err("INVALID_ARGUMENT", "these examples belong to different targets and cannot share one process in week one: collect each target separately", { details: { targets: [...targets].map((target) => target.replace("\u0000", " / ")) } });
+  if (catalogue !== null) {
+    const declared = new Set(catalogue.views.map((view) => view.id));
+    const unknownView = views.find((view) => !declared.has(view));
+    if (unknownView !== undefined) return err("NOT_FOUND", `the view "${unknownView}" is not declared in the catalogue`, { details: { candidates: [...declared].sort(compareCodeUnits).slice(0, 8) } });
+  }
+  return ok({ examples: selected, views });
+}
+
+/** The shape of a collect request, decided before anything runs and without any catalogue: member names and id patterns (CLAIM(T4-run-exports)). Returns the
+ * sorted, de-duplicated example ids and the sorted view ids. */
+export function checkCollectRequest(request: Record<string, unknown>): Result<{ examples: string[]; views: string[] }> {
   const issues: ValidationIssue[] = [];
   for (const member of Object.keys(request)) {
     if ((FORBIDDEN_MEMBERS as readonly string[]).includes(member)) issues.push({ code: "FORBIDDEN_PROPERTY", pointer: `/${member}`, constraint: "the owner's adapter fixes the executable, argv, runner, root and environment", hint: "Remove it. Select declared example ids; register adapters with the CLI." });
@@ -112,31 +144,7 @@ export function selectExamples(adapter: AdapterRecord, catalogue: Catalogue | nu
     if (typeof id !== "string" || !ID_PATTERN.test(id)) issues.push({ code: "PATTERN", pointer: `/views/${index}`, constraint: `pattern: ${ID_PATTERN.source}`, hint: "A view id is a lowercase catalogue id." });
   });
   if (issues.length > 0) return err("INVALID_ARGUMENT", `the collect request is not acceptable (${issues.length} fault${issues.length === 1 ? "" : "s"})`, { errors: issues });
-  const ids = [...new Set(examples as string[])].sort(compareCodeUnits);
-  const selected: Selection["examples"] = [];
-  for (const id of ids) {
-    const declared = catalogue?.examples.find((candidate) => candidate.id === id);
-    if (declared !== undefined) {
-      selected.push({ id, selector: declared.selector });
-      continue;
-    }
-    if (catalogue === null && adapter.kind === "vitest") {
-      selected.push({ id, selector: { runner: "vitest", name: `example:${id}` } });
-      continue;
-    }
-    if (catalogue === null) return err("NOT_FOUND", `no catalogue is stored for repository "${adapter.repo}" and adapter "${adapter.id}", so "${id}" cannot be resolved to a test; run: paneweft catalogue refresh --repo ${adapter.repo} --adapter ${adapter.id}`);
-    const known = catalogue.examples.map((candidate) => candidate.id);
-    const candidates = known.map((candidate) => ({ candidate, d: distance(id, candidate) })).sort((a, b) => a.d - b.d || compareCodeUnits(a.candidate, b.candidate)).slice(0, 5).map((entry) => entry.candidate);
-    return err("NOT_FOUND", `the example "${id}" is not declared in the catalogue (catalogue ${catalogue.digest.slice(0, 12)}, target ${catalogue.target.target ?? "all"}); a missing id in a possibly outdated catalogue is not proof it does not exist: refresh the catalogue or pick one of the candidates`, { details: { candidates, unknown: id } });
-  }
-  const targets = new Set(selected.map((entry) => `${entry.selector.package ?? ""}\u0000${entry.selector.target ?? ""}`));
-  if (targets.size > 1) return err("INVALID_ARGUMENT", "these examples belong to different targets and cannot share one process in week one: collect each target separately", { details: { targets: [...targets].map((target) => target.replace("\u0000", " / ")) } });
-  if (catalogue !== null) {
-    const declared = new Set(catalogue.views.map((view) => view.id));
-    const unknownView = (views as string[]).find((view) => !declared.has(view));
-    if (unknownView !== undefined) return err("NOT_FOUND", `the view "${unknownView}" is not declared in the catalogue`, { details: { candidates: [...declared].sort(compareCodeUnits).slice(0, 8) } });
-  }
-  return ok({ examples: selected, views: [...(views as string[])].sort(compareCodeUnits) });
+  return ok({ examples: [...new Set(examples as string[])].sort(compareCodeUnits), views: [...(views as string[])].sort(compareCodeUnits) });
 }
 
 // ---- argv grammars ----------------------------------------------------------------------------------------------------------------

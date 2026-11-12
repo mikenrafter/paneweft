@@ -17,7 +17,7 @@ import type { Diagnostic } from "../generated/v1/ObjectGraph.ts";
 import type { Inventory } from "../generated/v1/Inventory.ts";
 import { validateAgainstV1 } from "./schemas.ts";
 import type { TestRun } from "../generated/v1/TestRun.ts";
-import { buildProcess, foldExactFilters, parseCargoLists, reconcile, selectExamples, type AdapterRecord, type ProcessSpec, type Selection } from "./adapters.ts";
+import { buildProcess, checkCollectRequest, foldExactFilters, parseCargoLists, reconcile, selectExamples, type AdapterRecord, type ProcessSpec, type Selection } from "./adapters.ts";
 import { readStaging } from "./staging.ts";
 import { admitLowering, validateObjectGraph } from "./capture.ts";
 import { checkInventory, mergeCatalogue, type CataloguePart, type InventoryProblem } from "./catalogue.ts";
@@ -66,7 +66,7 @@ export interface CancelResult {
 }
 
 /** Test seam: a crash is injected by throwing from this callback. A fresh service on the same session must recover. */
-export type CrashPoint = "after-intent" | "after-qex-submit" | "after-id-file" | "after-submitted-state" | "import:before-write" | "import:after-objects" | "import:after-manifest" | "import:before-terminal-state";
+export type CrashPoint = "after-intent" | "after-qex-submit" | "after-id-file" | "after-submitted-state" | "import:before-write" | "import:after-objects" | "import:after-manifest" | "import:before-terminal-state" | "export:after-run-stage";
 
 export interface JobServiceDeps {
   session: Session;
@@ -98,8 +98,8 @@ export function jobDedupeKey(sessionId: string, requestId: string): string {
 }
 
 /** The exact `qex submit` argument vector (no shell). Pure. */
-export function buildQexSubmitArgv(adapter: AdapterRecord, requestId: string, process: ProcessSpec, jobDirectory: string, timeoutMs: number, dedupeKey: string): string[] {
-  const argv = ["submit", "--dedupe-key", dedupeKey, "--dedupe-window", "24h", "--id-file", join(jobDirectory, "qex.id"), "--cwd", process.cwd, "--name", `paneweft-${requestId}`, "--cpu", adapter.queue.cpu, "--mem", adapter.queue.mem];
+export function buildQexSubmitArgv(adapter: AdapterRecord, requestId: string, process: ProcessSpec, jobDirectory: string, timeoutMs: number, dedupeKey: string, idFileName = "qex.id"): string[] {
+  const argv = ["submit", "--dedupe-key", dedupeKey, "--dedupe-window", "24h", "--id-file", join(jobDirectory, idFileName), "--cwd", process.cwd, "--name", `paneweft-${requestId}`, "--cpu", adapter.queue.cpu, "--mem", adapter.queue.mem];
   for (const tag of adapter.queue.tags ?? []) argv.push("--tag", tag);
   argv.push("--timeout", `${Math.max(1, Math.ceil(timeoutMs / 1000))}s`);
   for (const key of Object.keys(process.env).sort()) argv.push("--env", `${key}=${process.env[key]}`);
@@ -127,13 +127,17 @@ const localLeases = new Set<string>();
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 interface Params { repo: string; adapter: string; examples: string[]; views?: string[]; limits?: Record<string, number>; mode?: "run" | "catalogue" }
+interface Resolved { selection: Selection; process: ProcessSpec; timeoutMs: number; runId: string; stagingDir: string; limits?: LimitsReport }
 interface Intent {
   schemaVersion: "paneweft.job-intent/1";
   requestId: string;
   dedupeKey: string;
   params: Params;
   createdAt: string;
-  resolved?: { selection: Selection; process: ProcessSpec; timeoutMs: number; runId: string; stagingDir: string; limits?: LimitsReport };
+  /** What the job runs. For an `exportFirst` job this is the catalogue EXPORT stage; the run stage is decided by that export and kept in run-stage.json. */
+  resolved?: Resolved;
+  /** CLAIM(T4-run-exports): the job exports the catalogue first, because no stored catalogue proven fresh could resolve its example ids. */
+  exportFirst?: true;
 }
 interface State {
   schemaVersion: "paneweft.job/1";
@@ -141,6 +145,8 @@ interface State {
   state: JobStateName;
   qexId: string | null;
   runId: string | null;
+  /** `run` once an exportFirst job has decided its run from the catalogue it exported; qexId is then the run's. */
+  stage?: "run";
   observedStop?: QexJob;
   history: Array<{ state: string; at: string; evidence?: string }>;
   indeterminate?: { evidence: string[] };
@@ -243,6 +249,15 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     ...(intent.resolved?.limits === undefined ? {} : { limits: intent.resolved.limits }),
   });
 
+  // ---- stages (T4): an exportFirst job runs two queue jobs, the catalogue export and then the run it resolved ------------------------------------
+
+  const runStageFile = (id: string): string => join(jobDir(id), "run-stage.json");
+  /** `export` until the run is decided (state.stage === "run"); every other job is in its `run` stage from the start. */
+  const stageOf = (intent: Intent, state: State | undefined): "export" | "run" => (intent.exportFirst === true && state?.stage !== "run" ? "export" : "run");
+  const resolvedOf = async (id: string, intent: Intent, stage: "export" | "run"): Promise<Resolved | undefined> => (intent.exportFirst === true && stage === "run" ? readJson<Resolved>(runStageFile(id)) : intent.resolved);
+  const dedupeKeyOf = (intent: Intent, stage: "export" | "run"): string => (intent.exportFirst === true && stage === "export" ? `${intent.dedupeKey}:export` : intent.dedupeKey);
+  const idFileNameOf = (intent: Intent, stage: "export" | "run"): string => (intent.exportFirst === true && stage === "export" ? "qex.export.id" : "qex.id");
+
   const adapterFor = (params: Params): AdapterRecord | undefined => deps.adapters.find((candidate) => candidate.id === params.adapter && candidate.repo === params.repo);
 
   async function sessionNamespace(): Promise<string> {
@@ -263,7 +278,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
   /** The intent is created under the job directory's write lock (a kernel flock: the lock of a dead process is gone with it, so a live
    * writer is never mistaken for an abandoned one) and published by rename, so a reader finds no intent or a whole one (S6). An
    * unreadable intent file can only be a leftover of a crash or of a disk fault; it is replaced under the lock. */
-  async function createIntent(id: string, params: Params, resolved: Intent["resolved"]): Promise<Result<{ intent: Intent; created: boolean }>> {
+  async function createIntent(id: string, params: Params, resolved: Intent["resolved"], exportFirst: boolean): Promise<Result<{ intent: Intent; created: boolean }>> {
     try {
       await mkdir(jobDir(id), { recursive: true });
       return await withWriteLock(jobDir(id), { waitMs: 15_000 }, async (): Promise<Result<{ intent: Intent; created: boolean }>> => {
@@ -272,7 +287,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
           if (canonicalJson(existing.params) !== canonicalJson(params)) return err("CONFLICT", `the request id "${id}" already names a collection with different parameters; use a new request id for a deliberate rerun`, { details: { requestId: id } });
           return ok({ intent: existing, created: false });
         }
-        const intent: Intent = { schemaVersion: "paneweft.job-intent/1", requestId: id, dedupeKey: jobDedupeKey(await sessionNamespace(), id), params, createdAt: now(), ...(resolved === undefined ? {} : { resolved }) };
+        const intent: Intent = { schemaVersion: "paneweft.job-intent/1", requestId: id, dedupeKey: jobDedupeKey(await sessionNamespace(), id), params, createdAt: now(), ...(resolved === undefined ? {} : { resolved }), ...(exportFirst ? { exportFirst: true as const } : {}) };
         await writeDurably(join(jobDir(id), "intent.json"), JSON.stringify(intent));
         return ok({ intent, created: true });
       });
@@ -332,27 +347,29 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
   async function submitOnce(id: string, intent: Intent): Promise<Result<State>> {
     const state = await readState(id);
     if (state?.qexId) return ok(state);
-    const idFile = join(jobDir(id), "qex.id");
+    const stage = stageOf(intent, state);
+    const dedupeKey = dedupeKeyOf(intent, stage);
+    const idFile = join(jobDir(id), idFileNameOf(intent, stage));
     let qexId = (await readFile(idFile, "utf8").catch(() => "")).trim();
     let how = "the id file";
     if (qexId.length > 0) await forgoBeforeSample(id);
     if (qexId.length === 0) {
       const listed = await deps.qex.list();
       if (!listed.ok) {
-        const evidence = [`qex list failed (${listed.error.message}), so the absence of a job with the dedupe key ${intent.dedupeKey} cannot be proven; the intent is unsubmitted and will not be resubmitted automatically`];
-        return ok({ schemaVersion: "paneweft.job/1", requestId: id, state: "indeterminate", qexId: null, runId: intent.resolved?.runId ?? null, history: state?.history ?? [], indeterminate: { evidence } });
+        const evidence = [`qex list failed (${listed.error.message}), so the absence of a job with the dedupe key ${dedupeKey} cannot be proven; the intent is unsubmitted and will not be resubmitted automatically`];
+        return ok({ schemaVersion: "paneweft.job/1", requestId: id, state: "indeterminate", qexId: null, runId: intent.resolved?.runId ?? null, ...(state?.stage === undefined ? {} : { stage: state.stage }), history: state?.history ?? [], indeterminate: { evidence } });
       }
-      const found = listed.value.find((job) => job.dedupe_key === intent.dedupeKey);
+      const found = listed.value.find((job) => job.dedupe_key === dedupeKey);
       if (found !== undefined) {
         qexId = found.id;
         how = "qex list by the dedupe key";
         await forgoBeforeSample(id);
       } else {
-        const resolved = intent.resolved;
+        const resolved = await resolvedOf(id, intent, stage);
         const adapter = adapterFor(intent.params);
         if (resolved === undefined || adapter === undefined) return err("INTERNAL", `job "${id}" has no resolved process to submit`);
         await takeBeforeSample(id, adapter);
-        const submitted = await deps.qex.submit(buildQexSubmitArgv(adapter, id, resolved.process, jobDir(id), resolved.timeoutMs, intent.dedupeKey));
+        const submitted = await deps.qex.submit(buildQexSubmitArgv(adapter, intent.exportFirst === true && stage === "export" ? `${id}-catalogue` : id, resolved.process, jobDir(id), resolved.timeoutMs, dedupeKey, idFileNameOf(intent, stage)));
         if (!submitted.ok) return submitted;
         qexId = submitted.value.id;
         how = "qex submit";
@@ -421,8 +438,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     return (JSON.parse(text) as { name?: string }).name ?? "package";
   }
 
-  async function finalizeCatalogue(id: string, intent: Intent, adapter: AdapterRecord, qexJob: QexJob, log: string): Promise<{ status: NonNullable<JobView["collectionStatus"]>; snapshotIds: string[]; diagnostics: Diagnostic[] }> {
-    const resolved = intent.resolved as NonNullable<Intent["resolved"]>;
+  async function finalizeCatalogue(id: string, adapter: AdapterRecord, qexJob: QexJob, log: string, resolved: Resolved): Promise<{ status: NonNullable<JobView["collectionStatus"]>; snapshotIds: string[]; diagnostics: Diagnostic[]; catalogue?: Catalogue }> {
     const staging = await readStaging(resolved.stagingDir, resolved.limits?.effective.collectionBytes);
     const diagnostics: Diagnostic[] = [];
     const name = await packageName(adapter);
@@ -474,11 +490,10 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     else fingerprint = { digest: "0".repeat(64), members: [], declaredExtras: [], exclusions: [], sampledConsistency: "unverified", unverified: after.error.message };
     const record = { schemaVersion: "paneweft.catalogue-record/1", repo: adapter.repo, adapter: adapter.id, catalogue: merged.value, fingerprint, ...(inventory.value === undefined ? {} : { inventory: inventory.value }), collectedAt: now() };
     await writeDurably(join(deps.sessionDir, "catalogues", adapter.repo, `${adapter.id}.json`), JSON.stringify(record));
-    return { status: "succeeded", snapshotIds: [], diagnostics };
+    return { status: "succeeded", snapshotIds: [], diagnostics, catalogue: merged.value };
   }
 
-  async function finalizeRun(id: string, intent: Intent, adapter: AdapterRecord, qexJob: QexJob, log: string, cancelRequested: boolean): Promise<{ status: NonNullable<JobView["collectionStatus"]>; snapshotIds: string[]; diagnostics: Diagnostic[]; counts: Record<string, number> }> {
-    const resolved = intent.resolved as NonNullable<Intent["resolved"]>;
+  async function finalizeRun(id: string, intent: Intent, adapter: AdapterRecord, qexJob: QexJob, log: string, cancelRequested: boolean, resolved: Resolved): Promise<{ status: NonNullable<JobView["collectionStatus"]>; snapshotIds: string[]; diagnostics: Diagnostic[]; counts: Record<string, number> }> {
     const runId = resolved.runId;
     const finalizedPath = join(jobDir(id), "finalized.json");
     let finalized = await readJson<{ run: TestRun; graphs: unknown[]; graphBytes?: number[]; diagnostics: Diagnostic[] }>(finalizedPath);
@@ -566,15 +581,44 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
   }
 
   /** The outcome of a finish that threw: `failed`, with the diagnostics the run had (finalized.json) and one that names the failure. */
-  async function failedFinish(id: string, intent: Intent, cause: unknown): Promise<{ status: "failed"; snapshotIds: string[]; diagnostics: Diagnostic[] }> {
+  async function failedFinish(id: string, stage: "export" | "run", cause: unknown): Promise<{ status: "failed"; snapshotIds: string[]; diagnostics: Diagnostic[] }> {
     const finalized = await readJson<{ diagnostics?: Diagnostic[] }>(join(jobDir(id), "finalized.json"));
     const message = cause instanceof Error ? cause.message : String(cause);
-    const diagnostics: Diagnostic[] = [...(finalized?.diagnostics ?? []), { id: "diag-import-1", category: "runner", message: `the collection could not be imported: ${message}`.slice(0, 2000), invariant: "a finished collection imports as one unit", nextAction: "Read the message and fix its cause (the pointer names the member, a storage error the disk or the session), then recollect with a new request id." } as Diagnostic];
+    const diagnostics: Diagnostic[] = [...(finalized?.diagnostics ?? []), { id: "diag-import-1", category: "runner", message: `the collection could not be ${stage === "export" ? "prepared from its catalogue export" : "imported"}: ${message}`.slice(0, 2000), invariant: "a finished collection imports as one unit", nextAction: "Read the message and fix its cause (the pointer names the member, a storage error the disk or the session), then recollect with a new request id." } as Diagnostic];
     await writeDurably(join(jobDir(id), "diagnostics.json"), JSON.stringify(diagnostics));
     return { status: "failed", snapshotIds: [], diagnostics };
   }
 
-  /** Imports (or, for a catalogue job, stores) the results of a qex job that stopped, then writes the terminal state. */
+  /** The nearest declared example ids to an unknown one, for a diagnostic that cannot carry `details`. */
+  const nearestIds = (error: { details?: Record<string, unknown> }): string[] => ((error.details?.candidates as string[] | undefined) ?? []).slice(0, 5);
+
+  /** CLAIM(T4-run-exports): the end of an exportFirst job's export stage. The catalogue it exported is stored (finalizeCatalogue: the run's export refreshes the
+   * stored catalogue only on success) and resolves the job's example ids; the run is decided (run-stage.json) and the job goes back to `submitted` for it. An
+   * export that failed, or an id the export does not declare, ends the job `failed` and runs nothing. Returns the terminal outcome, or `undefined` when the run
+   * was decided. */
+  async function finishExport(id: string, intent: Intent, adapter: AdapterRecord, qexJob: QexJob, log: string, exported: Resolved): Promise<{ status: NonNullable<JobView["collectionStatus"]>; snapshotIds: string[]; diagnostics: Diagnostic[] } | undefined> {
+    const catalogueOutcome = await finalizeCatalogue(id, adapter, qexJob, log, exported);
+    if (catalogueOutcome.status !== "succeeded" || catalogueOutcome.catalogue === undefined) return { status: "failed", snapshotIds: [], diagnostics: catalogueOutcome.diagnostics };
+    const params = intent.params;
+    const selected = selectExamples(adapter, catalogueOutcome.catalogue, { examples: params.examples, ...(params.views === undefined ? {} : { views: params.views }) });
+    if (!selected.ok) {
+      const nearest = nearestIds(selected.error);
+      return { status: "failed", snapshotIds: [], diagnostics: [{ id: "diag-registration-1", category: "registration", message: `${selected.error.message}${nearest.length === 0 ? "" : `; nearest declared ids: ${nearest.join(", ")}`}`.slice(0, 2000), invariant: "every selected example is declared in the catalogue the run exports", nextAction: "Fix the id, or declare the example in the repository (scaffold_example), then collect again with a new request id: the collection exports the catalogue itself." } as Diagnostic] };
+    }
+    const stagingDir = join(jobDir(id), "staging", exported.runId);
+    const built = buildProcess(adapter, selected.value, "run", { runId: exported.runId, stagingDir, attempt: 1, ...(params.limits === undefined ? {} : { limits: params.limits }) });
+    if (!built.ok) return { status: "failed", snapshotIds: [], diagnostics: [{ id: "diag-registration-1", category: "registration", message: built.error.message.slice(0, 2000), nextAction: "Select at least one declared example, then collect again." } as Diagnostic] };
+    const process = adapter.grammar === "cargo-test/1" ? { ...built.value, argv: foldExactFilters(built.value.argv) } : built.value;
+    const run: Resolved = { selection: selected.value, process, timeoutMs: exported.timeoutMs, runId: exported.runId, stagingDir, ...(exported.limits === undefined ? {} : { limits: exported.limits }) };
+    await mkdir(stagingDir, { recursive: true });
+    await writeDurably(runStageFile(id), JSON.stringify(run));
+    await crash("export:after-run-stage");
+    await writeState(id, { state: "submitted", stage: "run", qexId: null, observedStop: undefined, indeterminate: undefined }, `the catalogue exported by qex job ${qexJob.id} resolved ${selected.value.examples.length} example(s); the run is next`);
+    return undefined;
+  }
+
+  /** Imports (or, for a catalogue job, stores) the results of a qex job that stopped, then writes the terminal state. For the export stage of an exportFirst
+   * job the "terminal state" is the decision of the run (finishExport). */
   async function finish(id: string, intent: Intent, adapter: AdapterRecord, qexJob: QexJob): Promise<void> {
     const cancelRequested = (await readJson<{ requested?: boolean }>(join(jobDir(id), "cancel.json")))?.requested === true;
     const neverRan = qexJob.state === "cancelled" || qexJob.state === "skipped";
@@ -583,28 +627,36 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     const leased = await withLease(id, async () => {
       const terminal = await readState(id);
       if (terminal !== undefined && TERMINAL_JOB_STATES.includes(terminal.state)) return;
+      const stage = stageOf(intent, terminal);
+      const resolved = await resolvedOf(id, intent, stage);
+      if (resolved === undefined) throw new Error(`job "${id}" has no resolved ${stage} stage to finish`);
       // the lease first: whoever sees `importing` on disk can also see who holds it, so a second instance never imports concurrently
       await writeState(id, { state: "importing", observedStop: qexJob }, `qex job ${qexJob.id} is ${qexJob.state}`);
-      let log = await readFile(join(jobDir(id), "job.log"), "utf8").catch(() => undefined);
+      const logFile = join(jobDir(id), stage === "export" ? "export.log" : "job.log");
+      let log = await readFile(logFile, "utf8").catch(() => undefined);
       if (log === undefined) {
         const fetched = neverRan ? ok("") : await deps.qex.logs(qexJob.id);
         log = fetched.ok ? fetched.value : "";
-        await writeDurably(join(jobDir(id), "job.log"), log.slice(-adapter.limits.logBytes));
+        await writeDurably(logFile, log.slice(-adapter.limits.logBytes));
       }
-      let outcome: { status: NonNullable<JobView["collectionStatus"]>; snapshotIds: string[]; diagnostics: Diagnostic[]; counts?: Record<string, number> };
-      if (neverRan) outcome = { status: "cancelled", snapshotIds: [], diagnostics: [] };
+      let outcome: { status: NonNullable<JobView["collectionStatus"]>; snapshotIds: string[]; diagnostics: Diagnostic[]; counts?: Record<string, number> } | undefined;
+      // a cancel that was requested before the export ended: no example of the run ever started, so the job is cancelled whatever the export did
+      if (neverRan || (stage === "export" && cancelRequested)) outcome = { status: "cancelled", snapshotIds: [], diagnostics: [] };
       else {
         // CLAIM(T1-terminal): a finish that fails (the import above all) ends the job `failed` with a diagnostic; it never leaves the job `importing`.
         try {
-          outcome = intent.params.mode === "catalogue" ? await finalizeCatalogue(id, intent, adapter, qexJob, log) : await finalizeRun(id, intent, adapter, qexJob, log, cancelRequested && qexJob.state === "killed");
+          if (stage === "export") outcome = await finishExport(id, intent, adapter, qexJob, log, resolved);
+          else if (intent.params.mode === "catalogue") outcome = await finalizeCatalogue(id, adapter, qexJob, log, resolved);
+          else outcome = await finalizeRun(id, intent, adapter, qexJob, log, cancelRequested && qexJob.state === "killed", resolved);
         } catch (cause) {
           if (typeof cause === "object" && cause !== null && injected.has(cause)) throw cause;
-          outcome = await failedFinish(id, intent, cause);
+          outcome = await failedFinish(id, stage, cause);
         }
       }
+      if (outcome === undefined) return;
       const finalState: JobStateName = outcome.status === "succeeded" ? "succeeded" : outcome.status === "cancelled" ? "cancelled" : "failed";
-      // every diagnostic of a job is stored with the job (a catalogue refresh included), and the ids handed out are qualified by the run (S13)
-      if (intent.params.mode === "catalogue") await writeDurably(join(jobDir(id), "diagnostics.json"), JSON.stringify(outcome.diagnostics));
+      // every diagnostic of a job is stored with the job (a catalogue refresh and an export stage included), and the ids handed out are qualified by the run (S13)
+      if (intent.params.mode === "catalogue" || stage === "export") await writeDurably(join(jobDir(id), "diagnostics.json"), JSON.stringify(outcome.diagnostics));
       const runId = intent.resolved?.runId ?? `run-${id}`;
       await writeState(id, { state: finalState, terminal: { collectionStatus: outcome.status, snapshotIds: outcome.snapshotIds, diagnosticIds: outcome.diagnostics.map((diagnostic) => qualifyDiagnosticId(runId, diagnostic.id)), ...(outcome.counts === undefined ? {} : { counts: outcome.counts }) } }, `collection ${outcome.status}`);
     });
@@ -637,6 +689,13 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     }
   }
 
+  /** After a finish: the state, and for an exportFirst job whose export has just decided its run, straight on to submitting that run. */
+  async function afterFinish(id: string, intent: Intent): Promise<Result<{ intent: Intent; state: State | undefined }>> {
+    const state = await readState(id);
+    if (intent.exportFirst === true && state?.state === "submitted" && state.stage === "run" && state.qexId === null) return advanceOwned(id);
+    return ok({ intent, state });
+  }
+
   /** One step of the lifecycle: recover, observe qex, import when it stopped. Idempotent; safe to call from any instance. */
   async function advanceOwned(id: string, known?: QexJob): Promise<Result<{ intent: Intent; state: State | undefined }>> {
     const intent = await readIntent(id);
@@ -653,14 +712,14 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     if (!queried.ok) {
       if (state.observedStop !== undefined) {
         await finish(id, intent, adapter, state.observedStop);
-        return ok({ intent, state: await readState(id) });
+        return afterFinish(id, intent);
       }
       return ok({ intent, state: await writeState(id, { state: "indeterminate", indeterminate: { evidence: [`qex status ${state.qexId} failed: ${queried.error.message}`] } }) });
     }
     const job = queried.value;
     if (QEX_TERMINAL_STATES.includes(job.state)) {
       await finish(id, intent, adapter, job);
-      return ok({ intent, state: await readState(id) });
+      return afterFinish(id, intent);
     }
     const mapped: JobStateName = job.state === "queued" ? "queued" : "running";
     if (state.state !== mapped) state = await writeState(id, { state: mapped, indeterminate: undefined }, `qex job ${job.id} is ${job.state}`);
@@ -675,6 +734,21 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
   }
 
   // ---- requests -------------------------------------------------------------------------------------------------------------------
+
+  /** Whether the stored catalogue may resolve a run's ids without a new export: it exists and, when it has a recorded input fingerprint, the sources still match
+   * that fingerprint and it was sampled consistently (the same rule the discovery tools report as `fresh`). A catalogue the host handed in with no stored record
+   * (a test seam) is the host's word. Anything else is exported again by the run. */
+  async function catalogueIsFresh(adapter: AdapterRecord, catalogue: Catalogue | null): Promise<boolean> {
+    if (catalogue === null) return false;
+    const record = await readJson<{ fingerprint?: Fingerprint & { sampledConsistency?: string; unverified?: string } }>(join(deps.sessionDir, "catalogues", adapter.repo, `${adapter.id}.json`));
+    if (record === undefined) return true;
+    const captured = record.fingerprint;
+    if (captured === undefined || (captured.members ?? []).length === 0) return false;
+    const consistency = captured.sampledConsistency ?? (captured.unverified === undefined ? undefined : "unverified");
+    if (consistency === "mixed-input" || consistency === "unverified") return false;
+    const current = await computeFingerprint({ root: normalize(join(adapter.workspaceRoot, adapter.entry)), declaredExtras: captured.declaredExtras ?? [], exclusions: captured.exclusions ?? [] });
+    return current.ok && compareFingerprints(captured, current.value).status === "fresh";
+  }
 
   async function begin(mode: "run" | "catalogue", request: CollectRequest | { requestId: string; repo: string; adapter: string }, raw: Record<string, unknown>): Promise<Result<JobView>> {
     if (!REQUEST_ID.test(request.requestId)) return err("INVALID_ARGUMENT", `"${request.requestId}" is not a request id (letters, digits, dot, dash, underscore; at most 64)`, { errors: [{ code: "PATTERN", pointer: "/requestId", constraint: `pattern: ${REQUEST_ID.source}`, hint: "Use a fresh short id; the same id with the same parameters returns the same job." }] });
@@ -699,18 +773,27 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     }
     const catalogue = (await deps.catalogueFor?.(adapter.repo, adapter.id)) ?? null;
     let selection: Selection = { examples: [], views: [] };
+    // CLAIM(T4-run-exports): the example ids of a run are resolved by the catalogue that run exports, unless a stored catalogue proves itself fresh (the export of
+    // these very sources). The shape of the request is checked now; the ids are resolved now only against a fresh catalogue.
+    let exportFirst = false;
     if (mode === "run") {
-      const selected = selectExamples(adapter, catalogue, { ...raw, examples: params.examples, ...(params.views === undefined ? {} : { views: params.views }) });
-      if (!selected.ok) return selected;
-      selection = selected.value;
+      const request = { ...raw, examples: params.examples, ...(params.views === undefined ? {} : { views: params.views }) };
+      const checked = checkCollectRequest(request);
+      if (!checked.ok) return checked;
+      exportFirst = !(await catalogueIsFresh(adapter, catalogue));
+      if (!exportFirst) {
+        const selected = selectExamples(adapter, catalogue, request);
+        if (!selected.ok) return selected;
+        selection = selected.value;
+      }
     }
     const runId = `run-${id}`;
-    const stagingDir = join(jobDir(id), "staging", runId);
-    const built = buildProcess(adapter, selection, mode, { runId, stagingDir, attempt: 1, ...(params.limits === undefined ? {} : { limits: params.limits }) });
+    const stagingDir = join(jobDir(id), "staging", exportFirst ? `${runId}.export` : runId);
+    const built = buildProcess(adapter, selection, exportFirst ? "catalogue" : mode, { runId, stagingDir, attempt: 1, ...(params.limits === undefined ? {} : { limits: params.limits }) });
     if (!built.ok) return built;
     const timeoutMs = adapter.limits.timeoutMs;
     const process = adapter.grammar === "cargo-test/1" ? { ...built.value, argv: foldExactFilters(built.value.argv) } : built.value;
-    const created = await createIntent(id, params, { selection, process, timeoutMs, runId, stagingDir, limits: limits.value.report });
+    const created = await createIntent(id, params, { selection, process, timeoutMs, runId, stagingDir, limits: limits.value.report }, exportFirst);
     if (!created.ok) return created;
     if (!created.value.created) {
       const advanced = await advance(id);

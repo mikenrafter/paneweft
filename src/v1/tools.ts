@@ -196,17 +196,31 @@ interface Call { context: { session: Session; sessionDir: string; jobs: JobServi
 const slug = (text: string): string => text.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40) || "view";
 const viewSortKey = (a: Catalogue["views"][number], b: Catalogue["views"][number]): number => a.priority - b.priority || compareCodeUnits(a.id, b.id);
 
-async function loadForRepo(call: Call, language?: string): Promise<{ records: CatalogueRecord[] } | OperationOutcome> {
+/** CLAIM(T4-fresh-repo): a repository whose adapter is registered but whose catalogue is not stored yet (the first collect exports and stores it) is discovered
+ * through one empty record per adapter, marked here: the answers are partial and unverified, never "nothing exists". */
+const uncatalogued = new WeakSet<object>();
+const NO_CATALOGUE_NOTICE = (repo: string): string => `no catalogue is stored for repository "${repo}" yet: the first collect of an example exports and stores it (this tool executes nothing). An empty answer is NOT a statement that no type, view or example exists; for a new view, scaffold_view takes an explicit source {path, symbol}`;
+
+function emptyRecord(adapter: AdapterRecord): CatalogueRecord {
+  const record: CatalogueRecord = { schemaVersion: "paneweft.catalogue-record/1", repo: adapter.repo, adapter: adapter.id, catalogue: { schemaVersion: "paneweft.catalogue/1", digest: "none", target: { runner: adapter.kind, package: adapter.id, features: adapter.features }, linkedScope: [], types: [], views: [], examples: [], duplicates: [] }, fingerprint: { digest: "", members: [], declaredExtras: [], exclusions: [] }, collectedAt: "" };
+  uncatalogued.add(record);
+  return record;
+}
+
+async function loadForRepo(call: Call, language?: string): Promise<{ records: CatalogueRecord[]; uncatalogued: boolean } | OperationOutcome> {
   const all = await catalogueRecords(call.context.sessionDir, call.args.repo as string);
   const wanted = language === "rust" ? "cargo" : language === "typescript" ? "vitest" : undefined;
   const records = wanted === undefined ? all : all.filter((record) => record.catalogue.target.runner === wanted);
-  if (records.length === 0) return failure(call.format, "NOT_FOUND", `no compiled catalogue is stored for repository "${call.args.repo}"${wanted === undefined ? "" : ` and language ${language}`}: ask the owner to run \`paneweft catalogue refresh --repo ${call.args.repo} --adapter <id>\` (a catalogue is built by running the reserved export tests; this tool executes nothing)`);
-  return { records };
+  if (records.length > 0) return { records, uncatalogued: false };
+  const adapters = (await adaptersOf(call.context.sessionDir)).filter((adapter) => adapter.repo === call.args.repo && (wanted === undefined || adapter.kind === wanted));
+  if (adapters.length > 0) return { records: adapters.map(emptyRecord), uncatalogued: true };
+  return failure(call.format, "NOT_FOUND", `no compiled catalogue is stored for repository "${call.args.repo}"${wanted === undefined ? "" : ` and language ${language}`}, and no adapter is registered for it to export one: the owner registers an adapter with \`paneweft adapter add --file <adapter.json>\` (the first collect through it exports and stores the catalogue; this tool executes nothing)`);
 }
 
 const isOutcome = (value: unknown): value is OperationOutcome => typeof value === "object" && value !== null && "ok" in value && "body" in value;
 
 async function scopeFreshness(call: Call, record: CatalogueRecord): Promise<Freshness> {
+  if (uncatalogued.has(record)) return { status: "unverified", reasons: ["no catalogue is stored yet: the first collect exports and stores it"] };
   const recorded = record.fingerprint.sampledConsistency ?? (record.fingerprint.unverified === undefined ? undefined : "unverified");
   return freshnessOf(call.context, record.repo, record.adapter, record.fingerprint, record.catalogue.digest, recorded);
 }
@@ -260,7 +274,7 @@ async function listTypes(call: Call): Promise<OperationOutcome> {
   const sum = (pick: (figure: (typeof figures)[number]) => number | null): number | null => (figures.some((figure) => pick(figure) === null) ? null : figures.reduce((total, figure) => total + (pick(figure) as number), 0));
   const combined = { declared: sum((figure) => figure.declared), linked: sum((figure) => figure.linked), exercised: sum((figure) => figure.exercised), passing: sum((figure) => figure.passing), gaps: figures.flatMap((figure) => figure.gaps), inventory: figures.every((figure) => figure.inventory === "checked") ? "checked" : "none" };
   const single = many ? {} : { target: first.catalogue.target, linkedScope: first.catalogue.linkedScope, catalogueDigest: first.catalogue.digest, collectedAt: first.collectedAt };
-  return serveListing({ tool: "list_types", completeness: { status: "complete" }, freshness: await mergedFreshness(call, records), unit: "types", total: types.size, items, details: { ...single, scopes, coverage: combined }, query: { tool: "list_types", repo: call.args.repo, language: call.args.language ?? null, query: call.args.query ?? null } }, call);
+  return serveListing({ tool: "list_types", completeness: loaded.uncatalogued ? { status: "partial", reason: "no catalogue stored yet" } : { status: "complete" }, ...(loaded.uncatalogued ? { notices: [NO_CATALOGUE_NOTICE(call.args.repo as string)] } : {}), freshness: await mergedFreshness(call, records), unit: "types", total: types.size, items, details: { ...single, scopes, coverage: combined }, query: { tool: "list_types", repo: call.args.repo, language: call.args.language ?? null, query: call.args.query ?? null } }, call);
 }
 
 async function lastCaptures(call: Call, repo: string): Promise<TestRun[]> {
@@ -300,11 +314,11 @@ async function listViews(call: Call): Promise<OperationOutcome> {
     const json = { id: view.id, title: view.title, question: view.question, component: view.component, priority: view.priority, source: view.source, renderer: view.renderer ?? null, exampleIds: examples, lastCapture: lastRun === undefined ? null : { runId: lastRun.runId, snapshotId: `snap-${lastRun.runId}` }, staleReasons: freshness.status === "stale" ? freshness.reasons ?? [] : [] };
     return { json, text: `${view.id} [${view.component}, priority ${view.priority}] ${view.title} -- ${view.question} (${view.source.path}:${view.source.line}); examples=${examples.length === 0 ? "none" : examples.join(",")}; last capture=${lastRun === undefined ? "never" : lastRun.runId}` };
   });
-  const notices: string[] = [];
+  const notices: string[] = loaded.uncatalogued ? [NO_CATALOGUE_NOTICE(call.args.repo as string)] : [];
   const covered = records.map((record) => `${record.catalogue.linkedScope.join(", ")} (linked scope; target ${record.catalogue.target.target ?? record.catalogue.target.package}, features ${record.catalogue.target.features.join(",") || "none"})`).join("; ");
-  if (!known) {
+  if (!known && !loaded.uncatalogued) {
     notices.push(`the type "${typeId}" is not in the ${records.length === 1 ? "catalogue" : "catalogues"} compiled for ${covered}. That is NOT a statement that it has no views: it may live in a target, feature set or module ${records.length === 1 ? "this catalogue" : "these catalogues"} did not cover.`);
-    if (freshness.status === "stale") notices.push("the catalogue is outdated: the sources changed after it was compiled; refresh it before relying on this answer");
+    if (freshness.status === "stale") notices.push("the catalogue is outdated: the sources changed after it was compiled; the next collect exports it again, and until then this answer may miss what changed");
   }
   const first = records[0] as CatalogueRecord;
   const single = records.length > 1 ? {} : { linkedScope: first.catalogue.linkedScope, catalogueDigest: first.catalogue.digest };
@@ -330,7 +344,7 @@ async function listExamples(call: Call): Promise<OperationOutcome> {
   });
   const first = records[0] as CatalogueRecord;
   const single = records.length > 1 ? {} : { linkedScope: first.catalogue.linkedScope, catalogueDigest: first.catalogue.digest };
-  return serveListing({ tool: "list_examples", completeness: { status: "complete" }, freshness: await mergedFreshness(call, records), unit: "examples", total: examples.size, items, details: { ...single, scopes: await scopesOf(call, records, runs) }, query: { tool: "list_examples", repo: call.args.repo, type: call.args.type ?? null, view: call.args.view ?? null, tag: call.args.tag ?? null } }, call);
+  return serveListing({ tool: "list_examples", completeness: loaded.uncatalogued ? { status: "partial", reason: "no catalogue stored yet" } : { status: "complete" }, ...(loaded.uncatalogued ? { notices: [NO_CATALOGUE_NOTICE(call.args.repo as string)] } : {}), freshness: await mergedFreshness(call, records), unit: "examples", total: examples.size, items, details: { ...single, scopes: await scopesOf(call, records, runs) }, query: { tool: "list_examples", repo: call.args.repo, type: call.args.type ?? null, view: call.args.view ?? null, tag: call.args.tag ?? null } }, call);
 }
 
 // ---- scaffolds (read-only generation) ------------------------------------------------------------------------------------------------
@@ -403,7 +417,7 @@ function scaffoldView(kind: "cargo" | "vitest", args: { typeId: string; source: 
         "}",
         "",
       ].join("\n") },
-      registration: "Rust: nothing to import; `#[paneweft::views]` registers the descriptor with linkme. Make sure the test binary calls `paneweft::test_adapter!();` once, then refresh the catalogue.",
+      registration: "Rust: nothing to import; `#[paneweft::views]` registers the descriptor with linkme. Make sure the test binary calls `paneweft::test_adapter!();` once, then collect the example (the collection exports the catalogue itself).",
     };
   }
   const view = (token: string): string[] => [
@@ -437,7 +451,7 @@ function scaffoldView(kind: "cargo" | "vitest", args: { typeId: string; source: 
       patches: [{ path: args.token.module, text: [`// ${args.token.module}: append to the existing module; \`${args.token.symbol}\` is the token it already declares for ${args.typeId}.`, ...view(args.token.symbol)].join("\n") }],
       token: { ...args.token, declared: true },
       outputTest,
-      registration: `TypeScript: add \`${name}\` to the \`views\` of the entry for "${args.token.module}" in paneweft.views.ts (the module is already part of the manifest), then refresh the catalogue.`,
+      registration: `TypeScript: add \`${name}\` to the \`views\` of the entry for "${args.token.module}" in paneweft.views.ts (the module is already part of the manifest), then collect the example (the collection exports the catalogue itself).`,
     };
   }
   // no module declares a token for the type: the patch is a whole module that declares its own and imports only what exists
@@ -461,7 +475,7 @@ function scaffoldView(kind: "cargo" | "vitest", args: { typeId: string; source: 
     token: { symbol: tokenName, module: modulePath, declared: false },
     tokenPatch: { path: modulePath, text: declaration.join("\n") },
     outputTest,
-    registration: `TypeScript: add an entry for "${modulePath}" to paneweft.views.ts with \`types: [${tokenName}]\` and \`views: [${name}]\`, then refresh the catalogue.`,
+    registration: `TypeScript: add an entry for "${modulePath}" to paneweft.views.ts with \`types: [${tokenName}]\` and \`views: [${name}]\`, then collect the example (the collection exports the catalogue itself).`,
   };
 }
 
@@ -540,7 +554,7 @@ async function scaffold(call: Call, tool: "scaffold_view" | "scaffold_example"):
   let source: { path: string; symbol: string };
   if ("candidates" in resolved) {
     if (resolved.candidates.length > 1) return failure(call.format, "UNRESOLVED_TARGET", `"${requested}" matches ${resolved.candidates.length} catalogued types: name one by its type id`, { details: { candidates: resolved.candidates } });
-    if (call.args.source === undefined) return failure(call.format, "UNRESOLVED_TARGET", `"${requested}" is not in the catalogue; pass an explicit source {path, symbol} as a candidate, or refresh the catalogue`, { details: { candidates: [] } });
+    if (call.args.source === undefined) return failure(call.format, "UNRESOLVED_TARGET", `"${requested}" is not in the catalogue${loaded.uncatalogued ? " (none is stored yet)" : ""}; pass an explicit source {path, symbol} as a candidate: the compiler validates it, and the first collect exports the catalogue that then lists it`, { details: { candidates: [] } });
     typeId = requested;
     source = call.args.source as { path: string; symbol: string };
     notices.push(`the type "${typeId}" is not catalogued: ${source.path}:${source.symbol} is taken as a candidate only; the compiler must validate it before the view counts`);
@@ -559,7 +573,7 @@ async function scaffold(call: Call, tool: "scaffold_view" | "scaffold_example"):
     const example = (call.args.example as string | undefined) ?? `${slug(source.symbol)}.new`;
     if (kind === "cargo") {
       plan.patches = [{ path: plan.outputTest.path, text: `#[cfg(all(test, feature = "paneweft"))]\nmod examples {\n    // the example returns a value of the type declared in the module around this one; adjust the path if the type is declared deeper\n    use super::${source.symbol};\n\n    #[paneweft::example(id = ${JSON.stringify(example)}, claims = [${JSON.stringify(claim)}])]\n    fn ${slug(example)}() -> ${source.symbol} {\n        // TODO: build the value with the real constructor; do not invent fields.\n        unimplemented!("TODO: construct ${source.symbol}")\n    }\n}\n` }];
-      plan.registration = "Rust: nothing to import; `#[paneweft::example]` registers the example descriptor with linkme. Make sure the test binary calls `paneweft::test_adapter!();` once, refresh the catalogue, then collect the example by its id.";
+      plan.registration = "Rust: nothing to import; `#[paneweft::example]` registers the example descriptor with linkme. Make sure the test binary calls `paneweft::test_adapter!();` once, then collect the example by its id: the collection exports the catalogue itself.";
     } else {
       // S12: the example brings everything it imports. The token declaration the plan proposed (when the repository declares none) is returned
       // WITH the example, the example is registered in the manifest (not the view the plan shared), and a test file runs it.
@@ -581,7 +595,7 @@ async function scaffold(call: Call, tool: "scaffold_view" | "scaffold_example"):
       plan.registration = [
         `TypeScript: in paneweft.views.ts import { ${name} } from ${JSON.stringify(`./${examplePath}`)} and add { path: ${JSON.stringify(examplePath)}, examples: [${name}] } to the modules of the manifest.`,
         ...(token.declared ? [] : [`The token is new: also import { ${token.symbol} } from ${JSON.stringify(`./${token.module}`)} and add { path: ${JSON.stringify(token.module)}, types: [${token.symbol}] } to the modules.`]),
-        `${testPath} runs the example under vitest. Then refresh the catalogue.`,
+        `${testPath} runs the example under vitest. Then collect the example: the collection exports the catalogue itself.`,
       ].join(" ");
     }
   }

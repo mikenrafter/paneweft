@@ -153,10 +153,19 @@ before reporting `cancelled`; during importing -> `cancel-too-late`; after compl
 (env `CARGO_TERM_COLOR=never` + the collector variables); catalogue mode: `... --lib --tests -- paneweft_catalogue_export
 --test-threads=1`. `vitest-run/1`: the host-owned `scripts/collect-vitest.mjs` (typecheck, then vitest) with `--staging --root
 --tsconfig --vitest --config --name-pattern ^example:<escaped id>$|...`. Selection: ids match `^[a-z0-9][a-z0-9._-]{0,127}$` and must
-exist in the catalogue; request members `executable argv runner workspaceRoot cwd env shell command` are FORBIDDEN_PROPERTY; examples
+exist in the catalogue the collection resolves them against (section 10: the run's own export, or a stored catalogue proven fresh); request members `executable argv runner workspaceRoot cwd env shell command` are FORBIDDEN_PROPERTY; examples
 of different targets cannot share one process in week one.
 
 ## 10. Catalogue, inventory, freshness
+
+**A collection resolves its example ids against the catalogue it exports (T4).** `collect` needs no owner-only catalogue step. When a stored catalogue exists
+and its recorded input fingerprint still matches the sources (the rule the discovery tools report as `fresh`), it is the export of the very sources the run
+would see and resolves the ids at once; an unknown id is NOT_FOUND with candidates and nothing is queued. Otherwise (no catalogue, a stale or doubtful one) the
+job has two queue stages: the catalogue export (catalogue mode, `qex.export.id`, dedupe key `<key>:export`), then the run it resolved (`run-stage.json`,
+`qex.id`). The export is authoritative for that run: on success it replaces the stored catalogue; an export that fails, or an id the export does not declare,
+ends the job `failed` with a diagnostic (the second names the nearest declared ids) and no example runs. A cancel requested before the export ends cancels the
+job. `paneweft catalogue refresh` stays an owner command that rebuilds the stored catalogue ahead of time. Discovery on a repository with a registered adapter
+but no stored catalogue answers `partial`/`unverified` (never NOT_FOUND), and `scaffold_view` takes an explicit `source` for it.
 
 `paneweft.catalogue/1`: sorted views/examples/types, target + features, linked scope, duplicates; digest = sha256 of the canonical
 JSON of `{types, views, examples, target}`. The session keeps `catalogues/<repo>/<adapter>.json` =

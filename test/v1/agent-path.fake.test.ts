@@ -3,6 +3,8 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { Capture, defineType } from "../../packages/paneweft-ts/src/index.ts";
+import { specLimits } from "../../packages/paneweft-ts/test/support.ts";
 import { spawnPaneweft } from "../helpers/cli.ts";
 import { FIXTURES, fakeCargoAdapter, git, makeRepo, useFakeQex } from "../helpers/v1-world.ts";
 import { useTempDirs } from "../helpers/tmp.ts";
@@ -61,5 +63,68 @@ describe("[IV22 groundwork] the loop through the CLI", () => {
     expect(explained.body.items[0]).toMatchObject({ id: "diag-inv-1", qualifiedId: "run-e2:diag-inv-1", runId: "run-e2", category: "assertion", exampleId: "watch.pending", selector: { examples: ["watch.pending"] }, basis: "stored-diagnostic" });
     expect(explained.body.items[0].nextAction).toContain("C");
     expect(qex.executions(), "two collections plus one catalogue refresh executed").toHaveLength(3);
+  }, 180_000);
+
+  // why: T4 / spec section 6 working loop on a FRESH repository, as skills/paneweft-views/SKILL.md tells it: the owner has registered the adapter and the
+  // root (owner decisions) and nothing else. Discover (nothing catalogued yet), scaffold with an explicit source, implement (the repository changes and
+  // now declares a new example), collect it, read the result. No `catalogue refresh` anywhere: the collection's own export resolves the new id and stores the
+  // catalogue, after which discovery lists it.
+  // proves: CLAIM(T4-run-exports) CLAIM(T4-fresh-repo) CLAIM(IV22-recipe)
+  it("follows the skill on a fresh repository: list_types, scaffold, implement, collect, view_result, with no catalogue refresh", async () => {
+    const qex = fake();
+    const session = tmp("fresh-session");
+    const root = tmp("fresh-root");
+    cpSync(join(FIXTURES, "crates/watchfile"), root, { recursive: true });
+    makeRepo(root, {});
+    const adapterFile = join(session, "..", `adapter-fresh-${Date.now()}.json`);
+    writeFileSync(adapterFile, JSON.stringify(fakeCargoAdapter({ workspaceRoot: root })));
+    const env = qex.env as Record<string, string>;
+    const run = (args: string[]) => spawnPaneweft(["--session", session, ...args], { env });
+    const json = async (args: string[]) => { const r = await run([...args, "--format", "json"]); return { ...r, body: r.stdout.trim() === "" ? null : JSON.parse(r.stdout) }; };
+    const used: string[] = [];
+    const step = async (args: string[]) => { used.push(args.slice(0, 2).join(" ")); return json(args); };
+
+    expect((await run(["adapter", "add", "--file", adapterFile])).exitCode, "owner registers the adapter").toBe(0);
+    expect((await run(["repo", "add", `vg=${root}`])).exitCode).toBe(0);
+
+    const types = await step(["types", "--repo", "vg"]);
+    expect(types.exitCode, types.stdout + types.stderr).toBe(0);
+    expect(types.body).toMatchObject({ completeness: { status: "partial" }, freshness: { status: "unverified" }, counts: { total: 0 } });
+    expect(types.body.notices.join(" ")).toMatch(/first collect/);
+
+    const before = git(root, "status", "--porcelain");
+    const scaffold = await step(["scaffold", "view", "--args", JSON.stringify({ repo: "vg", type: "vigil::watch::WatchFile", question: "What did the new example capture?", source: { path: "src/watch.rs", symbol: "WatchFile" } })]);
+    expect(scaffold.exitCode, scaffold.stdout + scaffold.stderr).toBe(0);
+    expect(git(root, "status", "--porcelain"), "scaffolding wrote nothing").toBe(before);
+
+    // implement: the agent's edit. The repository now declares the example `watch.fresh`, and running it captures a shape view.
+    writeFileSync(join(root, "src", "watch_fresh.rs"), "// the example and its view, implemented\n");
+    const Watch = defineType<{ label: string }>({ id: "vigil::watch::WatchFile", source: { path: "src/watch.rs", symbol: "WatchFile" } });
+    Watch.view({ id: "watch.fresh", title: "Fresh watch", question: "What did the new example capture?", priority: 1, component: "shape", render: (spec, view) => view.details().field("label", spec.label).done() });
+    const capture = new Capture({ limits: specLimits() });
+    capture.publish({ label: "pending" }, Watch);
+    const graphFile = join(session, "..", `graph-fresh-${Date.now()}.json`);
+    writeFileSync(graphFile, capture.finish().text);
+    const catalogue = JSON.parse(readFileSync(join(FIXTURES, "v1/catalogues/watchfile.catalogue.json"), "utf8"));
+    const base = catalogue.examples.find((example: any) => example.id === "watch.pending");
+    const extraFile = join(session, "..", `extra-fresh-${Date.now()}.json`);
+    writeFileSync(extraFile, JSON.stringify({ examples: [{ ...base, id: "watch.fresh", source: { path: "src/watch_fresh.rs", line: 1 }, selector: { ...base.selector, name: "tests::paneweft_example_watch_fresh" } }] }));
+    qex.scenario({ catalogueExtra: extraFile, captureFile: graphFile });
+
+    const started = await step(["collect", "--request-id", "f1", "--repo", "vg", "--adapter", "cargo", "--example", "watch.fresh"]);
+    expect(started.exitCode, started.stdout + started.stderr).toBe(0);
+    const done = await step(["collection", "status", "f1", "--wait-seconds", "30"]);
+    expect(done.body.items[0], JSON.stringify(done.body)).toMatchObject({ state: "succeeded", runId: "run-f1", collectionStatus: "succeeded" });
+
+    const result = await step(["result", "--run", "run-f1", "--view", "watch.fresh"]);
+    expect(result.exitCode, result.stdout + result.stderr).toBe(0);
+    expect(result.body.items.length).toBeGreaterThan(0);
+    expect(JSON.stringify(result.body)).toContain("pending");
+
+    const after = await step(["examples", "--repo", "vg", "--type", "vigil::watch::WatchFile"]);
+    expect(after.body.items.map((example: any) => example.id), "the collection's export stored the catalogue").toContain("watch.fresh");
+    expect(after.body.freshness.status).toBe("fresh");
+    expect(used.some((command) => command.startsWith("catalogue")), `no catalogue command in: ${used.join(", ")}`).toBe(false);
+    expect(qex.executions(), "one catalogue export and one run").toHaveLength(2);
   }, 180_000);
 });
