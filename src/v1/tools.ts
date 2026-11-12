@@ -17,13 +17,14 @@ import { dereference } from "../schemas/dereference.ts";
 import type { Catalogue } from "../generated/v1/Catalogue.ts";
 import type { Diagnostic } from "../generated/v1/ObjectGraph.ts";
 import type { TestRun } from "../generated/v1/TestRun.ts";
-import { loadAdapters, type AdapterRecord } from "./adapters.ts";
+import type { AdapterRecord } from "./adapters.ts";
 import { coverage as coverageOf, type Coverage } from "./catalogue.ts";
 import { qualifyDiagnosticId, splitDiagnosticId } from "./diagnostic-id.ts";
 import type { Inventory } from "../generated/v1/Inventory.ts";
-import { compareFingerprints, computeFingerprint, type Fingerprint } from "./fingerprint.ts";
+import type { Fingerprint } from "./fingerprint.ts";
 import type { JobService } from "./jobs.ts";
 import { withStoredPages } from "./pages.ts";
+import { adaptersOf, freshnessOf, judgeRun, type Consistency, type Freshness } from "./snapshot-freshness.ts";
 import { captureFile, committedImport, openV1Reader, readJsonFile } from "./read.ts";
 import { V1_READ_ONLY_TOOLS, V1_TOOL_NAMES, createV1SchemaRegistry, loadV1SchemaDocuments, validateAgainstV1, type V1ToolName } from "./schemas.ts";
 
@@ -68,7 +69,6 @@ const fromError = (format: ReplyFormat, error: OperationError): OperationOutcome
 // ---- replies ----------------------------------------------------------------------------------------------------------------------
 
 interface Item { json: Json; text: string }
-interface Freshness { status: "fresh" | "stale" | "unverified" | "not-applicable"; reasons?: string[]; catalogueDigest?: string; scope?: string }
 interface ReplySpec {
   tool: string;
   completeness: { status: "complete" | "partial" | "unsupported"; reason?: string };
@@ -152,7 +152,6 @@ function serveListing(spec: ReplySpec, args: { format: ReplyFormat; budget: numb
 // ---- reading the owner's configuration ---------------------------------------------------------------------------------------------
 
 interface CatalogueRecord { schemaVersion: "paneweft.catalogue-record/1"; repo: string; adapter: string; catalogue: Catalogue; fingerprint: Fingerprint & { unverified?: string; sampledConsistency?: Consistency; sampleNote?: string }; inventory?: Inventory; collectedAt: string }
-type Consistency = "consistent-sampled" | "mixed-input" | "unverified";
 
 async function catalogueRecords(sessionDir: string, repo: string): Promise<CatalogueRecord[]> {
   const dir = join(sessionDir, "catalogues", repo);
@@ -163,30 +162,6 @@ async function catalogueRecords(sessionDir: string, repo: string): Promise<Catal
     if (record?.schemaVersion === "paneweft.catalogue-record/1") records.push(record);
   }
   return records;
-}
-
-async function adaptersOf(sessionDir: string): Promise<AdapterRecord[]> {
-  const loaded = await loadAdapters(sessionDir);
-  return loaded.ok ? loaded.value : [];
-}
-
-/** Freshness of a fingerprint against the real files of the registered repository, never a guess: stale names the changed paths. */
-async function freshnessOf(context: { session: Session; sessionDir: string }, repo: string, adapterId: string | undefined, captured: Fingerprint | undefined, digest?: string, consistency?: Consistency): Promise<Freshness> {
-  const registered = (await context.session.repositories()).find((candidate) => candidate.id === repo);
-  const base = digest === undefined ? {} : { catalogueDigest: digest };
-  if (registered === undefined) return { status: "unverified", reasons: [`the root of repository "${repo}" is not registered, so its files cannot be compared: run \`paneweft repo add --repo ${repo} --root <dir>\``], ...base };
-  if (captured === undefined || captured.members.length === 0) return { status: "unverified", reasons: ["no input fingerprint was recorded for this result"], ...base };
-  const adapter = (await adaptersOf(context.sessionDir)).find((candidate) => candidate.repo === repo && (adapterId === undefined || candidate.id === adapterId));
-  const root = adapter === undefined ? registered.root : join(adapter.workspaceRoot, adapter.entry);
-  const current = await computeFingerprint({ root, declaredExtras: captured.declaredExtras ?? [], exclusions: captured.exclusions ?? [] });
-  if (!current.ok) return { status: "unverified", reasons: [current.error.message], ...base };
-  const verdict = compareFingerprints(captured, current.value);
-  if (verdict.status !== "fresh") return { status: "stale", reasons: verdict.reasons.map((reason) => `${reason.path}: ${reason.change}`), ...base };
-  // S14: the sources match the recorded sample, but a recorded doubt about the sample caps the answer. An edit made during the run and restored
-  // afterwards compares equal; "fresh" would be a claim the evidence cannot carry.
-  if (consistency === "mixed-input") return { status: "unverified", reasons: ["the recorded input sample was mixed: the checkout changed while this result was being produced, so matching sources do not show it was stable then"], ...base };
-  if (consistency === "unverified") return { status: "unverified", reasons: ["the input of this result was never sampled twice, so its consistency is unverified"], ...base };
-  return { status: "fresh", ...base };
 }
 
 // ---- tool implementations -----------------------------------------------------------------------------------------------------------
@@ -740,7 +715,7 @@ async function viewResult(call: Call): Promise<OperationOutcome> {
   }
   const record = await committedImport(session, runId);
   const adapter = (await adaptersOf(sessionDir!)).find((candidate) => candidate.repo === record?.repo && candidate.kind === stored.value.run.runner.id);
-  const freshness = await freshnessOf({ session, sessionDir: sessionDir! }, record?.repo ?? "", adapter?.id, { digest: stored.value.run.inputFingerprint.digest, members: stored.value.run.inputFingerprint.members ?? [], declaredExtras: [], exclusions: [] }, undefined, stored.value.run.inputFingerprint.sampledConsistency);
+  const freshness = (await judgeRun({ session, sessionDir: sessionDir! }, record?.repo ?? "", stored.value.run)).freshness;
   const completeness = envelope.completeness.status === "unsupported" ? { status: "unsupported" as const, reason: envelope.completeness.reason } : envelope.completeness.status === "partial" ? { status: "partial" as const, reason: envelope.completeness.gaps.map((gap) => gap.reason).join("; ").slice(0, 400) } : { status: "complete" as const };
   const invocation = invocationOf(entry);
   const example = invocation === undefined ? undefined : { id: invocation.exampleId, invocation: invocation.id, nested: invocation.parent !== null };

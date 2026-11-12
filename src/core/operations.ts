@@ -26,6 +26,7 @@ import { COMPONENT_CATALOGUE } from "./catalogue.ts";
 import { COMPONENT_EXAMPLES } from "./examples.ts";
 import { LIMITS } from "./limits.ts";
 import { checkFreshness } from "./freshness.ts";
+import { collectedFreshness } from "../v1/snapshot-freshness.ts";
 import { rankViews, type RankOutput } from "./registry.ts";
 import { resolveItemSource } from "./links.ts";
 import { readEffectiveView } from "./example-runs.ts";
@@ -297,7 +298,7 @@ async function loadView(session: SessionReader, key: ViewKey, query: ViewQuery, 
   const stored = await readEffectiveView(session, key);
   if (!stored.ok) return stored.error.code === "NOT_FOUND" ? unresolved(format, `view "${key.viewId}" does not exist in snapshot "${key.snapshotId}"`) : failedFrom(format, stored.error);
   const envelope = stored.value.envelope;
-  const freshness = await checkFreshness(envelope.freshness, await session.repositories());
+  const freshness = (await collectedFreshness(session, key.snapshotId)) ?? (await checkFreshness(envelope.freshness, await session.repositories()));
   const embeds = query.embedDepth === 1 && envelope.component === "notebook" ? await embedsOf(session, envelope) : new Map<string, EmbedInfo>();
   try {
     return { envelope, summary: summariseView(envelope, freshness, query, embeds, stored.value.recorded) };

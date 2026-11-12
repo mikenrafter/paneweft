@@ -135,7 +135,7 @@ export async function readJsonFile<T>(path: string): Promise<T | undefined> {
 }
 
 /** The import record of a run IF its snapshot is committed in the manifest; otherwise the run does not exist for readers. */
-export async function committedImport(session: Session, runId: string): Promise<ImportRecord | undefined> {
+export async function committedImport(session: Pick<Session, "dir" | "snapshotInfo">, runId: string): Promise<ImportRecord | undefined> {
   const record = await readJsonFile<ImportRecord>(join(runDirectory(session, runId), "import.json"));
   if (record === undefined) return undefined;
   const snapshot = await session.snapshotInfo(record.snapshotId);

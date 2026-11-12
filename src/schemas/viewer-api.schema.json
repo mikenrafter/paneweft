@@ -101,7 +101,7 @@
       "type": "array",
       "items": {
         "type": "object", "additionalProperties": false, "required": ["repository", "code", "reason"],
-        "properties": { "repository": { "type": "string" }, "code": { "enum": ["REPOSITORY_NOT_REGISTERED", "UNSUPPORTED_PLATFORM", "FILE_TOO_LARGE"] }, "reason": { "type": "string", "minLength": 1 }, "paths": { "type": "array", "items": { "type": "string" } } }
+        "properties": { "repository": { "type": "string" }, "code": { "enum": ["REPOSITORY_NOT_REGISTERED", "UNSUPPORTED_PLATFORM", "FILE_TOO_LARGE", "FINGERPRINT_UNAVAILABLE", "INPUT_UNSTABLE"] }, "reason": { "type": "string", "minLength": 1 }, "paths": { "type": "array", "items": { "type": "string" } } }
       }
     },
     "FreshnessResult": {
@@ -117,7 +117,8 @@
                 "type": "object", "additionalProperties": false, "required": ["repository", "path", "recordedSha256", "currentSha256"],
                 "properties": {
                   "repository": { "type": "string" }, "path": { "type": "string" },
-                  "recordedSha256": { "$ref": "urn:paneweft:schema:common:1#/$defs/Sha256" },
+                  "change": { "enum": ["added", "modified", "deleted"] },
+                  "recordedSha256": { "oneOf": [{ "$ref": "urn:paneweft:schema:common:1#/$defs/Sha256" }, { "type": "null" }] },
                   "currentSha256": { "oneOf": [{ "$ref": "urn:paneweft:schema:common:1#/$defs/Sha256" }, { "type": "null" }] }
                 }
               }

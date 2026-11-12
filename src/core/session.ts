@@ -97,6 +97,8 @@ export interface SessionOptions {
  * a compound operation (open_entity, navigate, render, ...) needs so that its steps cannot see different generations (CLAIM(manifest-snapshot-read)).
  */
 export interface SessionReader {
+  /** The session directory: the v1 files (runs, adapters) live beside the v0 store, and freshness of a collected snapshot is judged from them. */
+  readonly dir: string;
   getView(key: ViewKey): Promise<Result<StoredView>>;
   listViews(): Promise<ViewKey[]>;
   /** The stored views (of one snapshot when `snapshotId` is given) with entity, title, definition id and completeness, in key order. Opens no object whose manifest row has them. */
@@ -273,7 +275,7 @@ async function readStoredObject(dir: string, hash: string): Promise<unknown> {
 class ManifestReader implements SessionSnapshot {
   readonly generation: number;
   readonly registryRevision: number;
-  private readonly dir: string;
+  readonly dir: string;
   private readonly manifest: Manifest;
   private readonly derived: Map<string, IndexFields>;
 
