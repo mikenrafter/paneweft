@@ -655,9 +655,6 @@ function viewerUrl(sessionDir: string, key: { viewId: string; snapshotId: string
   }
 }
 
-/** The example whose invocation published the capture. */
-const exampleOfCapture = (run: TestRun, captureId: string): string | undefined => run.invocations.find((invocation) => invocation.capture.captureId === captureId)?.exampleId;
-
 const objectNumber = (objectId: string): number => Number(objectId.replace(/\D+/g, "")) || 0;
 
 async function viewResult(call: Call): Promise<OperationOutcome> {
@@ -677,19 +674,43 @@ async function viewResult(call: Call): Promise<OperationOutcome> {
   const index = await session.listViewIndex(snapshotId);
   const wanted = call.args.view as string;
   const observation = call.args.observation as string | undefined;
+  const wantedExample = call.args.example as string | undefined;
+  const run = stored.value.run;
   let matches = index.filter((entry) => entry.viewDefinitionId === wanted || entry.viewId === wanted);
   const objectOf = (entry: (typeof index)[number]): string => entry.entity.id.slice(entry.entity.id.lastIndexOf(".") + 1);
+  const captureOf = (entry: (typeof index)[number]): string => entry.entity.id.slice(0, entry.entity.id.lastIndexOf("."));
+  const invocationOf = (entry: (typeof index)[number]): TestRun["invocations"][number] | undefined => run.invocations.find((invocation) => invocation.capture.captureId === captureOf(entry));
+  const orderOf = (entry: (typeof index)[number]): number => run.invocations.findIndex((invocation) => invocation.capture.captureId === captureOf(entry));
+  const examplesOfRun = [...new Set(run.invocations.map((invocation) => invocation.exampleId))].sort(compareCodeUnits);
   if (observation !== undefined) matches = matches.filter((entry) => objectOf(entry) === observation || entry.viewId === observation || entry.entity.id === observation);
   if (matches.length === 0) return failure(call.format, "NOT_FOUND", `run "${runId}" has no stored view "${wanted}"${observation === undefined ? "" : ` for ${observation}`}`, { details: { candidates: [...new Set(index.map((entry) => entry.viewDefinitionId))].sort(compareCodeUnits) } });
-  matches.sort((a, b) => objectNumber(objectOf(a)) - objectNumber(objectOf(b)));
-  if (matches.length > 1 && observation === undefined) {
+  if (wantedExample !== undefined) {
+    // F8: object ids restart in every capture, so the example is the selector that names one result. Of the example's captures the final
+    // attempt's wins, then a top-level call over a nested one.
+    if (!examplesOfRun.includes(wantedExample)) return failure(call.format, "NOT_FOUND", `run "${runId}" holds no example "${wantedExample}": its examples are ${examplesOfRun.join(", ")}`, { details: { examples: examplesOfRun } });
+    const own = matches.filter((entry) => invocationOf(entry)?.exampleId === wantedExample);
+    if (own.length === 0) return failure(call.format, "NOT_FOUND", `example "${wantedExample}" of run "${runId}" captured no stored view "${wanted}"`, { details: { examples: [...new Set(matches.map((entry) => invocationOf(entry)?.exampleId).filter((id): id is string => id !== undefined))].sort(compareCodeUnits) } });
+    const final = run.examples.find((candidate) => candidate.id === wantedExample)?.final;
+    const finalOnes = own.filter((entry) => invocationOf(entry)?.id === final);
+    const topLevel = (finalOnes.length > 0 ? finalOnes : own).filter((entry) => invocationOf(entry)?.parent === null);
+    matches = topLevel.length > 0 ? topLevel : finalOnes.length > 0 ? finalOnes : own;
+  }
+  matches.sort((a, b) => objectNumber(objectOf(a)) - objectNumber(objectOf(b)) || orderOf(a) - orderOf(b));
+  if (matches.length > 1 && observation === undefined && wantedExample === undefined) {
     // The selected (top-level) example's own capture wins over the captures of the examples it composed: when exactly one match was
     // published by an invocation nobody called, that is the answer to "what did the example I asked for show".
-    const captureOf = (entry: (typeof index)[number]): string => entry.entity.id.slice(0, entry.entity.id.lastIndexOf("."));
-    const topLevel = matches.filter((entry) => stored.value.run.invocations.some((invocation) => invocation.capture.captureId === captureOf(entry) && invocation.parent === null));
+    const topLevel = matches.filter((entry) => invocationOf(entry)?.parent === null);
     if (topLevel.length === 1) matches = topLevel;
   }
-  if (matches.length > 1) return failure(call.format, "UNRESOLVED_TARGET", `${matches.length} stored views match "${wanted}": name one with observation (an object id)`, { details: { candidates: matches.map((entry) => ({ object: objectOf(entry), storedViewId: entry.viewId, view: entry.viewId, exampleId: exampleOfCapture(stored.value.run, entry.entity.id.slice(0, entry.entity.id.lastIndexOf("."))) ?? null, label: entry.title })) } });
+  if (matches.length > 1) {
+    const candidates = matches.map((entry) => ({ object: objectOf(entry), storedViewId: entry.viewId, view: entry.viewId, exampleId: invocationOf(entry)?.exampleId ?? null, nested: invocationOf(entry)?.parent !== null && invocationOf(entry)?.parent !== undefined, label: entry.title }));
+    const exampleChoices = [...new Set(candidates.map((candidate) => candidate.exampleId).filter((id): id is string => id !== null))];
+    const sameExample = wantedExample !== undefined || exampleChoices.length < candidates.length;
+    const hint = sameExample
+      ? `Object ids restart in every capture, so ${candidates[0]?.object} does not pick one. Pass the stored view id as view: ${candidates.slice(0, 4).map((candidate) => candidate.storedViewId).join(" | ")}.`
+      : `Object ids restart in every capture, so ${candidates[0]?.object} does not pick one. Pass example (one of ${exampleChoices.join(", ")}) or the stored view id as view (one of ${candidates.slice(0, 4).map((candidate) => candidate.storedViewId).join(" | ")}).`;
+    return failure(call.format, "UNRESOLVED_TARGET", `${matches.length} stored views match "${wanted}": ${hint}`, { errors: [{ code: "CONSTRAINT", pointer: sameExample ? "/view" : "/example", constraint: "one stored view", hint }], details: { candidates } });
+  }
   const entry = matches[0] as (typeof index)[number];
   const loaded = await session.getView({ viewId: entry.viewId, snapshotId });
   if (!loaded.ok) return fromError(call.format, loaded.error);
@@ -715,7 +736,8 @@ async function viewResult(call: Call): Promise<OperationOutcome> {
   const adapter = (await adaptersOf(sessionDir!)).find((candidate) => candidate.repo === record?.repo && candidate.kind === stored.value.run.runner.id);
   const freshness = await freshnessOf({ session, sessionDir: sessionDir! }, record?.repo ?? "", adapter?.id, { digest: stored.value.run.inputFingerprint.digest, members: stored.value.run.inputFingerprint.members ?? [], declaredExtras: [], exclusions: [] }, undefined, stored.value.run.inputFingerprint.sampledConsistency);
   const completeness = envelope.completeness.status === "unsupported" ? { status: "unsupported" as const, reason: envelope.completeness.reason } : envelope.completeness.status === "partial" ? { status: "partial" as const, reason: envelope.completeness.gaps.map((gap) => gap.reason).join("; ").slice(0, 400) } : { status: "complete" as const };
-  const example = stored.value.run.examples.find((candidate) => candidate.outcome === "passed" || candidate.outcome === "failed") ?? stored.value.run.examples[0];
+  const invocation = invocationOf(entry);
+  const example = invocation === undefined ? undefined : { id: invocation.exampleId, invocation: invocation.id, nested: invocation.parent !== null };
   const details = {
     runId,
     snapshotId,
@@ -729,6 +751,7 @@ async function viewResult(call: Call): Promise<OperationOutcome> {
     provenance: [...new Set(items.map((item) => item.json.provenance))],
     viewerUrl: viewerUrl(sessionDir!, { viewId: entry.viewId, snapshotId }),
     storedPages: envelope.completeness.status === "partial" ? envelope.completeness.gaps.filter((gap) => gap.id === "stored-pages").map((gap) => gap.reason) : [],
+    example: example ?? null,
     recollect: example === undefined ? null : { command: `paneweft collect --request-id <new-id> --repo ${record?.repo ?? "<repo>"} --adapter ${adapter?.id ?? stored.value.run.runner.id} --example ${example.id}` },
   };
   const head = [`view ${entry.viewId} (${envelope.component}) of ${runId}: ${envelope.title} -- ${envelope.question}`, `origin ${details.origin}; object ${details.objects[0]}; viewer ${details.viewerUrl ?? "not running"}`];

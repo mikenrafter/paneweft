@@ -19,8 +19,13 @@
     "view": {
       "$ref": "urn:paneweft:schema:common:1#/$defs/Id"
     },
+    "example": {
+      "$ref": "urn:paneweft:schema:common:1#/$defs/Id",
+      "description": "The example whose own result to read. Object ids restart in every capture, so in a run of several examples this is the selector that names one."
+    },
     "observation": {
-      "$ref": "urn:paneweft:schema:common:1#/$defs/Id"
+      "$ref": "urn:paneweft:schema:common:1#/$defs/Id",
+      "description": "An object id, or the capture-qualified id (capture.object) when several captures of the run hold the same object id."
     },
     "cursor": {
       "type": "string",

@@ -20,7 +20,7 @@ export const V1_COMMANDS: readonly V1Command[] = [
   { words: ["collect"], tool: "collect", flags: { "--request-id": "requestId", "--repo": "repo", "--adapter": "adapter", "--example": "examples" }, example: "paneweft collect --request-id r1 --repo vigil --adapter cargo --example watch.cancelled" },
   { words: ["collection", "status"], tool: "collection_status", flags: { "--wait-seconds": "waitSeconds", "--log-cursor": "logCursor" }, example: "paneweft collection status r1" },
   { words: ["collection", "cancel"], tool: "cancel_collection", flags: {}, example: "paneweft collection cancel r1" },
-  { words: ["result"], tool: "view_result", flags: { "--run": "run", "--job": "job", "--view": "view" }, example: "paneweft result --run run-1 --view watch.events" },
+  { words: ["result"], tool: "view_result", flags: { "--run": "run", "--job": "job", "--view": "view", "--example": "example", "--observation": "observation" }, example: "paneweft result --run run-1 --view watch.events" },
   { words: ["failure"], tool: "explain_failure", flags: { "--evidence-page": "evidencePage" }, example: "paneweft failure diag-1" },
 ];
 
