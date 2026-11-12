@@ -9,7 +9,7 @@ import { runCliInProcess } from "../../test/helpers/cli.ts";
 import { must } from "../../test/helpers/must.ts";
 import { createSessionSource } from "../viewer/session-source.ts";
 import { importCollection } from "./import.ts";
-import { captureFile, openV1Reader, pageFile, runDirectory } from "./read.ts";
+import { captureFile, openV1Reader, pageFile, runDirectory, loadViewPages, readPageAt } from "./read.ts";
 import { executeV1Operation } from "./tools.ts";
 
 const open = useV1Sessions();
@@ -122,4 +122,34 @@ describe("[D3] every surface reads a stored page through one validated reader", 
     writeFileSync(pageFile(env.session, stray), JSON.stringify({ pageId: stray, rows: [GOOD_ROW] }));
     for (const observe of Object.values(surfaces)) expect(await observe(env)).toBe("ok");
   });
+});
+
+// WHY CLAIM(S29): direct position-2 reads used to seed uniqueness with only the inline rows, accepting a duplicate from position 1.
+it("[S29] direct reader rejects a duplicate in any preceding stored page", async () => {
+  const env = await world();
+  replaceFirstPage(env, [{ ...GOOD_ROW, id: "event-0200" }]);
+  const result = await openV1Reader(env.session).page({ runId: "run-1", captureId: "inv-1", objectId: firstPage(env).objectId, viewId: "watch.events", position: 2 });
+  expect(result.ok).toBe(false);
+  if (!result.ok) expect(result.error.code).toBe("STORAGE_CORRUPT");
+});
+// WHY CLAIM(S30): unsupported shape/list records have no data; view_result must preserve the reason instead of dereferencing it.
+it.each(["shape", "list", "custom"] as const)("[S30] view_result returns unsupported %s reason", async (component) => {
+  const env = await open();
+  const Token = defineType<object>({ id: `unsupported::${component}`, source: { path: "u.ts", symbol: "U" } });
+  Token.view({ id: "u.view", title: "Unsupported", question: "Why?", component, priority: 1, render: (_o, cx) => cx.unsupported("no input available") });
+  const capture = new Capture({ captureId: "inv-1", runId: "run-1", invocationId: "inv-1" });
+  capture.publish({}, Token);
+  must(await importCollection(env.session, { ...collectionImport("vigil-redelivered"), graphs: [capture.finish().toJSON()] }), "import");
+  const reply = await executeV1Operation({ session: env.session, sessionDir: env.dir, jobs: null }, "view_result", { run: "run-1", view: "u.view", format: "json" });
+  expect(reply.ok).toBe(true);
+  expect(JSON.parse(reply.body).completeness).toEqual({ status: "unsupported", reason: "no input available" });
+});
+
+// WHY CLAIM(S29): concurrent calls must share a validated prefix without confusing positions or row-id sets.
+it("[S29] concurrent direct reads retain their requested page positions", async () => {
+  const env = await world();
+  const view = must(await loadViewPages(env.session, { runId: "run-1", captureId: "inv-1", objectId: firstPage(env).objectId, viewId: "watch.events" }), "view");
+  const pages = await Promise.all([readPageAt(view, 1), readPageAt(view, 2), readPageAt(view, 2)]);
+  expect(pages.map((p) => must(p, "page").key.position)).toEqual([1, 2, 2]);
+  expect(pages.map((p) => must(p, "page").rows[0]!.id)).toEqual(["event-0100", "event-0200", "event-0200"]);
 });

@@ -7,7 +7,6 @@ import { err, ok, type Result } from "../core/errors.ts";
 import type { Envelope } from "../core/wire.ts";
 import type { Session } from "../core/session.ts";
 import { lowerCompleteness, lowerListRows } from "./capture.ts";
-import { rowIds } from "./page-rows.ts";
 import { loadViewPages, readPageAt } from "./read.ts";
 
 /** `envelope` with the rows of its stored pages appended to `data.rows`, and the completeness recomputed from what is now present.
@@ -30,9 +29,8 @@ export async function withStoredPages(session: Session, envelope: Envelope): Pro
   const rows: Array<Record<string, unknown>> = [];
   const missing: string[] = [];
   const invalid: string[] = [];
-  const seen = new Set<string>(rowIds(data.rows));
   for (const ref of refs) {
-    const page = await readPageAt(loaded.value, ref.position, seen);
+    const page = await readPageAt(loaded.value, ref.position);
     if (page.ok) {
       rows.push(...lowerListRows(graph, record.repo, page.value.rows));
     } else if (page.error.code === "NOT_FOUND") {

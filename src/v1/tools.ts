@@ -685,7 +685,9 @@ async function viewResult(call: Call): Promise<OperationOutcome> {
   const envelope: Envelope = paged.value;
   const data = envelope.data as Json;
   const items: Item[] = [];
-  if (envelope.component === "list") {
+  if (envelope.completeness.status === "unsupported") {
+    // Unsupported views have a reason and deliberately have no component data.
+  } else if (envelope.component === "list") {
     for (const row of data.rows as Json[]) {
       // a stored first page is checked by the host when it is imported, a stored page when it is read; a row that is neither is storage damage
       if (typeof row !== "object" || row === null || typeof row.cells !== "object" || row.cells === null) return failure(call.format, "STORAGE_CORRUPT", `the stored view "${entry.viewId}" of run "${runId}" holds a row that is not a row with cells`, { details: { runId, storedViewId: entry.viewId } });

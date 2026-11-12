@@ -163,7 +163,7 @@ export function openV1Reader(session: Session): V1Reader {
     async page(key) {
       const view = await loadViewPages(session, key);
       if (!view.ok) return view;
-      return readPageAt(view.value, key.position, new Set(rowIds((view.value.view.data as { rows?: unknown } | undefined)?.rows)));
+      return readPageAt(view.value, key.position);
     },
     async run(runId) {
       const record = await committedImport(session, runId);
@@ -253,7 +253,33 @@ export async function loadViewPages(session: Session, key: Omit<PageKey, "positi
  * every earlier page) and is extended with this page's: row ids are unique over the view. Checks, in order: the reference exists; the body file
  * exists (NOT_FOUND) and is JSON of the right shape; its rows hash to the address the reference names and are as many as it counts; every row is
  * a row of the view's list (schema, declared columns, unique ids); every row target is an object of the capture. */
-export async function readPageAt(view: ViewPages, position: number, seen: Set<string>): Promise<Result<StoredPage>> {
+type PagePrefix = Result<{ seen: Set<string>; page?: StoredPage }>;
+const pagePrefixes = new WeakMap<ViewPages, { tail: Promise<PagePrefix>; pages: Array<Promise<Result<StoredPage>>> }>();
+
+/** CLAIM(S29): the reader owns all preceding-page validation, including concurrent direct reads [page-reader.test.ts]. */
+export async function readPageAt(view: ViewPages, position: number): Promise<Result<StoredPage>> {
+  if (!Number.isInteger(position) || position < 1 || position > view.refs.length) return err("NOT_FOUND", "invalid stored page position");
+  let prefix = pagePrefixes.get(view);
+  if (prefix === undefined) {
+    prefix = { tail: Promise.resolve(ok({ seen: new Set(rowIds((view.view.data as { rows?: unknown } | undefined)?.rows)) })), pages: [] };
+    pagePrefixes.set(view, prefix);
+  }
+  // Build the promise chain synchronously, so concurrent callers share one validation per prefix without mutating a shared seen set.
+  while (prefix.pages.length < position) {
+    const at = prefix.pages.length + 1;
+    const next: Promise<PagePrefix> = prefix.tail.then(async (previous) => {
+      if (!previous.ok) return previous;
+      const seen = new Set(previous.value.seen);
+      const result = await readOnePage(view, at, seen);
+      return result.ok ? ok({ seen, page: result.value }) : result;
+    });
+    prefix.pages.push(next.then((result) => result.ok ? ok(result.value.page as StoredPage) : result));
+    prefix.tail = next;
+  }
+  return prefix.pages[position - 1] as Promise<Result<StoredPage>>;
+}
+
+async function readOnePage(view: ViewPages, position: number, seen: Set<string>): Promise<Result<StoredPage>> {
   const key: PageKey = { runId: view.runId, captureId: view.graph.captureId, objectId: view.view.objectId, viewId: view.view.viewId, position };
   const where = `page ${position} of view "${key.viewId}" of object "${key.objectId}" in run "${key.runId}"`;
   const ref = view.refs.find((candidate) => candidate.position === position);
