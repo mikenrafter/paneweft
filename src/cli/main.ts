@@ -24,7 +24,7 @@ import { loadAdapters, registerAdapter } from "../v1/adapters.ts";
 import type { JobService } from "../v1/jobs.ts";
 import { createSessionJobService } from "../v1/service.ts";
 import { digestRenderer, openTrustStore } from "../v1/renderer.ts";
-import { INVENTORY_FILE, loadInventory, updateInventory } from "../v1/inventory.ts";
+import { INVENTORY_FILE, formatInventory, loadInventory, updateInventory } from "../v1/inventory.ts";
 import { writeDurably } from "../v1/durable.ts";
 import type { Catalogue } from "../generated/v1/Catalogue.ts";
 
@@ -491,7 +491,7 @@ async function ownerCommand(parsed: Parsed, session: Session | null, dir: string
     const current = await loadInventory(root);
     if (!current.ok) return errorBody("INVALID_ARGUMENT", current.message, io);
     const update = updateInventory(stored.catalogue, current.value, parsed.values.has("--prune"));
-    await writeDurably(resolve(root, INVENTORY_FILE), `${JSON.stringify(update.inventory, null, 2)}\n`);
+    await writeDurably(resolve(root, INVENTORY_FILE), formatInventory(update.inventory, await readFile(resolve(root, INVENTORY_FILE), "utf8").catch(() => undefined)));
     const parts = [`inventory ${resolve(root, INVENTORY_FILE)}: added ${update.added.views.length} views and ${update.added.examples.length} examples`];
     if (update.changed.length > 0) parts.push(`updated the module or type of ${update.changed.join(", ")}`);
     if (update.pruned.length > 0) parts.push(`dropped ${update.pruned.join(", ")}`);

@@ -64,3 +64,11 @@ export function updateInventory(catalogue: Catalogue, current: Inventory | undef
   const sorted = <T extends { id: string }>(entries: Iterable<T>): T[] => [...entries].sort((a, b) => compareCodeUnits(a.id, b.id));
   return { inventory: { schemaVersion: "paneweft.inventory/1", views: sorted(views.values()), examples: sorted(examples.values()) }, added, changed, missing, pruned };
 }
+
+/** The file text for `inventory`: the indentation of the file it replaces (a tab, else two spaces), the header members on their own lines and one entry per line, so a
+ * hand-kept inventory changes by the entries that were added or removed and nothing else. */
+export function formatInventory(inventory: Inventory, previous: string | undefined): string {
+  const indent = previous !== undefined && /^\t/m.test(previous) ? "\t" : "  ";
+  const entries = (list: ReadonlyArray<Record<string, string>>): string => (list.length === 0 ? "[]" : `[\n${list.map((entry) => `${indent}${indent}{ ${Object.entries(entry).map(([key, value]) => `${JSON.stringify(key)}: ${JSON.stringify(value)}`).join(", ")} }`).join(",\n")}\n${indent}]`);
+  return `{\n${indent}"schemaVersion": "paneweft.inventory/1",\n${indent}"views": ${entries(inventory.views)},\n${indent}"examples": ${entries(inventory.examples)}\n}\n`;
+}

@@ -135,6 +135,28 @@ describe("[F27] paneweft inventory update writes the file", () => {
     expect(JSON.parse(readFileSync(join(root, "paneweft.inventory.json"), "utf8"))).toEqual(inventory);
   });
 
+  // why: F27, field data. ContainMarks keeps its inventory by hand: tab-indented, one entry per line. A first `update` that re-formatted the whole file would bury the one
+  // added entry in a diff of every line; the file keeps its indent and its one-entry-per-line shape, so the review sees one added line.
+  // proves: CLAIM(F27-inventory-command)
+  it("keeps the file's indentation and one-entry-per-line shape, so adding an id adds one line", async () => {
+    const { dir, root } = await stored();
+    const handWritten = [
+      "{", '\t"schemaVersion": "paneweft.inventory/1",', '\t"views": [',
+      ...inventory.views.map((view: any, index: number) => `\t\t{ "id": "${view.id}", "module": "${view.module}" }${index === inventory.views.length - 1 ? "" : ","}`),
+      "\t],", '\t"examples": [',
+      ...inventory.examples.filter((example: any) => example.id !== "watch.redelivered").map((example: any, index: number, all: any[]) => `\t\t{ "id": "${example.id}", "module": "${example.module}", "typeId": "${example.typeId}" }${index === all.length - 1 ? "" : ","}`),
+      "\t]", "}", "",
+    ].join("\n");
+    writeFileSync(join(root, "paneweft.inventory.json"), handWritten);
+    const result = await run(dir, "--repo", "vg", "--adapter", "cargo");
+    expect(result.exitCode, result.stderr).toBe(0);
+    const after = readFileSync(join(root, "paneweft.inventory.json"), "utf8");
+    const before = new Set(handWritten.split("\n"));
+    const added = after.split("\n").filter((line) => !before.has(line));
+    expect(added, "only the new entry (and the comma its neighbour gained) differ").toEqual([`\t\t{ "id": "watch.pending", "module": "watch", "typeId": "vigil::watch::WatchFile" },`, `\t\t{ "id": "watch.redelivered", "module": "watch", "typeId": "vigil::watch::WatchFile" }`]);
+    expect(JSON.parse(after)).toEqual(inventory);
+  });
+
   // why: F27. Nothing stored, nothing to write: the command says to collect first rather than writing an empty inventory.
   // proves: CLAIM(F27-inventory-command)
   it("refuses when no catalogue is stored for the adapter", async () => {
