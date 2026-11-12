@@ -5,7 +5,7 @@
 import { cpSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { runCliInProcess } from "../../test/helpers/cli.ts";
+import { runCliInProcess, spawnPaneweft } from "../../test/helpers/cli.ts";
 import { makeToolWorld } from "../../test/helpers/v1-tool-world.ts";
 import { must } from "../../test/helpers/must.ts";
 import { useTempDirs } from "../../test/helpers/tmp.ts";
@@ -112,6 +112,90 @@ describe("[F27] the update also brings the stored catalogue record in line", () 
     expect(w.stored().inventory.examples.map((example: any) => example.id)).toContain("watch.fresh");
     const listed = await runCliInProcess(["examples", "--repo", "vg", "--format", "json"], { env: { PANEWEFT_SESSION: w.dir } });
     expect(JSON.parse(listed.stdout).notices).toEqual([]);
+  });
+});
+
+describe("[S1] inventory update repairs what the strict refresh rejected", () => {
+  type World = { dir: string; qex: { env: NodeJS.ProcessEnv } };
+  const update = (w: World, ...flags: string[]) => runCliInProcess(["inventory", "update", "--repo", "vg", "--adapter", "cargo", ...flags], { env: { PANEWEFT_SESSION: w.dir } });
+  // a separate process: the in-process CLI would submit to the real qex on PATH, not to the fake one the scenario drives
+  const refresh = (w: World, requestId: string) => spawnPaneweft(["--session", w.dir, "catalogue", "refresh", "--repo", "vg", "--adapter", "cargo", "--request-id", requestId], { env: w.qex.env as Record<string, string> });
+  const ids = (file: string): string[] => JSON.parse(readFileSync(file, "utf8")).examples.map((example: any) => example.id);
+
+  /** R was collected with its inventory (E = watch.redelivered, P = watch.pending); the author then removes E, so the next export lacks it. */
+  async function removed() {
+    const w = await authoring();
+    w.qex.scenario({ catalogueExtra: undefined });
+    must(await w.service.collect(request("rm-0", ["watch.pending"])), "collect");
+    expect((await settle(w.service, "rm-0")).state).toBe("succeeded");
+    w.qex.scenario({ catalogueDrop: ["watch.redelivered"] });
+    must(await w.service.refreshCatalogue({ requestId: "remove-1", repo: "vg", adapter: "cargo" }), "refresh");
+    expect((await settle(w.service, "remove-1")).state).toBe("failed");
+    await w.session.close();
+    return { ...w, file: join(w.root, "paneweft.inventory.json") };
+  }
+
+  // why: S1 (review field r1). R was collected successfully; the author REMOVED one example (E) and kept another (P) in the same module. `catalogue refresh` rejected the new
+  // export before storing it and advised `inventory update --prune`; the update read the last ACCEPTED catalogue, which still has E, so E stayed and the next refresh failed
+  // identically. The update must read the export that was rejected.
+  // proves: CLAIM(S1-update-reads-rejected)
+  it("an intended removal: update --prune drops the removed id and the next refresh succeeds", async () => {
+    const w = await removed();
+    expect(ids(w.file)).toContain("watch.redelivered");
+    const updated = await update(w, "--prune");
+    expect(updated.exitCode, updated.stderr + updated.stdout).toBe(0);
+    expect(ids(w.file), "E is gone").not.toContain("watch.redelivered");
+    expect(ids(w.file), "P stays").toContain("watch.pending");
+    expect(updated.stdout).toContain("watch.redelivered");
+    const again = await refresh(w, "remove-2");
+    expect(again.exitCode, again.stderr + again.stdout).toBe(0);
+    expect(w.stored().catalogue.examples.map((example: any) => example.id), "the accepted catalogue is the new export").not.toContain("watch.redelivered");
+    // the advice the rejected refresh gave names exactly what was run
+    const advice = JSON.parse(readFileSync(join(w.dir, "jobs", "remove-1", "diagnostics.json"), "utf8"))[0].nextAction as string;
+    expect(advice).toContain("paneweft inventory update --repo vg --adapter cargo --prune");
+    expect(advice).toContain("rejected export");
+  });
+
+  // why: S1. The same removal WITHOUT --prune: the id stays (a removal is only dropped when intended), and the command says so and names the flag.
+  // proves: CLAIM(S1-update-reads-rejected)
+  it("without --prune the removed id is kept and reported", async () => {
+    const w = await removed();
+    const kept = await update(w);
+    expect(kept.exitCode, kept.stderr).toBe(0);
+    expect(ids(w.file)).toContain("watch.redelivered");
+    expect(kept.stdout).toContain("watch.redelivered");
+    expect(kept.stdout).toContain("--prune");
+  });
+
+  // why: S1. On a fresh session a strict refresh rejects a new declaration the inventory lacks BEFORE any catalogue is stored; the update then answered NOT_FOUND. The rejected export is
+  // what it works from.
+  // proves: CLAIM(S1-update-reads-rejected)
+  it("a first strict refresh with an addition leaves an export the update can use", async () => {
+    const w = await authoring();
+    must(await w.service.refreshCatalogue({ requestId: "add-1", repo: "vg", adapter: "cargo" }), "refresh");
+    expect((await settle(w.service, "add-1")).state).toBe("failed");
+    expect(existsSync(join(w.dir, "catalogues", "vg", "cargo.json")), "nothing accepted yet").toBe(false);
+    await w.session.close();
+    const updated = await update(w);
+    expect(updated.exitCode, updated.stderr + updated.stdout).toBe(0);
+    expect(ids(join(w.root, "paneweft.inventory.json"))).toContain("watch.fresh");
+    const again = await refresh(w, "add-2");
+    expect(again.exitCode, again.stderr + again.stdout).toBe(0);
+  });
+
+  // why: S1. The rejected export is the LAST export only. A later export that was accepted (the author restored E) or that failed (a compile error) supersedes it; an update must
+  // never act on an export the sources have moved past, or --prune would drop an id that is declared again.
+  // proves: CLAIM(S1-rejected-is-latest)
+  it("a later export, accepted or failed, supersedes the rejected one", async () => {
+    for (const later of [{ catalogueDrop: [] }, { exportExit: 1 }]) {
+      const w = await removed();
+      w.qex.scenario(later);
+      const second = await refresh(w, "remove-3");
+      expect(second.exitCode === 0, JSON.stringify(later) + second.stdout + second.stderr).toBe("exportExit" in later ? false : true);
+      const updated = await update(w, "--prune");
+      expect(updated.exitCode, updated.stderr + updated.stdout).toBe(0);
+      expect(ids(w.file), JSON.stringify(later)).toContain("watch.redelivered");
+    }
   });
 });
 

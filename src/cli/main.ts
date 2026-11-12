@@ -24,7 +24,7 @@ import { loadAdapters, registerAdapter } from "../v1/adapters.ts";
 import type { JobService } from "../v1/jobs.ts";
 import { createSessionJobService } from "../v1/service.ts";
 import { digestRenderer, identifyRenderer, openTrustStore } from "../v1/renderer.ts";
-import { INVENTORY_FILE, formatInventory, loadInventory, updateInventory } from "../v1/inventory.ts";
+import { INVENTORY_FILE, formatInventory, loadInventory, rejectedCataloguePath, updateInventory, type RejectedCatalogue } from "../v1/inventory.ts";
 import { writeDurably } from "../v1/durable.ts";
 import type { Catalogue } from "../generated/v1/Catalogue.ts";
 
@@ -499,17 +499,22 @@ async function ownerCommand(parsed: Parsed, session: Session | null, dir: string
     if (!loaded.ok) return printError(loaded.error, io);
     const adapter = loaded.value.find((candidate) => candidate.repo === repo && candidate.id === adapterId);
     if (adapter === undefined) return errorBody("NOT_FOUND", `no adapter "${adapterId}" is registered for repository "${repo}": ${loaded.value.map((candidate) => `${candidate.repo}/${candidate.id}`).join(", ") || "none registered"}`, io);
+    // S1: the export the inventory check rejected is the latest one and holds the author's intended addition or removal; the stored catalogue is the last ACCEPTED export
+    const rejected = await readFile(rejectedCataloguePath(sessionDir, repo, adapterId), "utf8").then((text) => JSON.parse(text) as RejectedCatalogue, () => undefined);
     const stored = await readFile(resolve(sessionDir, "catalogues", repo, `${adapterId}.json`), "utf8").then((text) => JSON.parse(text) as { catalogue: Catalogue }, () => undefined);
-    if (stored === undefined) return errorBody("NOT_FOUND", `no catalogue is stored for ${repo}/${adapterId}: collect an example first (the collection exports and stores the catalogue), then update the inventory`, io);
+    if (rejected === undefined && stored === undefined) return errorBody("NOT_FOUND", `no catalogue is stored for ${repo}/${adapterId} and no export was rejected: run \`paneweft catalogue refresh --repo ${repo} --adapter ${adapterId}\` or collect an example first (either exports the catalogue), then update the inventory`, io);
+    const source = rejected?.catalogue ?? (stored as { catalogue: Catalogue }).catalogue;
     const root = resolve(adapter.workspaceRoot, adapter.entry);
     const current = await loadInventory(root);
     if (!current.ok) return errorBody("INVALID_ARGUMENT", current.message, io);
-    const update = updateInventory(stored.catalogue, current.value, parsed.values.has("--prune"));
+    const update = updateInventory(source, current.value, parsed.values.has("--prune"));
     await writeDurably(resolve(root, INVENTORY_FILE), formatInventory(update.inventory, await readFile(resolve(root, INVENTORY_FILE), "utf8").catch(() => undefined)));
-    // the stored record carries the inventory it was exported against and the ids that file did not list; both now describe the file just written
-    const { inventoryDrift: _drift, ...record } = stored as unknown as Record<string, unknown>;
-    await writeDurably(resolve(sessionDir, "catalogues", repo, `${adapterId}.json`), JSON.stringify({ ...record, inventory: update.inventory }));
-    const parts = [`inventory ${resolve(root, INVENTORY_FILE)}: added ${update.added.views.length} views and ${update.added.examples.length} examples`];
+    // the stored record carries the inventory it was exported against and the ids that file did not list; both now describe the file just written (a rejected export is not the stored record: the next refresh stores it)
+    if (rejected === undefined && stored !== undefined) {
+      const { inventoryDrift: _drift, ...record } = stored as unknown as Record<string, unknown>;
+      await writeDurably(resolve(sessionDir, "catalogues", repo, `${adapterId}.json`), JSON.stringify({ ...record, inventory: update.inventory }));
+    }
+    const parts = [`inventory ${resolve(root, INVENTORY_FILE)}${rejected === undefined ? "" : ` (from the export rejected at ${rejected.rejectedAt}; refresh the catalogue to accept it)`}: added ${update.added.views.length} views and ${update.added.examples.length} examples`];
     if (update.changed.length > 0) parts.push(`updated the module or type of ${update.changed.join(", ")}`);
     if (update.pruned.length > 0) parts.push(`dropped ${update.pruned.join(", ")}`);
     else if (update.missing.length > 0) parts.push(`kept ${update.missing.join(", ")}, which the catalogue lacks (pass --prune to drop them once the removal is intended)`);

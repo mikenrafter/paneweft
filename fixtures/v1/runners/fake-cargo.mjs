@@ -3,7 +3,7 @@
 // It never compiles anything. Steered by $FAKE_RUNNER_SCENARIO (a JSON file, re-read at start):
 //   { "mode": "pass" | "fail" | "hang" | "heartbeat" , "heartbeatFile": path, "countFile": path,
 //     "padBytes": n (trailing JSON whitespace so each capture file is at least n bytes), "declaredCollectionBytes": n (the collectionBytes each capture declares),
-//     "catalogueExtra": path of {types?, views?, examples?} added to the catalogue the export writes; "exportExit": n (the catalogue export fails with this status),
+//     "catalogueDrop": example ids the export no longer declares (an intended removal); "catalogueExtra": path of {types?, views?, examples?} added to the catalogue the export writes; "exportExit": n (the catalogue export fails with this status),
 //     "captureFile": path of a complete object graph that replaces the built-in one (captureId, runId and invocationId are stamped),
 //     "checkSource": {path, line} recorded on the failing check (what check!/check_eq! write), "extraLog": text printed before the test lines (another test's panic, F10) }
 // Each execution appends one line to countFile (so a test can prove ONE execution) and writes worker artifacts in the layout of
@@ -29,7 +29,7 @@ if (process.env.PANEWEFT_CATALOGUE === "1") {
   // catalogueExtra: types, views and examples the "compiled" repository declares beyond the fixture (what an agent's edit adds); re-read at every start
   const extra = scenario.catalogueExtra ? JSON.parse(readFileSync(scenario.catalogueExtra, "utf8")) : {};
   mkdirSync(join(staging, "catalogue"), { recursive: true });
-  writeFileSync(join(staging, "catalogue", "fake-lib.json"), JSON.stringify({ schemaVersion: "paneweft.catalogue-part/1", source: "lib", types: [...catalogue.types, ...(extra.types ?? [])], views: [...catalogue.views, ...(extra.views ?? [])], examples: [...catalogue.examples, ...(extra.examples ?? [])] }));
+  writeFileSync(join(staging, "catalogue", "fake-lib.json"), JSON.stringify({ schemaVersion: "paneweft.catalogue-part/1", source: "lib", types: [...catalogue.types, ...(extra.types ?? [])], views: [...catalogue.views, ...(extra.views ?? [])], examples: [...catalogue.examples, ...(extra.examples ?? [])].filter((example) => !(scenario.catalogueDrop ?? []).includes(example.id)) }));
   process.exit(0);
 }
 

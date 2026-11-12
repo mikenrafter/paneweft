@@ -21,7 +21,7 @@ import { buildProcess, checkCollectRequest, foldExactFilters, parseCargoLists, r
 import { readStaging } from "./staging.ts";
 import { admitLowering, validateObjectGraph } from "./capture.ts";
 import { compileDiagnostics } from "./compile-diagnostics.ts";
-import { loadInventory } from "./inventory.ts";
+import { loadInventory, rejectedCataloguePath, type RejectedCatalogue } from "./inventory.ts";
 import { checkInventory, mergeCatalogue, type CataloguePart, type InventoryProblem } from "./catalogue.ts";
 import { qualifyDiagnosticId } from "./diagnostic-id.ts";
 import { compareFingerprints, computeFingerprint, sampleConsistency, type Fingerprint } from "./fingerprint.ts";
@@ -468,6 +468,8 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
   }
 
   async function finalizeCatalogue(id: string, adapter: AdapterRecord, qexJob: QexJob, log: string, resolved: Resolved, strictInventory: boolean): Promise<{ status: NonNullable<JobView["collectionStatus"]>; snapshotIds: string[]; diagnostics: Diagnostic[]; catalogue?: Catalogue }> {
+    // S1: this export supersedes the one an earlier check rejected, whatever becomes of this one
+    await rm(rejectedCataloguePath(deps.sessionDir, adapter.repo, adapter.id), { force: true });
     const staging = await readStaging(resolved.stagingDir, resolved.limits?.effective.collectionBytes);
     const diagnostics: Diagnostic[] = [];
     const name = await packageName(adapter);
@@ -511,7 +513,9 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
       const additions = checked.problems.filter((problem): problem is Extract<InventoryProblem, { kind: "unlisted" }> => problem.kind === "unlisted");
       const blocking = strictInventory ? checked.problems : checked.problems.filter((problem) => problem.kind !== "unlisted");
       if (blocking.length > 0) {
-        for (const [index, problem] of blocking.entries()) diagnostics.push({ id: `diag-inventory-${index + 1}`, category: "registration", message: inventoryMessage(problem).slice(0, 2000), invariant: "the compiled catalogue matches the checked-in inventory", nextAction: `If the addition is intended, run \`paneweft inventory update --repo ${adapter.repo} --adapter ${adapter.id}\` and review the change to paneweft.inventory.json; if a removal is intended, update the file in the same reviewed change (\`paneweft inventory update ... --prune\`); otherwise restore the import or the declaration. Then refresh the catalogue.` } as Diagnostic);
+        for (const [index, problem] of blocking.entries()) diagnostics.push({ id: `diag-inventory-${index + 1}`, category: "registration", message: inventoryMessage(problem).slice(0, 2000), invariant: "the compiled catalogue matches the checked-in inventory", nextAction: `If the change is intended, run \`paneweft inventory update --repo ${adapter.repo} --adapter ${adapter.id}\` for an addition or \`paneweft inventory update --repo ${adapter.repo} --adapter ${adapter.id} --prune\` for a removal (it reads this rejected export, not the last accepted catalogue) and review the change to paneweft.inventory.json; otherwise restore the import or the declaration. Then refresh the catalogue.` } as Diagnostic);
+        const rejected: RejectedCatalogue = { schemaVersion: "paneweft.rejected-catalogue/1", repo: adapter.repo, adapter: adapter.id, catalogue: merged.value, rejectedAt: now() };
+        await writeDurably(rejectedCataloguePath(deps.sessionDir, adapter.repo, adapter.id), JSON.stringify(rejected));
         return { status: "failed", snapshotIds: [], diagnostics };
       }
       unlisted = additions.map((problem) => ({ id: problem.id, module: problem.module }));

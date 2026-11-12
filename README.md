@@ -288,7 +288,7 @@ paneweft serve                                 # the viewer: the question, the s
 
 `module` is what the compiled catalogue names: the crate-relative module path for Rust, the repository-relative file path for TypeScript; entries are sorted by id. After a
 collect has stored the catalogue, `paneweft inventory update --repo vigil --adapter cargo` writes the file from it: it adds new ids, keeps declared ids the catalogue lacks (and says
-so; `--prune` drops them), and keeps the file's indentation and one-entry-per-line shape, so review is one added line. A `collect` is not blocked by an id the file does not list yet
+so; `--prune` drops them), and keeps the file's indentation and one-entry-per-line shape, so review is one added line. When a strict refresh (or a collect that finds a removal) rejected the new export, the update works from that rejected export, which is where an intended addition or removal is; a later export of the adapter replaces it. A `collect` is not blocked by an id the file does not list yet
 (discovery replies carry a notice naming it); `paneweft catalogue refresh` and CI are the strict check.
 
 ### 6. Release builds must not contain the SDK: how to check

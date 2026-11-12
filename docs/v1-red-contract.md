@@ -222,7 +222,7 @@ repository-relative file path for TypeScript. It guards against LOSS: a declared
 any more, a changed return type, a duplicate. An id the catalogue has and the file does not list ("unlisted") is an addition in
 progress: a `collect` runs anyway and stores the catalogue with `inventoryDrift.unlisted`, and every discovery reply carries a notice
 naming the ids and the command; `catalogue refresh` (the check) fails on it. `paneweft inventory update --repo R --adapter A` (owner
-or developer command, CLI only: it writes into the repository) writes the file from the stored catalogue: it adds the missing entries,
+or developer command, CLI only: it writes into the repository) writes the file from the last export, the one the inventory check rejected (kept apart as `rejected-catalogues/<repo>/<adapter>.json` until the adapter is exported again) or else the stored catalogue: it adds the missing entries,
 takes the catalogue's module and type for ids it already lists, keeps declared ids the catalogue lacks and says so, and drops them
 only with `--prune`.
 

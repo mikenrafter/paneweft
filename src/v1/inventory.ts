@@ -1,7 +1,7 @@
 // The checked-in view inventory: `paneweft.inventory.json` at the adapter root (S15, F27). It lists the stable ids a repository declares, each with the module
 // that owns it, so that a removed import or a removed id is noticed. Format: `paneweft.inventory/1 { views: [{ id, module }], examples: [{ id, module, typeId }] }`,
 // entries sorted by id. `module` is what the compiled catalogue calls the module: the crate-relative module path for Rust (`watch::paneweft_views`), the
-// repository-relative file path for TypeScript (`src/mappings/containerMappings.paneweft.ts`). `paneweft inventory update` writes it from the stored catalogue.
+// repository-relative file path for TypeScript (`src/mappings/containerMappings.paneweft.ts`). `paneweft inventory update` writes it from the last export: the one the inventory check rejected, else the stored catalogue.
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { compareCodeUnits } from "../core/canonical.ts";
@@ -10,6 +10,13 @@ import type { Inventory } from "../generated/v1/Inventory.ts";
 import { validateAgainstV1 } from "./schemas.ts";
 
 export const INVENTORY_FILE = "paneweft.inventory.json";
+
+/** S1: where the LAST export that the inventory check rejected is kept, apart from `catalogues/` (that directory holds only accepted catalogues, and discovery reads every file in it).
+ * `paneweft inventory update` works from this export, because the intended addition or removal is in it and not in the last accepted catalogue. A later export of the adapter, accepted or
+ * failed, removes the file: it describes sources the author has moved past. */
+export const rejectedCataloguePath = (sessionDir: string, repo: string, adapter: string): string => join(sessionDir, "rejected-catalogues", repo, `${adapter}.json`);
+
+export interface RejectedCatalogue { schemaVersion: "paneweft.rejected-catalogue/1"; repo: string; adapter: string; catalogue: Catalogue; rejectedAt: string }
 
 /** The repository's checked-in inventory (S15): absent is fine, present must be a valid inventory. */
 export async function loadInventory(root: string): Promise<{ ok: true; value: Inventory | undefined } | { ok: false; message: string }> {
