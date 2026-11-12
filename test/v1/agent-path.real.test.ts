@@ -2,7 +2,7 @@
 // vitest adapter against fixtures/packages/containmarks-lite. Only the queue is faked (it runs the command). This is the SDK <-> host
 // contract end to end: worker artifacts written by the Rust and TypeScript SDKs are the host's only input.
 import { execFileSync } from "node:child_process";
-import { cpSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { executeV1Operation } from "../../src/v1/tools.ts";
@@ -117,5 +117,30 @@ describe("[IV22 groundwork] TypeScript: real vitest, real SDK", () => {
     const renamed = ambiguous.details.candidates.find((c: any) => c.exampleId === "mapping.renamed");
     const details = await call("view_result", { run: "run-ts-1", view: renamed.view });
     expect(details.items.map((f: any) => [f.path, f.example]).filter(([, e]: any) => e !== undefined)).toEqual(expect.arrayContaining([["$.original index", 4], ["$.container ID", "firefox-container-3"], ["$.backup name", "Research"]]));
+  }, 600_000);
+});
+
+describe("[T8] TypeScript: a collect on a repository with no stored catalogue", () => {
+  // why: T4 made the first collect export the catalogue itself. The vitest adapter takes that path through the host-owned script in `--catalogue` mode and then
+  // in run mode; the cargo path had a test, the vitest path none. No `catalogue refresh` is run here.
+  // proves: CLAIM(T4-run-exports)
+  it("exports the catalogue, resolves the id and collects, with no owner step", async () => {
+    const { session, dir } = await open();
+    const root = join(FIXTURES, "packages/containmarks-lite");
+    must(await session.registerRepository({ id: "cm", root }), "register");
+    const qex = fake();
+    const adapter = { schemaVersion: "paneweft.adapter/1", id: "vitest", kind: "vitest", grammar: "vitest-run/1", repo: "cm", executable: process.execPath, workspaceRoot: root, entry: ".", features: [], supportedVersions: ["5.1"], limits: { timeoutMs: 300_000, logBytes: 1_048_576 }, queue: { wrapper: "qex", cpu: "1", mem: "1GB" } } as any;
+    const jobs = createJobService({ session, sessionDir: dir, qex: qex.client, adapters: [adapter] });
+    expect(existsSync(join(dir, "catalogues", "cm", "vitest.json")), "no owner step has run").toBe(false);
+    must(await jobs.collect({ requestId: "ts-first", repo: "cm", adapter: "vitest", examples: ["mapping.renamed"] }), "collect");
+    const done = await vi.waitFor(async () => { const s = must(await jobs.status("ts-first", { waitSeconds: 5 }), "status"); expect(["succeeded", "failed"]).toContain(s.state); return s; }, { timeout: 280_000, interval: 250 });
+    expect(done, JSON.stringify(done)).toMatchObject({ state: "succeeded", counts: { selected: 1, passed: 1 } });
+    expect(qex.jobs().map((job) => job.state), "one catalogue export, then the run").toEqual(["completed", "completed"]);
+    const record = JSON.parse(readFileSync(join(dir, "catalogues", "cm", "vitest.json"), "utf8"));
+    expect(record.catalogue.examples.map((example: any) => example.id), "the export stored the catalogue").toContain("mapping.renamed");
+    // mapping.renamed runs mapping.work inside it (the fixture nests them), so the run records both
+    const outcomes = must(await openV1Reader(session).run("run-ts-first"), "run").run.examples.map((example: any) => [example.id, example.outcome]);
+    expect(outcomes).toContainEqual(["mapping.renamed", "passed"]);
+    expect(outcomes.every((pair: unknown[]) => pair[1] === "passed")).toBe(true);
   }, 600_000);
 });
