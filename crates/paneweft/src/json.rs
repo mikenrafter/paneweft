@@ -33,6 +33,11 @@ fn write_canonical(value: &Json, out: &mut String) {
             }
             out.push(']');
         }
+        Json::Number(number) => {
+            let number = number.as_f64().expect("JSON numbers are finite IEEE 754 values");
+            if number == 0.0 { out.push('0'); }
+            else { out.push_str(ryu_js::Buffer::new().format(number)); }
+        }
         other => out.push_str(&serde_json::to_string(other).expect("scalar serializes")),
     }
 }
@@ -90,5 +95,20 @@ mod tests {
     fn canonical_sorts_keys_at_every_level() {
         let value = serde_json::json!({"b": {"y": 1, "x": [ {"d": 1, "c": 2} ]}, "a": null});
         assert_eq!(canonical(&value), r#"{"a":null,"b":{"x":[{"c":2,"d":1}],"y":1}}"#);
+    }
+}
+
+#[cfg(test)]
+mod jcs_fixtures {
+    use super::*;
+    // WHY CLAIM(S28): independent literal encodings/hashes shared with the host, not a writer/reader round trip.
+    #[test]
+    fn s28_literal_cross_language_hashes() {
+        let fixtures: Json = serde_json::from_str(include_str!("../../../fixtures/v1/canonical-hashes.json")).unwrap();
+        for fixture in fixtures.as_array().unwrap() {
+            let value: Json = serde_json::from_str(fixture["source"].as_str().unwrap()).unwrap();
+            assert_eq!(canonical(&value), fixture["canonical"].as_str().unwrap(), "{}", fixture["name"]);
+            assert_eq!(sha256_hex(&canonical(&value)), fixture["sha256"].as_str().unwrap());
+        }
     }
 }

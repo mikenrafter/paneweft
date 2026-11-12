@@ -23,6 +23,8 @@ async function cargoWorld() {
   cpSync(join(FIXTURES, "crates/watchfile"), root, { recursive: true });
   const manifest = readFileSync(join(root, "Cargo.toml"), "utf8");
   writeFileSync(join(root, "Cargo.toml"), manifest.replace("../../../crates/paneweft", join(REPO_ROOT, "crates/paneweft")));
+  // Dependency resolution is fixture preparation. Fingerprint the resolved lock, so the test isolates the deliberate source edit.
+  execFileSync(cargoBinary(), ["generate-lockfile", "--manifest-path", join(root, "Cargo.toml"), "--offline"], { cwd: root, stdio: "pipe" });
   makeRepo(root, { ".gitignore": "target/\n" });
   must(await session.registerRepository({ id: "vg", root }), "register");
   const qex = fake();
