@@ -565,6 +565,7 @@ function jobItem(view: Json): Item {
   if (view.diagnosticIds?.length > 0) parts.push(`diagnostics ${view.diagnosticIds.join(",")}`);
   if (view.indeterminate !== undefined) parts.push(`indeterminate: ${view.indeterminate.evidence.join("; ")}`);
   if (view.counts !== undefined) parts.push(`counts ${Object.entries(view.counts).map(([key, value]) => `${key}=${value}`).join(" ")}`);
+  if (view.limits?.clamped?.length > 0) parts.push(`limits clamped: ${view.limits.clamped.map((name: string) => `${name}=${view.limits.effective[name]} (asked ${view.limits.requested[name]})`).join(", ")}`);
   const lines = [parts.join("; ")];
   if (view.log !== undefined) lines.push(`log: ${JSON.stringify(view.log.text)}${view.log.cursor === null ? "" : ` (log cursor ${view.log.cursor})`}`);
   return { json: view, text: lines.join("\n") };

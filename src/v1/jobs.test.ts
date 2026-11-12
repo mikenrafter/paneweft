@@ -455,6 +455,64 @@ describe("[S3] a collect request can only lower the capture bounds", () => {
   });
 });
 
+describe("[S3r2] the operator's ceilings bind every collect, and the reply says what was clamped", () => {
+  const SDK = { depth: 4, objects: 1000, references: 4000, rootBytes: 2 * 1024 * 1024, stringBytes: 16 * 1024, pageRows: 100, collectionBytes: 32 * 1024 * 1024, roots: 100, viewRows: 10_000, viewBudgetMs: 100 };
+  const limitsEnv = (qex: Awaited<ReturnType<typeof world>>["qex"]): Record<string, number> | undefined => {
+    const submit = qex.calls().find((c) => c[0] === "submit")!;
+    const entry = submit.filter((_, i) => submit[i - 1] === "--env").find((pair) => pair.startsWith("PANEWEFT_LIMITS="));
+    return entry === undefined ? undefined : JSON.parse(entry.slice("PANEWEFT_LIMITS=".length));
+  };
+  const withCeilings = async (limitCeilings: Record<string, number>) => {
+    const { session, dir } = await open();
+    const qex = fake();
+    const adapter = fakeCargoAdapter({ limitCeilings });
+    const service = createJobService({ session, sessionDir: dir, qex: qex.client, adapters: [adapter], catalogueFor: async () => catalogue, cancelWaitMs: 3000 });
+    return { qex, service };
+  };
+
+  // why: S3 (round 2). Ceilings were applied to the members a request NAMED. A request without `limits`, with `{}`, or with other members left
+  // the SDK defaults active, so the operator's number never bit. Effective = min(operator ceiling, SDK default), and a request may only lower it.
+  // Rejects an implementation that starts from the SDK defaults and applies the ceiling to requested members only.
+  // proves: CLAIM(S3-clamp)
+  it.each([["no limits", undefined], ["an empty object", {}], ["another bound", { rootBytes: 1024 }]])("applies the ceiling when the request has %s", async (_name, limits) => {
+    const { qex, service } = await withCeilings({ objects: 3 });
+    must(await service.collect(request("job-c1", limits === undefined ? {} : { limits })), "collect");
+    expect(limitsEnv(qex)).toEqual({ objects: 3, ...(limits === undefined ? {} : limits) });
+  });
+
+  // why: S3 (round 2). A ceiling ABOVE the SDK default does not raise anything: the effective number is the smaller of the two.
+  // proves: CLAIM(S3-clamp)
+  it("never lets a ceiling above the SDK default raise a bound", async () => {
+    const { qex, service } = await withCeilings({ objects: 1_000_000, collectionBytes: 2 ** 40 });
+    must(await service.collect(request("job-c2", { limits: { objects: 999_999 } })), "collect");
+    expect(limitsEnv(qex)).toEqual({ objects: 1000 });
+  });
+
+  // why: S3 (round 2). The owner wants to SEE the clamp: the job reply carries what was requested, what is in force for every bound, and which
+  // requested bounds were cut. A request that asks for no more than allowed clamps nothing.
+  // proves: CLAIM(S3-clamp)
+  it("reports requested, effective and clamped in the reply of collect and of status", async () => {
+    const { service } = await withCeilings({ objects: 3 });
+    const created = must(await service.collect(request("job-c3", { limits: { objects: 500, rootBytes: 1024 } })), "collect");
+    const expected = { requested: { objects: 500, rootBytes: 1024 }, effective: { ...SDK, objects: 3, rootBytes: 1024 }, clamped: ["objects"] };
+    expect((created as any).limits).toEqual(expected);
+    expect(((await settle(service, "job-c3", ["succeeded", "failed"])) as any).limits).toEqual(expected);
+    const modest = must(await service.collect(request("job-c4", { limits: { objects: 2 } })), "collect");
+    expect((modest as any).limits).toEqual({ requested: { objects: 2 }, effective: { ...SDK, objects: 2 }, clamped: [] });
+    const none = must(await service.collect(request("job-c5")), "collect");
+    expect((none as any).limits).toEqual({ requested: {}, effective: { ...SDK, objects: 3 }, clamped: [] });
+  });
+
+  // why: S3 (round 2). The same request id with the same EFFECTIVE bounds is the same job: no limits, `{}` and a request equal to the default
+  // are one parameter set.
+  // proves: CLAIM(S3-clamp) CLAIM(S3-job-lifecycle)
+  it("treats absent, empty and default-equal limits as one request", async () => {
+    const { service } = await withCeilings({});
+    must(await service.collect(request("job-c6")), "collect");
+    expect(must(await service.collect(request("job-c6", { limits: {} })), "collect").created).toBe(false);
+  });
+});
+
 describe("[S6] an intent is published whole or not at all", () => {
   // why: S6. createIntent opened intent.json with O_EXCL and wrote it afterwards; a concurrent caller that read the new, still empty file
   // took it for an abandoned partial, unlinked it, and published ITS parameters under the same request id, so two callers both "created"

@@ -20,7 +20,7 @@ import { checkInventory, mergeCatalogue, type CataloguePart, type InventoryProbl
 import { qualifyDiagnosticId } from "./diagnostic-id.ts";
 import { compareFingerprints, computeFingerprint, sampleConsistency, type Fingerprint } from "./fingerprint.ts";
 import { importCollection } from "./import.ts";
-import { resolveRequestedLimits } from "./limits.ts";
+import { resolveRequestedLimits, type LimitsReport } from "./limits.ts";
 import { QEX_TERMINAL_STATES, type QexClient, type QexJob } from "./qex.ts";
 import { snapshotOfRun } from "./read.ts";
 
@@ -50,6 +50,8 @@ export interface JobView {
   counts?: Record<string, number>;
   /** log slice for collection_status. */
   log?: { text: string; cursor: string | null };
+  /** The capture bounds the job runs under: what was requested, what is in force for every bound, and which requests were clamped (S3). */
+  limits?: LimitsReport;
 }
 
 export interface CancelResult {
@@ -130,7 +132,7 @@ interface Intent {
   dedupeKey: string;
   params: Params;
   createdAt: string;
-  resolved?: { selection: Selection; process: ProcessSpec; timeoutMs: number; runId: string; stagingDir: string };
+  resolved?: { selection: Selection; process: ProcessSpec; timeoutMs: number; runId: string; stagingDir: string; limits?: LimitsReport };
 }
 interface State {
   schemaVersion: "paneweft.job/1";
@@ -146,7 +148,7 @@ interface State {
 
 function normalizeParams(request: { repo: string; adapter: string; examples: string[]; views?: string[]; limits?: Record<string, number> }, mode: "run" | "catalogue"): Params {
   const sorted = (list: string[]): string[] => [...new Set(list)].sort();
-  return { repo: request.repo, adapter: request.adapter, examples: sorted(request.examples), ...(request.views === undefined || request.views.length === 0 ? {} : { views: sorted(request.views) }), ...(request.limits === undefined ? {} : { limits: request.limits }), ...(mode === "catalogue" ? { mode } : {}) };
+  return { repo: request.repo, adapter: request.adapter, examples: sorted(request.examples), ...(request.views === undefined || request.views.length === 0 ? {} : { views: sorted(request.views) }), ...(request.limits === undefined || Object.keys(request.limits).length === 0 ? {} : { limits: request.limits }), ...(mode === "catalogue" ? { mode } : {}) };
 }
 
 const alive = (pid: number): boolean => {
@@ -236,6 +238,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     ...(state?.terminal === undefined ? {} : { collectionStatus: state.terminal.collectionStatus }),
     ...(state?.indeterminate === undefined ? {} : { indeterminate: state.indeterminate }),
     ...(state?.terminal?.counts === undefined ? {} : { counts: state.terminal.counts }),
+    ...(intent.resolved?.limits === undefined ? {} : { limits: intent.resolved.limits }),
   });
 
   const adapterFor = (params: Params): AdapterRecord | undefined => deps.adapters.find((candidate) => candidate.id === params.adapter && candidate.repo === params.repo);
@@ -618,10 +621,11 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
   async function begin(mode: "run" | "catalogue", request: CollectRequest | { requestId: string; repo: string; adapter: string }, raw: Record<string, unknown>): Promise<Result<JobView>> {
     if (!REQUEST_ID.test(request.requestId)) return err("INVALID_ARGUMENT", `"${request.requestId}" is not a request id (letters, digits, dot, dash, underscore; at most 64)`, { errors: [{ code: "PATTERN", pointer: "/requestId", constraint: `pattern: ${REQUEST_ID.source}`, hint: "Use a fresh short id; the same id with the same parameters returns the same job." }] });
     const examples = "examples" in request ? request.examples : [];
-    // S3: the requested bounds are validated and clamped to the adapter's ceilings BEFORE they are recorded or handed to the worker
+    // S3: the bounds the job runs under are min(operator ceiling, SDK default) for EVERY bound, lowered further only by the request; they are
+    // resolved BEFORE they are recorded or handed to the worker, and the reply reports what was clamped
     const limits = resolveRequestedLimits("limits" in request ? request.limits : undefined, adapterFor({ repo: request.repo, adapter: request.adapter, examples: [] })?.limitCeilings);
     if (!limits.ok) return limits;
-    const params = normalizeParams({ repo: request.repo, adapter: request.adapter, examples, ...("views" in request ? { views: request.views } : {}), ...(limits.value === undefined ? {} : { limits: limits.value }) }, mode);
+    const params = normalizeParams({ repo: request.repo, adapter: request.adapter, examples, ...("views" in request ? { views: request.views } : {}), limits: limits.value.env }, mode);
     const id = request.requestId;
     const existing = await readIntent(id);
     if (existing !== undefined) {
@@ -648,7 +652,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     if (!built.ok) return built;
     const timeoutMs = adapter.limits.timeoutMs;
     const process = adapter.grammar === "cargo-test/1" ? { ...built.value, argv: foldExactFilters(built.value.argv) } : built.value;
-    const created = await createIntent(id, params, { selection, process, timeoutMs, runId, stagingDir });
+    const created = await createIntent(id, params, { selection, process, timeoutMs, runId, stagingDir, limits: limits.value.report });
     if (!created.ok) return created;
     if (!created.value.created) {
       const advanced = await advance(id);
