@@ -54,10 +54,11 @@ describe("[IV22 groundwork] the loop through the CLI", () => {
     const failed = await json(["collection", "status", "e2", "--wait-seconds", "30"]);
     expect(failed.body.items[0]).toMatchObject({ state: "failed", collectionStatus: "failed" });
     const diagnostic = failed.body.items[0].diagnosticIds[0];
-    expect(diagnostic).toBe("diag-inv-1");
+    // S13: the id a status hands out names its run (`diag-inv-1` alone is numbered per collection and repeats across runs)
+    expect(diagnostic).toBe("run-e2:diag-inv-1");
     const explained = await json(["failure", diagnostic]);
     expect(explained.exitCode, explained.stdout).toBe(0);
-    expect(explained.body.items[0]).toMatchObject({ id: "diag-inv-1", category: "assertion", exampleId: "watch.pending", selector: { examples: ["watch.pending"] }, basis: "stored-diagnostic" });
+    expect(explained.body.items[0]).toMatchObject({ id: "diag-inv-1", qualifiedId: "run-e2:diag-inv-1", runId: "run-e2", category: "assertion", exampleId: "watch.pending", selector: { examples: ["watch.pending"] }, basis: "stored-diagnostic" });
     expect(explained.body.items[0].nextAction).toContain("C");
     expect(qex.executions(), "two collections plus one catalogue refresh executed").toHaveLength(3);
   }, 180_000);
