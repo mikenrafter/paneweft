@@ -316,7 +316,8 @@ export function reconcile(kind: "cargo" | "vitest", input: ReconcileInput): Resu
   for (const reported of report.suites ?? []) suites.push({ id: suiteId(reported.phase), phase: reported.phase, outcome: "failed", ...(reported.message === undefined ? {} : { message: reported.message }), examples: reported.examples ?? [] });
   if ((report.unhandledErrors ?? []).length > 0) suites.push({ id: suiteId("run"), phase: "run", outcome: "failed", message: (report.unhandledErrors as string[])[0] as string, examples: exampleIds.filter((id) => finalOf(id).native.outcome === "passed") as Suite["examples"] });
   const explained = exampleIds.some((id) => FAILING.includes(finalOf(id).native.outcome as Outcome)) || missing.length > 0 || cut || input.compile === "failed" || suites.length > 0;
-  if (!explained && input.exit.code !== null && input.exit.code !== 0) suites.push({ id: suiteId("binary"), phase: "binary", outcome: "failed", message: `the test process exited with status ${input.exit.code} after every example had finished`, examples: exampleIds.filter((id) => finalOf(id).native.outcome === "passed") });
+  const unexplainedSignal = input.exit.signal !== null && !cut && input.compile === "ok" && missing.length === 0;
+  if (unexplainedSignal || !explained && input.exit.code !== null && input.exit.code !== 0) suites.push({ id: suiteId("binary"), phase: "binary", outcome: "failed", message: input.exit.signal !== null ? `the test process was terminated by ${input.exit.signal} after every example had finished` : `the test process exited with status ${input.exit.code} after every example had finished`, examples: exampleIds.filter((id) => finalOf(id).native.outcome === "passed") });
   const examples: TestRun["examples"] = [];
   for (const id of [...selected, ...exampleIds.filter((candidate) => !selected.includes(candidate))]) {
     const attempts = byExample.get(id) as Invocation[];

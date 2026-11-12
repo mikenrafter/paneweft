@@ -187,3 +187,24 @@ describe("[IV18] instrumentation compile and typecheck", () => {
     expect(diagnostic!.message).toContain("TS2339");
   }, 180_000);
 });
+
+// WHY CLAIM(S37): rejects reconcile treating a null exit code after SIGSEGV as success once artifacts exist.
+it.each(["cargo", "vitest"] as const)("[S37] %s retains artifacts but clears verification after an unexplained signal", (kind) => {
+  const input = structuredClone(loadFixture<any>(`v1/outcomes/${kind}.scenarios.json`).scenarios.find((s: any) => s.scenario === "all-pass").input);
+  input.exit = { code: null, signal: "SIGSEGV", timedOut: false, cancelled: false };
+  const run = must(reconcile(kind, input), "signal");
+  expect(run.collection.status).toBe("failed");
+  expect(run.invocations.map((i) => i.result)).toEqual([{ captureId: "inv-1", object: "o1" }, { captureId: "inv-2", object: "o1" }]);
+  expect(run.examples.map((e) => e.verified)).toEqual([false, false]);
+  expect(run.suites).toContainEqual(expect.objectContaining({ phase: "binary", outcome: "failed", message: expect.stringContaining("SIGSEGV") }));
+});
+
+// WHY CLAIM(S37): an assertion can explain a nonzero exit code, but cannot explain SIGSEGV or preserve other examples' verification.
+it.each(["cargo", "vitest"] as const)("[S37] %s signal also clears verification when another example already failed", (kind) => {
+  const input = structuredClone(loadFixture<any>(`v1/outcomes/${kind}.scenarios.json`).scenarios.find((s: any) => s.scenario === "assertion-failure").input);
+  input.exit = { code: null, signal: "SIGSEGV", timedOut: false, cancelled: false };
+  const run = must(reconcile(kind, input), "signal with assertion failure");
+  expect(run.collection.status).toBe("failed");
+  expect(run.examples.every((e) => !e.verified)).toBe(true);
+  expect(run.suites.some((s) => s.phase === "binary" && s.outcome === "failed" && s.message?.includes("SIGSEGV"))).toBe(true);
+});
