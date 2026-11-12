@@ -319,8 +319,10 @@ export function lowerCompleteness(view: ViewRecord): Envelope["completeness"] {
 /** List rows of a capture as v0 rows: a row `target` becomes the row's `entity`. Shared by the stored first page and by stored pages read later. */
 export function lowerListRows(graph: Pick<ObjectGraph, "captureId" | "objects">, repo: string, rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
   return rows.map((row) => {
-    const { target, ...rest } = row as { target?: { object?: string } } & Record<string, unknown>;
-    return target?.object === undefined ? rest : { ...rest, entity: { repository: repo, id: entityId(graph, target.object), kind: entityKindOf(recordOf(graph as ObjectGraph, target.object).typeId) } };
+    const { target, ...rest } = row as { target?: { object?: string; notCaptured?: { reason?: string } } } & Record<string, unknown>;
+    // a target the capture did not keep stays on the row as its reason, so a reader can say why there is nothing to open (F19)
+    if (target?.object === undefined) return typeof target?.notCaptured?.reason === "string" ? { ...rest, notCaptured: { reason: target.notCaptured.reason.slice(0, 64) } } : rest;
+    return { ...rest, entity: { repository: repo, id: entityId(graph, target.object), kind: entityKindOf(recordOf(graph as ObjectGraph, target.object).typeId) } };
   });
 }
 

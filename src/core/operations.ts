@@ -27,6 +27,8 @@ import { COMPONENT_EXAMPLES } from "./examples.ts";
 import { LIMITS } from "./limits.ts";
 import { checkFreshness } from "./freshness.ts";
 import { collectedFreshness } from "../v1/snapshot-freshness.ts";
+import { withStoredPages } from "../v1/pages.ts";
+import { notCapturedMessage } from "./not-captured.ts";
 import { rankViews, type RankOutput } from "./registry.ts";
 import { resolveItemSource } from "./links.ts";
 import { readEffectiveView } from "./example-runs.ts";
@@ -448,7 +450,10 @@ async function navigate(session: SessionReader, args: { pane: Record<string, unk
     // the items are those inspect lists: the effective view, which for an example includes its recorded runs (review round 2, S12)
     const effective = await readEffectiveView(session, { viewId: instance.viewId, snapshotId: pane.snapshotId });
     if (!effective.ok) return effective.error.code === "NOT_FOUND" ? unresolved(format, `view "${instance.viewId}" does not exist in snapshot "${pane.snapshotId}"`) : failedFrom(format, effective.error);
-    item = viewItems(effective.value.envelope).find((candidate) => candidate.id === args.itemId);
+    // a collected list keeps rows beyond its first page in stored pages; navigate finds them there, as the viewer does (F19)
+    const paged = await withStoredPages(session, effective.value.envelope);
+    if (!paged.ok) return failedFrom(format, paged.error);
+    item = viewItems(paged.value).find((candidate) => candidate.id === args.itemId);
     if (item === undefined) return unresolved(format, `item "${args.itemId}" does not exist in view "${instance.viewId}" of snapshot "${pane.snapshotId}"`);
     viewKey = { viewId: instance.viewId, snapshotId: pane.snapshotId };
   }
@@ -467,6 +472,11 @@ async function navigate(session: SessionReader, args: { pane: Record<string, unk
     return serve(listing, query, context);
   }
   const target = item === undefined ? undefined : (item.entity ?? (item.result as EntityRef | undefined));
+  if (target === undefined && item?.notCaptured !== undefined) {
+    const notice = { code: "NOT_CAPTURED", itemId: args.itemId, reason: item.notCaptured.reason, message: notCapturedMessage(args.itemId, item.notCaptured.reason) };
+    const payload = { schemaVersion: "paneweft.navigate/1", pane: null, notice, cursor: null };
+    return { ok: true, format, body: format === "json" ? JSON.stringify(payload) : `paneweft.navigate/1\nNOT_CAPTURED: ${notice.message}\n`, payload, cursor: null };
+  }
   if (target === undefined) {
     const notice = { code: "NO_TARGET", itemId: args.itemId, message: `item ${args.itemId} has no entity to open` };
     const payload = { schemaVersion: "paneweft.navigate/1", pane: null, notice, cursor: null };

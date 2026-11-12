@@ -5,7 +5,7 @@
 // Nothing here executes code; the pages are files the import wrote.
 import { err, ok, type Result } from "../core/errors.ts";
 import type { Envelope } from "../core/wire.ts";
-import type { Session } from "../core/session.ts";
+import type { SessionReader } from "../core/session.ts";
 import { lowerCompleteness, lowerListRows } from "./capture.ts";
 import { loadViewPages, readPageAt } from "./read.ts";
 
@@ -14,7 +14,7 @@ import { loadViewPages, readPageAt } from "./read.ts";
  * with the reason (NOT_FOUND on the reader). A page that IS there but is not a valid page of this view (STORAGE_CORRUPT on the reader: not JSON,
  * the wrong shape, a hash that is not its id, a row the list does not accept) is an error naming it, never a throw and never rows the reader made
  * up its mind to believe. */
-export async function withStoredPages(session: Session, envelope: Envelope): Promise<Result<Envelope>> {
+export async function withStoredPages(session: SessionReader, envelope: Envelope): Promise<Result<Envelope>> {
   if (envelope.component !== "list" || !envelope.snapshotId.startsWith("snap-")) return ok(envelope);
   const runId = envelope.snapshotId.slice("snap-".length);
   const dot = envelope.entity.id.lastIndexOf(".");

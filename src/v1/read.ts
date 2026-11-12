@@ -72,6 +72,9 @@ export interface StoredPage {
   unprovenAgainst: number[];
 }
 
+/** What the stored v1 files are read through: the session directory and the committed snapshots (a session, or one read of its manifest). */
+export type StoreReader = Pick<Session, "dir" | "snapshotInfo">;
+
 export interface V1Reader {
   object(key: ObjectKey): Promise<Result<StoredObject>>;
   /** A stored page of a view, validated (D3); readable with no source process alive. */
@@ -135,7 +138,7 @@ export async function readJsonFile<T>(path: string): Promise<T | undefined> {
 }
 
 /** The import record of a run IF its snapshot is committed in the manifest; otherwise the run does not exist for readers. */
-export async function committedImport(session: Pick<Session, "dir" | "snapshotInfo">, runId: string): Promise<ImportRecord | undefined> {
+export async function committedImport(session: StoreReader, runId: string): Promise<ImportRecord | undefined> {
   const record = await readJsonFile<ImportRecord>(join(runDirectory(session, runId), "import.json"));
   if (record === undefined) return undefined;
   const snapshot = await session.snapshotInfo(record.snapshotId);
@@ -205,7 +208,7 @@ const corrupt = <T>(message: string, details?: Record<string, unknown>): Result<
 
 /** What is known about the stored pages of one view of one run: its capture, its record in the capture, and the references that own its pages. */
 export interface ViewPages {
-  session: Session;
+  session: StoreReader;
   runId: string;
   record: ImportRecord;
   graph: ObjectGraph;
@@ -231,7 +234,7 @@ async function readStored<T>(path: string, what: string): Promise<Result<T>> {
 
 /** The capture and the references behind the stored pages of a view. NOT_FOUND: no such run, capture or view. STORAGE_CORRUPT: the run is committed
  * and a file it needs is missing or damaged. */
-export async function loadViewPages(session: Session, key: Omit<PageKey, "position">): Promise<Result<ViewPages>> {
+export async function loadViewPages(session: StoreReader, key: Omit<PageKey, "position">): Promise<Result<ViewPages>> {
   const record = await committedImport(session, key.runId).catch(() => undefined);
   if (record === undefined || !record.captureIds.includes(key.captureId)) return err("NOT_FOUND", `capture "${key.captureId}" of run "${key.runId}" is not in this session`);
   const capture = await readStored<ObjectGraph>(captureFile(session, key.runId, key.captureId), `the capture "${key.captureId}" of run "${key.runId}"`);

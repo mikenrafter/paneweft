@@ -14,6 +14,7 @@
 //   a refused action returns the same state object with a notice naming what was refused [inspector.test.ts, MC7].
 import type { EntityRef } from "./wire.ts";
 import { canonicalJson } from "./canonical.ts";
+import { notCapturedMessage } from "./not-captured.ts";
 
 export type PaneFilters = Record<string, string | number | boolean | string[]>;
 export interface PaneState {
@@ -35,7 +36,7 @@ export type InspectorAction =
   | { type: "pin"; paneIndex: number }
   | { type: "back" };
 
-export type ItemTarget = { kind: "entity"; entity: EntityRef } | { kind: "none" } | { kind: "missing" };
+export type ItemTarget = { kind: "entity"; entity: EntityRef } | { kind: "none" } | { kind: "not-captured"; reason: string } | { kind: "missing" };
 
 /** The data the reducer needs; backed by a Session in production and by literals in tests. */
 export interface InspectorWorld {
@@ -46,7 +47,7 @@ export interface InspectorWorld {
   itemExists(entity: EntityRef, snapshotId: string, viewDefinitionId: string, itemId: string): boolean;
 }
 
-export type InspectorNoticeCode = "NO_TARGET" | "NO_SUCH_PANE" | "UNRESOLVED_TARGET" | "UNKNOWN_VIEW" | "NOTHING_TO_GO_BACK" | "UNKNOWN_ACTION";
+export type InspectorNoticeCode = "NO_TARGET" | "NOT_CAPTURED" | "NO_SUCH_PANE" | "UNRESOLVED_TARGET" | "UNKNOWN_VIEW" | "NOTHING_TO_GO_BACK" | "UNKNOWN_ACTION";
 export interface InspectorOutcome { state: InspectorState; notice?: { code: InspectorNoticeCode; message: string } }
 
 export function initialInspectorState(): InspectorState {
@@ -93,6 +94,7 @@ export function reduceInspector(state: InspectorState, action: InspectorAction, 
       if (target.kind === "missing") return refuse(state, "UNRESOLVED_TARGET", `item ${action.itemId} does not exist in view ${pane.viewDefinitionId} of ${pane.entity.id}`);
       const kept = state.trail.slice(0, action.paneIndex + 1).map((entry, position) => (position === action.paneIndex ? { ...entry, selection: [action.itemId] } : entry));
       const retained = keepPinned(state.retained, state.trail.slice(action.paneIndex + 1));
+      if (target.kind === "not-captured") return commit(state, { trail: kept, retained }, { code: "NOT_CAPTURED", message: notCapturedMessage(action.itemId, target.reason) });
       if (target.kind === "none") return commit(state, { trail: kept, retained }, { code: "NO_TARGET", message: `item ${action.itemId} has no entity to open` });
       const view = world.initialView(target.entity, pane.snapshotId);
       if (view === undefined) return commit(state, { trail: kept, retained }, { code: "UNKNOWN_VIEW", message: `no view applies to entity ${target.entity.id} in snapshot ${pane.snapshotId}` });

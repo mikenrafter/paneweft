@@ -18,7 +18,12 @@
             "required": ["cells"],
             "properties": {
               "cells": { "$ref": "urn:paneweft:schema:common:1#/$defs/Cells" },
-              "group": { "$ref": "urn:paneweft:schema:common:1#/$defs/Label" }
+              "group": { "$ref": "urn:paneweft:schema:common:1#/$defs/Label" },
+              "notCaptured": {
+                "description": "v1: the object this row points at was not captured (a capture limit was reached); `reason` names the limit. Such a row has no entity to open.",
+                "type": "object", "additionalProperties": false, "required": ["reason"],
+                "properties": { "reason": { "type": "string", "minLength": 1, "maxLength": 64 } }
+              }
             }
           }
         ],

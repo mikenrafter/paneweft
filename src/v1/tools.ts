@@ -715,7 +715,8 @@ async function viewResult(call: Call): Promise<OperationOutcome> {
       // a stored first page is checked by the host when it is imported, a stored page when it is read; a row that is neither is storage damage
       if (typeof row !== "object" || row === null || typeof row.cells !== "object" || row.cells === null) return failure(call.format, "STORAGE_CORRUPT", `the stored view "${entry.viewId}" of run "${runId}" holds a row that is not a row with cells`, { details: { runId, storedViewId: entry.viewId } });
       const cells = row.cells as Record<string, unknown>;
-      items.push({ json: { id: row.id, cells, entity: row.entity ?? null, provenance: row.provenance }, text: `${row.id}: ${Object.entries(cells).map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(" | ")}${row.entity === undefined ? "" : ` -> ${row.entity.kind}:${row.entity.id}`}; ${row.provenance}` });
+      const missing = typeof row.notCaptured?.reason === "string" ? { reason: row.notCaptured.reason as string } : undefined;
+      items.push({ json: { id: row.id, cells, entity: row.entity ?? null, ...(missing === undefined ? {} : { notCaptured: missing }), provenance: row.provenance }, text: `${row.id}: ${Object.entries(cells).map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(" | ")}${row.entity === undefined ? "" : ` -> ${row.entity.kind}:${row.entity.id}`}${missing === undefined ? "" : ` -> not captured: ${missing.reason}`}; ${row.provenance}` });
     }
   } else if (envelope.component === "shape") {
     for (const field of data.fields as Json[]) items.push({ json: { id: field.id, path: field.path, type: field.type, example: field.example ?? null, provenance: field.provenance }, text: `${field.path}: ${field.type}${field.example === undefined ? "" : ` = ${JSON.stringify(field.example)}`}; ${field.provenance}` });

@@ -110,12 +110,14 @@ function actions(ctx: ComponentContext, item: Item): Child[] {
   return [button, menu];
 }
 
-const noTarget = (ctx: ComponentContext): HTMLElement => h(ctx.doc, "span", { "data-pw": "no-target" }, "no entity or source");
+const noTarget = (ctx: ComponentContext, item?: Item): HTMLElement => (item?.notCaptured === undefined
+  ? h(ctx.doc, "span", { "data-pw": "no-target" }, "no entity or source")
+  : h(ctx.doc, "span", { "data-pw": "no-target", "data-reason": item.notCaptured.reason }, `not captured: ${item.notCaptured.reason}`));
 
 /** badge, reason, links, then (rows, nodes, fields) the no-target note or the actions. */
 function factChildren(ctx: ComponentContext, item: Item, kind: "plain" | "actionable"): Child[] {
   const out = badge(ctx, item, false);
-  if (kind === "actionable") out.push(...(hasTarget(item) ? actions(ctx, item) : [noTarget(ctx)]));
+  if (kind === "actionable") out.push(...(hasTarget(item) ? actions(ctx, item) : [noTarget(ctx, item)]));
   return out;
 }
 

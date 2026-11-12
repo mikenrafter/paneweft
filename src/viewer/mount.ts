@@ -134,6 +134,7 @@ export async function mountViewer(container: HTMLElement, options: MountOptions)
       const item = model !== undefined && model.ok ? viewItems(model.value.envelope).find((candidate) => candidate.id === itemId) : undefined;
       if (item === undefined) return { kind: "missing" };
       const target = entityRefOf(item);
+      if (target === undefined && item.notCaptured !== undefined) return { kind: "not-captured", reason: item.notCaptured.reason };
       return target === undefined ? { kind: "none" } : { kind: "entity", entity: target };
     },
     itemExists(entity, snapshotId, definitionId, itemId) {
