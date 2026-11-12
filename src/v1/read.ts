@@ -8,8 +8,8 @@ import { compareCodeUnits } from "../core/canonical.ts";
 import { err, ok, type Result } from "../core/errors.ts";
 import type { Session, ViewKey } from "../core/session.ts";
 import type { EntityRef } from "../core/wire.ts";
-import type { ObjectGraph, ObjectRecord, PageRecord } from "../generated/v1/ObjectGraph.ts";
-import { checkPageRecord } from "./page-rows.ts";
+import type { ObjectGraph, ObjectRecord, ViewRecord } from "../generated/v1/ObjectGraph.ts";
+import { checkListRows, pageIdOf, rowIds } from "./page-rows.ts";
 import type { TestRun } from "../generated/v1/TestRun.ts";
 import { entityKindOf } from "./capture.ts";
 
@@ -42,10 +42,37 @@ export interface StoredRun {
   snapshotId: string;
 }
 
+/** Who owns a stored page: the run that imported it, the capture, object and view that list it, and its place among that view's pages (1 is the
+ * first stored page, the one after the rows the view's record holds). The page body is shared by content; this key is not. */
+export interface PageKey {
+  runId: string;
+  captureId: string;
+  objectId: string;
+  viewId: string;
+  position: number;
+}
+
+/** The ownership record of one stored page (D2): published with the import that stored it, in `runs/<run>/page-refs.json`. */
+export interface PageRef {
+  captureId: string;
+  objectId: string;
+  viewId: string;
+  position: number;
+  pageId: string;
+  rowCount: number;
+}
+
+/** A stored page that passed every check of `readPageAt`. */
+export interface StoredPage {
+  key: PageKey;
+  pageId: string;
+  rows: Array<Record<string, unknown>>;
+}
+
 export interface V1Reader {
   object(key: ObjectKey): Promise<Result<StoredObject>>;
-  /** A stored child page by content address; readable with no source process alive. */
-  page(pageId: string): Promise<Result<PageRecord>>;
+  /** A stored page of a view, validated (D3); readable with no source process alive. */
+  page(key: PageKey): Promise<Result<StoredPage>>;
   run(runId: string): Promise<Result<StoredRun>>;
   runs(): Promise<Result<Array<{ runId: string; snapshotId: string; origin: StoredRun["origin"] }>>>;
 }
@@ -90,6 +117,8 @@ export const v1Directory = (session: Pick<Session, "dir">): string => join(sessi
 export const runDirectory = (session: Pick<Session, "dir">, runId: string): string => within(join(v1Directory(session), "runs"), pathComponent(runId));
 export const snapshotOfRun = (runId: string): string => `snap-${runId}`;
 export const pageFile = (session: Pick<Session, "dir">, pageId: string): string => within(join(v1Directory(session), "pages"), `${pathComponent(pageId.replace(/^sha256:/, ""))}.json`);
+/** The bodies of stored pages: one immutable file per distinct body, addressed by its content and owned by nobody (D2). */
+export const pageRefsFile = (session: Pick<Session, "dir">, runId: string): string => within(runDirectory(session, runId), "page-refs.json");
 export const captureFile = (session: Pick<Session, "dir">, runId: string, captureId: string): string => within(join(runDirectory(session, runId), "captures"), `${pathComponent(captureId)}.json`);
 export const customFile = (session: Pick<Session, "dir">, runId: string, viewId: string): string => within(join(runDirectory(session, runId), "customs"), `${pathComponent(viewId)}.json`);
 
@@ -131,12 +160,10 @@ export function openV1Reader(session: Session): V1Reader {
       const entity: EntityRef = { repository: record.repo, id: `${graph.captureId}.${object.id}`, kind: entityKindOf(object.typeId) };
       return ok({ key, record: object, entity, views: graph.views.filter((view) => view.objectId === object.id).map((view) => ({ viewId: `${graph.captureId}.${object.id}.${view.viewId}`, snapshotId: key.snapshotId })), backlinks });
     },
-    async page(pageId) {
-      if (!/^sha256:[0-9a-f]{64}$/.test(pageId)) return err("INVALID_ARGUMENT", `"${pageId}" is not a page id (sha256:<64 hex>)`);
-      const page = await readJsonFile<PageRecord>(pageFile(session, pageId));
-      if (page === undefined) return notFound(`page "${pageId}"`);
-      const reasons = checkPageRecord(page, { pageId });
-      return reasons.length === 0 ? ok(page) : err("STORAGE_CORRUPT", `the stored page "${pageId}" is not valid: ${reasons.join("; ")}`);
+    async page(key) {
+      const view = await loadViewPages(session, key);
+      if (!view.ok) return view;
+      return readPageAt(view.value, key.position, new Set(rowIds((view.value.view.data as { rows?: unknown } | undefined)?.rows)));
     },
     async run(runId) {
       const record = await committedImport(session, runId);
@@ -163,4 +190,93 @@ export function openV1Reader(session: Session): V1Reader {
       return ok(runs);
     },
   };
+}
+
+// ---- stored pages (D2, D3) --------------------------------------------------------------------------------------------------------------
+// The one reader of a stored page. The CLI, the agent tools, the viewer and `V1Reader.page` all end here, so a page that is missing, a page that is
+// not JSON and a page that is JSON but not a valid page of its view get the same answer on every surface: NOT_FOUND for the first, STORAGE_CORRUPT
+// for the other two.
+
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+const corrupt = <T>(message: string, details?: Record<string, unknown>): Result<T> => err("STORAGE_CORRUPT", message.slice(0, 2000), details === undefined ? {} : { details });
+
+/** What is known about the stored pages of one view of one run: its capture, its record in the capture, and the references that own its pages. */
+export interface ViewPages {
+  session: Session;
+  runId: string;
+  record: ImportRecord;
+  graph: ObjectGraph;
+  view: ViewRecord;
+  /** The references of this view, by position. */
+  refs: PageRef[];
+}
+
+async function readStored<T>(path: string, what: string): Promise<Result<T>> {
+  let text: string;
+  try {
+    text = await readFile(path, "utf8");
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === "ENOENT") return err("NOT_FOUND", `${what} is not in this session`);
+    return err("STORAGE_FAILED", `${what} could not be read: ${(cause as Error).message}`);
+  }
+  try {
+    return ok(JSON.parse(text) as T);
+  } catch {
+    return corrupt(`${what} is not valid JSON`);
+  }
+}
+
+/** The capture and the references behind the stored pages of a view. NOT_FOUND: no such run, capture or view. STORAGE_CORRUPT: the run is committed
+ * and a file it needs is missing or damaged. */
+export async function loadViewPages(session: Session, key: Omit<PageKey, "position">): Promise<Result<ViewPages>> {
+  const record = await committedImport(session, key.runId).catch(() => undefined);
+  if (record === undefined || !record.captureIds.includes(key.captureId)) return err("NOT_FOUND", `capture "${key.captureId}" of run "${key.runId}" is not in this session`);
+  const capture = await readStored<ObjectGraph>(captureFile(session, key.runId, key.captureId), `the capture "${key.captureId}" of run "${key.runId}"`);
+  if (!capture.ok) return capture.error.code === "NOT_FOUND" ? corrupt(`run "${key.runId}" is committed but its capture "${key.captureId}" is missing`) : capture;
+  const graph = capture.value;
+  if (!isRecord(graph) || !Array.isArray(graph.objects) || !Array.isArray(graph.views)) return corrupt(`the capture "${key.captureId}" of run "${key.runId}" is not an object graph`);
+  const view = graph.views.find((candidate) => candidate.objectId === key.objectId && candidate.viewId === key.viewId);
+  if (view === undefined) return err("NOT_FOUND", `view "${key.viewId}" of object "${key.objectId}" is not in capture "${key.captureId}" of run "${key.runId}"`);
+  const stored = await readStored<{ refs?: unknown }>(pageRefsFile(session, key.runId), `the page references of run "${key.runId}"`);
+  if (!stored.ok) return stored.error.code === "NOT_FOUND" ? corrupt(`run "${key.runId}" is committed but its page references are missing`) : stored;
+  if (!isRecord(stored.value) || !Array.isArray(stored.value.refs)) return corrupt(`the page references of run "${key.runId}" are not a list`);
+  const refs: PageRef[] = [];
+  for (const entry of stored.value.refs) {
+    if (!isRecord(entry) || typeof entry.captureId !== "string" || typeof entry.objectId !== "string" || typeof entry.viewId !== "string" || !Number.isInteger(entry.position) || typeof entry.pageId !== "string" || !Number.isInteger(entry.rowCount)) return corrupt(`the page references of run "${key.runId}" hold an entry that is not a reference`);
+    if (entry.captureId === key.captureId && entry.objectId === key.objectId && entry.viewId === key.viewId) refs.push(entry as unknown as PageRef);
+  }
+  refs.sort((a, b) => a.position - b.position);
+  return ok({ session, runId: key.runId, record, graph, view, refs });
+}
+
+/** The stored page at `position`, if it is a valid page of the view that owns it. `seen` holds the row ids of the view so far (its first page and
+ * every earlier page) and is extended with this page's: row ids are unique over the view. Checks, in order: the reference exists; the body file
+ * exists (NOT_FOUND) and is JSON of the right shape; its rows hash to the address the reference names and are as many as it counts; every row is
+ * a row of the view's list (schema, declared columns, unique ids); every row target is an object of the capture. */
+export async function readPageAt(view: ViewPages, position: number, seen: Set<string>): Promise<Result<StoredPage>> {
+  const key: PageKey = { runId: view.runId, captureId: view.graph.captureId, objectId: view.view.objectId, viewId: view.view.viewId, position };
+  const where = `page ${position} of view "${key.viewId}" of object "${key.objectId}" in run "${key.runId}"`;
+  const ref = view.refs.find((candidate) => candidate.position === position);
+  if (ref === undefined) return err("NOT_FOUND", `${where} is not stored`);
+  const stored = await readStored<unknown>(pageFile(view.session, ref.pageId), `the body of the stored page "${ref.pageId}"`);
+  if (!stored.ok) return stored.error.code === "NOT_FOUND" ? err("NOT_FOUND", `the stored page "${ref.pageId}" (${where}) is not in this session`, { details: { runId: key.runId, view: key.viewId, pageId: ref.pageId } }) : corruptPage(key, ref.pageId, [stored.error.message]);
+  const body = stored.value;
+  if (!isRecord(body) || Object.keys(body).sort().join() !== "pageId,rows" || typeof body.pageId !== "string" || !Array.isArray(body.rows)) return corruptPage(key, ref.pageId, ["its body is not {pageId, rows}"]);
+  const reasons: string[] = [];
+  if (body.pageId !== ref.pageId) reasons.push(`it says it is ${JSON.stringify(body.pageId)}`);
+  if (pageIdOf(body.rows) !== ref.pageId) reasons.push("its rows do not hash to its id");
+  if (body.rows.length !== ref.rowCount) reasons.push(`it holds ${body.rows.length} rows, not the ${ref.rowCount} its reference counts`);
+  if (reasons.length === 0) {
+    reasons.push(...checkListRows(view.view.data as { columns?: unknown; order?: unknown }, body.rows, "/rows", seen).slice(0, 3).map((fault) => `${fault.pointer} ${fault.constraint}`));
+    const objects = new Set(view.graph.objects.map((object) => object.id));
+    for (const [at, row] of (body.rows as Array<{ target?: { object?: string } }>).entries()) {
+      const target = row?.target?.object;
+      if (target !== undefined && !objects.has(target)) reasons.push(`/rows/${at}/target names the object ${JSON.stringify(target)}, which the capture does not hold`);
+    }
+  }
+  return reasons.length > 0 ? corruptPage(key, ref.pageId, reasons) : ok({ key, pageId: ref.pageId, rows: body.rows as Array<Record<string, unknown>> });
+}
+
+function corruptPage(key: PageKey, pageId: string, reasons: string[]): Result<never> {
+  return corrupt(`the stored page "${pageId}" (page ${key.position} of view "${key.viewId}" of object "${key.objectId}" in run "${key.runId}") is not valid: ${reasons.join("; ")}`, { runId: key.runId, view: key.viewId, pageId, reasons });
 }

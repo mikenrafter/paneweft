@@ -20,10 +20,10 @@ async function inspectJson(session: any, args: Record<string, unknown>): Promise
 }
 
 describe("[IV10] stored pages and not-captured branches", () => {
-  // why: IV10. A child page is read by its content address with no source process alive (the reader opens the session only), and the
-  // bytes are exactly the rows that were stored.
+  // why: IV10 / D3. A stored page is read through the reference that owns it (run, capture, object, view, position) with no source process alive (the
+  // reader opens the session only), and the rows are exactly the rows that were stored.
   // proves: CLAIM(IV10)
-  it("reads a stored page by content address after import", async () => {
+  it("reads a stored page by its owner's key after import", async () => {
     const { session } = await open();
     const input = collectionImport("vigil-redelivered");
     const graph = input.graphs[0] as any;
@@ -33,9 +33,10 @@ describe("[IV10] stored pages and not-captured branches", () => {
     graph.views[1].pages = [{ index: 1, pageId, rowCount: rows.length }];
     graph.pages = [{ pageId, viewId: "watch.events", objectId: "o1", index: 1, rows }];
     must(await importCollection(session, input), "import");
-    const page = must(await openV1Reader(session).page(pageId), "page");
+    const page = must(await openV1Reader(session).page({ runId: "run-1", captureId: "inv-1", objectId: "o1", viewId: "watch.events", position: 1 }), "page");
     expect(page.rows).toEqual(rows);
-    expect(page.index).toBe(1);
+    expect(page.pageId).toBe(pageId);
+    expect(page.key.position).toBe(1);
   });
 
   // why: IV10. A branch that was not captured is a stored state with a reason and a recollection SELECTOR (data for `collect`),

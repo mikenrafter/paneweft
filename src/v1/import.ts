@@ -5,7 +5,7 @@
 // snapshot exists; then one v0 manifest swap (`importBundle`) that publishes snapshot and definitions together: the commit point. A
 // crash before the swap leaves nothing readable and the registry untouched; a crash after it is a completed import that a retry
 // recognises by its receipt. Identifiers from the payload are path components only through `pathComponent` (S1).
-import { mkdir, open, rename } from "node:fs/promises";
+import { mkdir, open, readFile, rename } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { canonicalJson, compareCodeUnits } from "../core/canonical.ts";
 import { sha256Hex } from "../core/digest.ts";
@@ -17,7 +17,8 @@ import type { ObjectGraph } from "../generated/v1/ObjectGraph.ts";
 import type { TestRun } from "../generated/v1/TestRun.ts";
 import { entityOfObject, lowerViewRecord, validateObjectGraph } from "./capture.ts";
 import type { LimitName } from "./limits.ts";
-import { captureFile, committedImport, customFile, pageFile, runDirectory, snapshotOfRun, v1Directory, type ImportRecord, type Origin } from "./read.ts";
+import { pageIdOf } from "./page-rows.ts";
+import { captureFile, committedImport, customFile, pageFile, pageRefsFile, runDirectory, snapshotOfRun, v1Directory, type ImportRecord, type Origin } from "./read.ts";
 import { validateAgainstV1 } from "./schemas.ts";
 
 export type { Origin };
@@ -171,6 +172,25 @@ function prepare(input: CollectionImport, run: TestRun): Result<Prepared> {
   return ok({ graphs, captureIds, entities, definitions, views, overlays });
 }
 
+/** Stores the page bodies of `graphs` that the store does not already hold, then the references that say which view of which capture owns which page.
+ * A body is written only when no valid body of that address is there: identical rows are one file, whoever stored them first, and storing them
+ * again changes nothing. The references are keyed by (run, capture, object, view, position) and are the only record of ownership. */
+async function publishPages(session: Session, runId: string, graphs: ObjectGraph[]): Promise<void> {
+  const refs: Array<{ captureId: string; objectId: string; viewId: string; position: number; pageId: string; rowCount: number }> = [];
+  const bodies = new Map<string, unknown[]>();
+  for (const graph of graphs) {
+    for (const page of graph.pages) bodies.set(page.pageId, page.rows);
+    for (const view of graph.views) for (const ref of view.pages) refs.push({ captureId: graph.captureId, objectId: view.objectId, viewId: view.viewId, position: ref.index, pageId: ref.pageId, rowCount: ref.rowCount });
+  }
+  for (const [pageId, rows] of bodies) {
+    const present = await readFile(pageFile(session, pageId), "utf8").then((text) => { try { return (JSON.parse(text) as { rows?: unknown }).rows; } catch { return undefined; } }, () => undefined);
+    if (present !== undefined && pageIdOf(present) === pageId) continue;
+    await writeDurably(pageFile(session, pageId), JSON.stringify({ pageId, rows }));
+  }
+  refs.sort((a, b) => compareCodeUnits(a.captureId, b.captureId) || compareCodeUnits(a.objectId, b.objectId) || compareCodeUnits(a.viewId, b.viewId) || a.position - b.position);
+  await writeDurably(pageRefsFile(session, runId), JSON.stringify({ schemaVersion: "paneweft.page-refs/1", runId, refs }));
+}
+
 async function commit(session: Session, input: CollectionImport, run: TestRun, prepared: Prepared, digest: string, options: { crashAt?: (point: ImportCrashPoint) => void | Promise<void> }): Promise<Result<ImportReceipt>> {
   const crash = async (point: ImportCrashPoint): Promise<void> => void (await options.crashAt?.(point));
   const snapshotId = snapshotOfRun(input.runId);
@@ -192,10 +212,10 @@ async function commit(session: Session, input: CollectionImport, run: TestRun, p
   const base = runDirectory(session, input.runId);
   const stored: TestRun = { ...run, meta: { origin: input.origin, importedAt: new Date().toISOString(), jobId: input.jobId } };
   try {
-    for (const graph of graphs) {
-      await writeDurably(captureFile(session, input.runId, graph.captureId), JSON.stringify(graph));
-      for (const page of graph.pages) await writeDurably(pageFile(session, page.pageId), JSON.stringify(page));
-    }
+    // D2: the capture is stored without the bodies of its pages. Bodies are shared by content and owned by nobody; who owns which page is the
+    // run's page references, published here with everything else the commit makes visible.
+    for (const graph of graphs) await writeDurably(captureFile(session, input.runId, graph.captureId), JSON.stringify({ ...graph, pages: [] }));
+    await publishPages(session, input.runId, graphs);
     for (const { viewId, overlay } of overlays) await writeDurably(customFile(session, input.runId, viewId), JSON.stringify(overlay));
     await writeDurably(join(base, "run.json"), JSON.stringify(stored));
     // The receipt names the content this run id is claimed by. It is written BEFORE the commit and counts only once the snapshot is in the

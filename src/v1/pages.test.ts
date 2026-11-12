@@ -8,7 +8,7 @@ import { canonical, collectionImport, sha256, useV1Sessions } from "../../test/h
 import { must } from "../../test/helpers/must.ts";
 import { createSessionSource } from "../viewer/session-source.ts";
 import { importCollection } from "./import.ts";
-import { captureFile, pageFile } from "./read.ts";
+import { captureFile, pageFile, pageRefsFile } from "./read.ts";
 import { executeV1Operation } from "./tools.ts";
 
 const open = useV1Sessions();
@@ -94,11 +94,18 @@ describe("[S22] an invalid stored page is an explicit error, never a throw", () 
     const graph = JSON.parse(readFileSync(file, "utf8"));
     const view = graph.views.find((candidate: any) => candidate.viewId === "watch.events");
     const old = view.pages[0];
-    const page: any = { pageId: `sha256:${sha256(canonical(rows))}`, viewId: "watch.events", objectId: view.objectId, index: old.index, rows };
+    const page: any = { pageId: `sha256:${sha256(canonical(rows))}`, rows };
     mutate(page);
     view.pages[0] = { index: old.index, pageId: page.pageId, rowCount: rows.length };
     writeFileSync(file, JSON.stringify(graph));
     writeFileSync(pageFile(session, page.pageId), JSON.stringify(page));
+    // the reference that owns the page names the new body (D2)
+    const refsFile = pageRefsFile(session, "run-1");
+    const refs = JSON.parse(readFileSync(refsFile, "utf8"));
+    const own = refs.refs.find((ref: any) => ref.viewId === "watch.events" && ref.position === old.index);
+    own.pageId = page.pageId;
+    own.rowCount = rows.length;
+    writeFileSync(refsFile, JSON.stringify(refs));
     return { session, dir, pageId: page.pageId as string };
   }
   const read = async (session: any, dir: string) => executeV1Operation({ session, sessionDir: dir, jobs: null }, "view_result", { run: "run-1", view: "watch.events", format: "json", maxBytes: 8192 });
@@ -127,7 +134,7 @@ describe("[S22] an invalid stored page is an explicit error, never a throw", () 
   it("refuses a stored page whose rows do not hash to its id", async () => {
     const { session, dir, pageId } = await corrupt([{ id: "x", cells: { event: "e", tick: 1 }, provenance: "observed", evidence: ["run"] }], (page) => { page.pageId = `sha256:${"0".repeat(64)}`; });
     // the file is stored under the id the view lists; its own pageId says something else
-    writeFileSync(pageFile(session, pageId), JSON.stringify({ pageId, viewId: "watch.events", objectId: "o1", index: 1, rows: [{ id: "y", cells: {}, provenance: "observed", evidence: ["run"] }] }));
+    writeFileSync(pageFile(session, pageId), JSON.stringify({ pageId, rows: [{ id: "y", cells: {}, provenance: "observed", evidence: ["run"] }] }));
     const outcome = await read(session, dir);
     expect(outcome.ok).toBe(false);
     expect(JSON.parse(outcome.body)).toMatchObject({ code: "STORAGE_CORRUPT" });

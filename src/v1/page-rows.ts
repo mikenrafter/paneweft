@@ -1,6 +1,6 @@
 // The rows of a stored list page, checked the same way wherever they enter or leave the session (S22): at admission, before anything is
-// committed, and again by every reader of a stored page (view_result, the viewer's data source, the page reader of the CLI). A page is data
-// somebody else wrote; no reader trusts it.
+// committed, and again by the one reader of stored pages (`readPageAt` in read.ts: view_result, the viewer, the CLI and V1Reader.page all end
+// there). A page is data somebody else wrote; no reader trusts it.
 import { canonicalJson } from "../core/canonical.ts";
 import { sha256Hex } from "../core/digest.ts";
 import type { ValidationIssue } from "../core/errors.ts";
@@ -42,18 +42,3 @@ export function checkListRows(list: { columns?: unknown; order?: unknown }, rows
 
 /** The content address of the rows of a stored page: the sha256 of their canonical JSON. */
 export const pageIdOf = (rows: unknown): string => `sha256:${sha256Hex(canonicalJson(rows))}`;
-
-/** A stored page record read from disk, checked for what a reader relies on: its shape, its place (the view and object that list it) and that
- * its rows are the ones its id names. Returns the reasons it is not usable; empty when it is. */
-export function checkPageRecord(page: unknown, expected: { pageId: string; viewId?: string; objectId?: string; index?: number; rowCount?: number }): string[] {
-  if (!isRecord(page)) return ["the page is not an object"];
-  const reasons: string[] = [];
-  if (page.pageId !== expected.pageId) reasons.push(`it says it is ${JSON.stringify(page.pageId)}`);
-  if (!Array.isArray(page.rows)) return [...reasons, "its rows are not an array"];
-  if (pageIdOf(page.rows) !== expected.pageId) reasons.push("its rows do not hash to its id");
-  if (expected.viewId !== undefined && page.viewId !== expected.viewId) reasons.push(`it belongs to the view ${JSON.stringify(page.viewId)}, not ${JSON.stringify(expected.viewId)}`);
-  if (expected.objectId !== undefined && page.objectId !== expected.objectId) reasons.push(`it belongs to the object ${JSON.stringify(page.objectId)}, not ${JSON.stringify(expected.objectId)}`);
-  if (expected.index !== undefined && page.index !== expected.index) reasons.push(`it is page ${String(page.index)}, not page ${expected.index}`);
-  if (expected.rowCount !== undefined && page.rows.length !== expected.rowCount) reasons.push(`it holds ${page.rows.length} rows, not the ${expected.rowCount} its view counts`);
-  return reasons;
-}

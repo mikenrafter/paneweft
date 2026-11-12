@@ -81,6 +81,15 @@ Host mapping of an object: entity `{repository: <adapter repo>, id: "<captureId>
 `{id:"run", kind:"run", run_id, runner_id: <adapter id>, started_at, finished_at}`. Everything stored is an ordinary v0 entity/view,
 so `open_entity`, `navigate`, `inspect_view` and the viewer work unchanged.
 
+**Stored pages (D2, D3).** The rows of a list beyond its first page are stored as page *bodies*, `v1/pages/<sha256>.json` = `{pageId, rows}`,
+immutable and addressed by their content: identical rows are one file, whoever stored them, and a body is only written when no valid body of that
+address is there. Who owns a page is a separate record, `v1/runs/<run>/page-refs.json`, one reference per page keyed by (run, capture, object,
+view, position), published inside the import transaction (invisible until the snapshot commits). There is ONE reader of a stored page
+(`readPageAt`, read.ts) behind the CLI, the agent tools, the viewer and `V1Reader.page`: it checks the reference, the body's shape, its hash, its
+row count, the list-row schema, declared columns, unique row ids over the view and that every row target is an object of the capture. A page that
+is not there is `NOT_FOUND` (the tools and the viewer serve the rows they have and name the gap); a page that is there and is not JSON or not a
+valid page of its view is `STORAGE_CORRUPT`, on every surface.
+
 ## 5. Limits
 
 Defaults (spec section 4): depth 4, objects 1000, references 4000, rootBytes 2 MiB, stringBytes 16 KiB, pageRows 100, collectionBytes
