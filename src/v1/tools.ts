@@ -24,7 +24,7 @@ import type { Inventory } from "../generated/v1/Inventory.ts";
 import type { Fingerprint } from "./fingerprint.ts";
 import type { JobService } from "./jobs.ts";
 import { withStoredPages } from "./pages.ts";
-import { rendererOfCatalogue, rendererOfStoredView, type CatalogueRenderer, type StoredRenderer } from "./renderer-status.ts";
+import { rendererOfCatalogue, rendererOfLastCapture, rendererOfStoredView, type StoredRenderer, type ViewRenderer } from "./renderer-status.ts";
 import { exampleOfCapture, isFailedExample, type ExampleOfResult } from "./result-example.ts";
 import { adaptersOf, freshnessOf, judgeRun, type Consistency, type Freshness } from "./snapshot-freshness.ts";
 import { captureFile, committedImport, openV1Reader, readJsonFile } from "./read.ts";
@@ -304,12 +304,15 @@ async function listViews(call: Call): Promise<OperationOutcome> {
   // F11: the last capture is the newest run in which one of these examples captured something; a run that was cancelled or crashed first has none
   const lastRun = [...runs].reverse().find((run) => run.invocations.some((invocation) => examples.includes(invocation.exampleId) && invocation.capture.captureId !== undefined));
   // F25: a view that needs a renderer says which one, the digest of its files and whether the owner trusts it (the skill reports "renderer trust needs")
-  const rendererOf = new Map<string, CatalogueRenderer>();
-  for (const view of ordered) if (view.renderer !== undefined) rendererOf.set(view.id, await rendererOfCatalogue(call.context.session, call.context.sessionDir, call.args.repo as string, view.renderer));
+  const rendererOf = new Map<string, ViewRenderer>();
+  for (const view of ordered) {
+    if (view.renderer !== undefined) rendererOf.set(view.id, await rendererOfCatalogue(call.context.session, call.context.sessionDir, call.args.repo as string, view.renderer));
+    else if (view.component === "custom") rendererOf.set(view.id, await rendererOfLastCapture(call.context.session, call.context.sessionDir, call.args.repo as string, view.id, runs));
+  }
   const items: Item[] = ordered.map((view) => {
     const status = rendererOf.get(view.id) ?? null;
     const json = { id: view.id, title: view.title, question: view.question, component: view.component, priority: view.priority, source: view.source, renderer: view.renderer ?? null, ...(status === null ? {} : { rendererStatus: status }), exampleIds: examples, lastCapture: lastRun === undefined ? null : { runId: lastRun.runId, snapshotId: `snap-${lastRun.runId}` }, staleReasons: freshness.status === "stale" ? freshness.reasons ?? [] : [] };
-    return { json, text: `${view.id} [${view.component}, priority ${view.priority}] ${view.title} -- ${view.question} (${view.source.path}:${view.source.line}); ${status === null ? "" : `renderer=${status.id} (${status.digest === null ? "no files" : `digest ${status.digest.slice(0, 12)}...`}, ${status.state === "ready" ? "trusted" : status.state}${status.trustCommand === undefined ? "" : `; owner runs: ${status.trustCommand}`}); `}examples=${examples.length === 0 ? "none" : examples.join(",")}; last capture=${lastRun === undefined ? "never" : lastRun.runId}` };
+    return { json, text: `${view.id} [${view.component}, priority ${view.priority}] ${view.title} -- ${view.question} (${view.source.path}:${view.source.line}); ${status === null ? "" : status.id === null ? "renderer=unknown (no collected run holds this custom view yet); " : `renderer=${status.id} (${status.digest === null ? "no files" : `digest ${status.digest.slice(0, 12)}...`}, ${status.state === "ready" ? "trusted" : status.state}${status.trustCommand === undefined ? "" : `; owner runs: ${status.trustCommand}`}); `}examples=${examples.length === 0 ? "none" : examples.join(",")}; last capture=${lastRun === undefined ? "never" : lastRun.runId}` };
   });
   const notices: string[] = [...(loaded.uncatalogued ? [NO_CATALOGUE_NOTICE(call.args.repo as string)] : []), ...driftNotices(records)];
   const covered = records.map((record) => `${record.catalogue.linkedScope.join(", ")} (linked scope; target ${record.catalogue.target.target ?? record.catalogue.target.package}, features ${record.catalogue.target.features.join(",") || "none"})`).join("; ");
@@ -689,6 +692,14 @@ async function viewResult(call: Call): Promise<OperationOutcome> {
   const captureOf = (entry: (typeof index)[number]): string => entry.entity.id.slice(0, entry.entity.id.lastIndexOf("."));
   const invocationOf = (entry: (typeof index)[number]): TestRun["invocations"][number] | undefined => run.invocations.find((invocation) => invocation.capture.captureId === captureOf(entry));
   const orderOf = (entry: (typeof index)[number]): number => run.invocations.findIndex((invocation) => invocation.capture.captureId === captureOf(entry));
+  /** Of the captures `pool` holds for example `id`: its final attempt's, then a top-level call's over a nested one. */
+  const ownCapture = (pool: Array<(typeof index)[number]>, id: string): Array<(typeof index)[number]> => {
+    const own = pool.filter((entry) => invocationOf(entry)?.exampleId === id);
+    const final = run.examples.find((candidate) => candidate.id === id)?.final;
+    const finalOnes = own.filter((entry) => invocationOf(entry)?.id === final);
+    const topLevel = (finalOnes.length > 0 ? finalOnes : own).filter((entry) => invocationOf(entry)?.parent === null);
+    return topLevel.length > 0 ? topLevel : finalOnes.length > 0 ? finalOnes : own;
+  };
   const examplesOfRun = [...new Set(run.invocations.map((invocation) => invocation.exampleId))].sort(compareCodeUnits);
   if (observation !== undefined) matches = matches.filter((entry) => objectOf(entry) === observation || entry.viewId === observation || entry.entity.id === observation);
   if (matches.length === 0) return failure(call.format, "NOT_FOUND", `run "${runId}" has no stored view "${wanted}"${observation === undefined ? "" : ` for ${observation}`}`, { details: { candidates: [...new Set(index.map((entry) => entry.viewDefinitionId))].sort(compareCodeUnits) } });
@@ -698,10 +709,7 @@ async function viewResult(call: Call): Promise<OperationOutcome> {
     if (!examplesOfRun.includes(wantedExample)) return failure(call.format, "NOT_FOUND", `run "${runId}" holds no example "${wantedExample}": its examples are ${examplesOfRun.join(", ")}`, { details: { examples: examplesOfRun } });
     const own = matches.filter((entry) => invocationOf(entry)?.exampleId === wantedExample);
     if (own.length === 0) return failure(call.format, "NOT_FOUND", `example "${wantedExample}" of run "${runId}" captured no stored view "${wanted}"`, { details: { examples: [...new Set(matches.map((entry) => invocationOf(entry)?.exampleId).filter((id): id is string => id !== undefined))].sort(compareCodeUnits) } });
-    const final = run.examples.find((candidate) => candidate.id === wantedExample)?.final;
-    const finalOnes = own.filter((entry) => invocationOf(entry)?.id === final);
-    const topLevel = (finalOnes.length > 0 ? finalOnes : own).filter((entry) => invocationOf(entry)?.parent === null);
-    matches = topLevel.length > 0 ? topLevel : finalOnes.length > 0 ? finalOnes : own;
+    matches = ownCapture(matches, wantedExample);
   }
   matches.sort((a, b) => objectNumber(objectOf(a)) - objectNumber(objectOf(b)) || orderOf(a) - orderOf(b));
   if (matches.length > 1 && observation === undefined && wantedExample === undefined) {
@@ -713,7 +721,9 @@ async function viewResult(call: Call): Promise<OperationOutcome> {
   if (matches.length > 1) {
     const candidates = matches.map((entry) => ({ object: objectOf(entry), storedViewId: entry.viewId, view: entry.viewId, exampleId: invocationOf(entry)?.exampleId ?? null, nested: invocationOf(entry)?.parent !== null && invocationOf(entry)?.parent !== undefined, label: entry.title }));
     const exampleChoices = [...new Set(candidates.map((candidate) => candidate.exampleId).filter((id): id is string => id !== null))];
-    const sameExample = wantedExample !== undefined || exampleChoices.length < candidates.length;
+    // `example` is the selector to recommend when every example the candidates came from resolves to ONE capture (its final, top-level one)
+    const resolvesAlone = (id: string): boolean => ownCapture(matches, id).length === 1;
+    const sameExample = wantedExample !== undefined || exampleChoices.length === 0 || !exampleChoices.every(resolvesAlone);
     const hint = sameExample
       ? `Object ids restart in every capture, so ${candidates[0]?.object} does not pick one. Pass the stored view id as view: ${candidates.slice(0, 4).map((candidate) => candidate.storedViewId).join(" | ")}.`
       : `Object ids restart in every capture, so ${candidates[0]?.object} does not pick one. Pass example (one of ${exampleChoices.join(", ")}) or the stored view id as view (one of ${candidates.slice(0, 4).map((candidate) => candidate.storedViewId).join(" | ")}).`;

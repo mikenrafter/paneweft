@@ -75,6 +75,19 @@ describe("[F8] a run of several examples is addressable by example", () => {
     expect(byId.payload.details.storedViewId).toBe(candidates[1]!.storedViewId);
   });
 
+  // why: F8, field data (`run-cm-3`: mapping.renamed calls mapping.parsed, and mapping.parsed also ran on its own). The example `mapping.parsed` has two captures, but its own,
+  // top-level one is what `example` selects, so the hint still names the examples; asking for the stored view id instead would send the reader to a longer way.
+  // proves: CLAIM(F8-usable-hint)
+  it("names the examples when each of them resolves to one capture, nested duplicates included", async () => {
+    const world = await toolWorld();
+    must(await importCollection(world.session, multiExampleImport("run-cm-3", [{ id: "mapping.renamed", calls: ["mapping.parsed"] }, { id: "mapping.parsed" }])), "import");
+    const refused = await world.call("view_result", { run: "run-cm-3", view: "watch.events" });
+    expect(refused.payload.code).toBe("UNRESOLVED_TARGET");
+    expect(refused.payload.message).toMatch(/Pass example \(one of mapping\.renamed, mapping\.parsed\)/);
+    const own = await world.okCall("view_result", { run: "run-cm-3", view: "watch.events", example: "mapping.parsed" });
+    expect(own.payload.details.storedViewId, "the top-level capture, not the one nested in mapping.renamed").toBe("inv-3.o1.watch.events");
+  });
+
   // why: F8. The candidates say which one is the selected example's own result and which a nested call, so the agent can choose.
   // proves: CLAIM(F8-usable-hint)
   it("each candidate says whether it was a nested call", async () => {

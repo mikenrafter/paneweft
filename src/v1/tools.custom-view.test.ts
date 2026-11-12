@@ -109,6 +109,35 @@ describe("[F25] views lists the renderer a custom view needs", () => {
     expect(payload.items.find((item: any) => item.id === "watch.card").rendererStatus).toMatchObject({ state: "ready", digest: DIGESTS.digest });
   });
 
+  // why: F25, field data. The TypeScript catalogue does not know which renderer a custom view uses (`cx.custom(renderer, ...)` names it when the view RUNS), so the catalogued
+  // view has no `renderer`: in the field session `paneweft views` showed `mapping.card [custom, priority 20]` with nothing. The renderer then comes from the view's last capture.
+  // proves: CLAIM(F25-renderer-in-views)
+  it("describes a custom view whose catalogue entry names no renderer by its last capture", async () => {
+    const { okCall, text, dir } = await listed();
+    const file = join(dir, "catalogues", "vg", "cargo.json");
+    const record = JSON.parse(readFileSync(file, "utf8"));
+    delete record.catalogue.views.find((view: any) => view.id === "watch.card").renderer;
+    writeFileSync(file, JSON.stringify(record));
+    const card = (await okCall("list_views_for_type", { repo: "vg", type: "vigil::watch::WatchFile" })).payload.items.find((item: any) => item.id === "watch.card");
+    expect(card.rendererStatus).toMatchObject({ id: "mapping-card", digest: DIGESTS.digest, state: "untrusted", trustCommand: TRUST, basis: "last capture run-1" });
+    const line = (await text("list_views_for_type", { repo: "vg", type: "vigil::watch::WatchFile" })).body.split("\n").find((l) => l.startsWith("watch.card "));
+    expect(line).toContain("renderer=mapping-card");
+    expect(line).toContain("untrusted");
+  });
+
+  // why: F25. A custom view that no collected run holds yet cannot say which renderer it needs; it says that, instead of saying nothing.
+  // proves: CLAIM(F25-renderer-in-views)
+  it("says the renderer is unknown when a custom view was never captured", async () => {
+    const world = await toolWorld();
+    const file = join(world.dir, "catalogues", "vg", "cargo.json");
+    const record = JSON.parse(readFileSync(file, "utf8"));
+    record.catalogue.views.push({ id: "watch.card", typeId: "vigil::watch::WatchFile", title: "Card", question: "Which mapping is this?", component: "custom", priority: 20, source: { path: "src/watch.rs", line: 40 } });
+    writeFileSync(file, JSON.stringify(record));
+    const card = (await world.okCall("list_views_for_type", { repo: "vg", type: "vigil::watch::WatchFile" })).payload.items.find((item: any) => item.id === "watch.card");
+    expect(card.rendererStatus).toMatchObject({ id: null, digest: null, state: "unknown" });
+    expect(card.rendererStatus.message).toMatch(/no collected run/);
+  });
+
   // why: F25. A renderer the catalogue names but the root does not hold is reported as missing, not silently untrusted.
   // proves: CLAIM(F25-renderer-in-views)
   it("reports a renderer whose files are not under the registered root", async () => {
