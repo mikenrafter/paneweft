@@ -201,6 +201,26 @@ function inventoryMessage(problem: InventoryProblem): string {
   }
 }
 
+/** The text of the exception a node process died of: the first `Error: message` line of its stderr, else its last line. */
+function thrownLine(log: string): string {
+  const lines = log.split("\n").map((line) => line.trimEnd());
+  return lines.find((line) => /^(?:[A-Za-z]*Error|Error)(?:\[[A-Z0-9_]+\])?: \S/.test(line)) ?? [...lines].reverse().find((line) => line.trim().length > 0) ?? "no output";
+}
+
+/** F7: a runner that never got to run anything is a `runner` failure that says so, whatever the adapter. Today that is qex's own "could not start" (the executable is gone). */
+function runnerNotStarted(qexJob: QexJob, adapter: AdapterRecord): Diagnostic | undefined {
+  if (qexJob.state !== "failed" || qexJob.exit_code !== null || qexJob.signal !== null || typeof qexJob.error !== "string" || qexJob.error.length === 0) return undefined;
+  return { id: "diag-runner-1", category: "runner", message: `the runner could not start: ${qexJob.error}`.slice(0, 2000), nextAction: `Check that ${adapter.executable} exists and runs (the adapter names it); if the toolchain moved, register the adapter again with: paneweft adapter add (owner action).` } as Diagnostic;
+}
+
+/** F7: the catalogue export of a vitest adapter died. collect-vitest.mjs exits 3 for a manifest it could read but not use (its message is printed), and anything else is an
+ * exception thrown while the manifest or a module it lists was evaluated; neither is a cargo registration problem. */
+function vitestExportDiagnostic(qexJob: QexJob, log: string): Diagnostic {
+  const problems = /collect-vitest: (the manifest has problems: .*|\S+ does not export a manifest made with defineManifest.*)/.exec(log)?.[1];
+  if (qexJob.exit_code === 3 && problems !== undefined) return { id: "diag-catalogue-1", category: "registration", message: `the catalogue export rejected the manifest: ${problems}`.slice(0, 2000), stderrSlice: log.slice(-3500), nextAction: "Fix paneweft.views.ts (export a manifest made with defineManifest, list every module of the inventory, declare each id once), then collect again." } as Diagnostic;
+  return { id: "diag-catalogue-1", category: "runner", message: `the catalogue export failed while it imported paneweft.views.ts or a module it lists: ${thrownLine(log)}`.slice(0, 2000), stderrSlice: log.slice(-3500), nextAction: "Fix the exception in the stderr slice: the export evaluates paneweft.views.ts and every module it imports (it runs no example and never evaluates the test runner), then collect again." } as Diagnostic;
+}
+
 export function createJobService(rawDeps: JobServiceDeps): JobService {
   const deps: JobServiceDeps = { ...rawDeps, catalogueFor: rawDeps.catalogueFor ?? ((repo, adapter) => storedCatalogue(rawDeps.sessionDir, repo, adapter)) };
   const now = (): string => (deps.clock?.() ?? new Date()).toISOString();
@@ -452,6 +472,9 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
       scope.push(adapter.kind === "cargo" ? `${name} (${target === "lib" ? "lib" : `test ${target}`})` : `${name} (${file})`);
     }
     if (parts.length === 0 || qexJob.exit_code !== 0) {
+      const notStarted = runnerNotStarted(qexJob, adapter);
+      if (notStarted !== undefined) return { status: "failed", snapshotIds: [], diagnostics: [notStarted] };
+      if (adapter.kind === "vitest") return { status: "failed", snapshotIds: [], diagnostics: [vitestExportDiagnostic(qexJob, log)] };
       const compile = compileDiagnostics(log, staging.typecheck, adapter.kind);
       diagnostics.push(...(qexJob.exit_code !== 0 && /error(\[E\d+\])?: /.test(log) ? compile : [{ id: "diag-catalogue-1", category: "registration", message: parts.length === 0 ? "the catalogue export wrote no part: no test binary registered `paneweft::test_adapter!()` (cargo) or the manifest was not exported (vitest)" : `the catalogue export exited with status ${qexJob.exit_code}`, stderrSlice: log.slice(-3500), nextAction: "Add `paneweft::test_adapter!();` to each participating test module, build with the declared features, then refresh again." } as Diagnostic]));
       return { status: "failed", snapshotIds: [], diagnostics };
@@ -554,6 +577,8 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
         const sample = sampleConsistency(before, after.value);
         run.inputFingerprint = { digest: before.digest, memberCount: before.members.length, sampledConsistency: sample.status, members: before.members };
       }
+      const notStarted = runnerNotStarted(qexJob, adapter);
+      if (notStarted !== undefined) diagnostics.push(notStarted);
       if (compile === "failed") diagnostics.push(...compileDiagnostics(log, typecheck, adapter.kind));
       for (const invocation of run.invocations) {
         const outcome = invocation.native.outcome;

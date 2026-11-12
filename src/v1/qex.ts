@@ -11,6 +11,8 @@ export interface QexJob {
   exit_code: number | null;
   signal: string | null;
   dedupe_key: string | null;
+  /** Set by qex when it could not start the job at all ("qex could not start `X`: No such file or directory ..."): state `failed`, exit_code null, no signal. */
+  error?: string | null;
   cwd?: string;
   command?: string[];
 }

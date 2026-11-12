@@ -1,7 +1,8 @@
 // Registered collection adapters: selection safety, argv grammars, reconciliation of native results (IV16, IV17, IV18; amendments S6, N4).
 // An adapter record is owner configuration (CLI-only registration). Selectors are data; the grammar is code. Nothing here spawns a shell.
 import { execFile } from "node:child_process";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
 import { dirname, isAbsolute, join, normalize, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
@@ -59,6 +60,9 @@ export async function registerAdapter(sessionDir: string, record: unknown): Prom
   if (isAbsolute(adapter.entry) || entry === ".." || entry.startsWith("../") || entry.split("/").includes("..")) {
     return err("INVALID_ARGUMENT", `the adapter entry "${adapter.entry}" must stay inside the workspace root`, { errors: [{ code: "CONSTRAINT", pointer: "/entry", constraint: "relative to workspaceRoot, no .. segment", hint: "Use a directory below the workspace root, or register another root." }] });
   }
+  // F30a: the executable is part of the record's identity; one that does not exist is refused now, not discovered by the first collect as a catch-all failure
+  const runnable = await stat(adapter.executable).then((info) => info.isFile(), () => false) && await access(adapter.executable, fsConstants.X_OK).then(() => true, () => false);
+  if (!runnable) return err("INVALID_ARGUMENT", `the adapter executable "${adapter.executable}" does not exist or is not an executable file`, { errors: [{ code: "CONSTRAINT", pointer: "/executable", constraint: "an absolute path to an executable file on this machine", hint: `Register the runner that is installed (for cargo: the output of \`command -v cargo\`; for vitest: the node that runs the repository), then add the adapter again.` }] });
   const existing = await loadAdapters(sessionDir);
   if (!existing.ok) return existing;
   const adapters = [...existing.value.filter((candidate) => candidate.id !== adapter.id), adapter].sort((a, b) => compareCodeUnits(a.id, b.id));

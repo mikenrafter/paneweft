@@ -68,8 +68,9 @@ describe("[IV16] selection safety", () => {
       const error = mustFail(await registerAdapter(dir, record), label);
       expect(["INVALID_ARGUMENT", "VALIDATION_FAILED"], label).toContain(error.code);
     }
-    must(await registerAdapter(dir, cargo), "register");
-    expect(must(await loadAdapters(dir), "load")).toEqual([cargo]);
+    const installed = { ...cargo, executable: process.execPath };
+    must(await registerAdapter(dir, installed), "register");
+    expect(must(await loadAdapters(dir), "load")).toEqual([installed]);
   });
 });
 
