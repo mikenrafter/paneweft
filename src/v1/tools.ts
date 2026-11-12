@@ -288,8 +288,13 @@ async function lastCaptures(call: Call, repo: string): Promise<TestRun[]> {
     const run = await reader.run(entry.runId);
     if (run.ok) loaded.push(run.value.run);
   }
-  return loaded;
+  // F22: run ids come from request ids the agent chooses, so their order says nothing about which run is newest. The order is the time the host
+  // recorded the run (`meta.importedAt`, stamped at import; never a clock inside a capture); the id only breaks a tie. Oldest first, newest last.
+  return loaded.sort((a, b) => compareCodeUnits(recordedAt(a), recordedAt(b)) || compareCodeUnits(a.runId, b.runId));
 }
+
+/** When the host recorded the run (ISO-8601, so code-unit order is time order); "" for a run stored without a stamp, which sorts first. */
+const recordedAt = (run: TestRun): string => run.meta?.importedAt ?? "";
 
 /** The scope names a `target` argument may use: the adapter id, the catalogue's package and its target. */
 const scopeNames = (record: CatalogueRecord): string[] => [record.adapter, record.catalogue.target.package, ...(record.catalogue.target.target === undefined ? [] : [record.catalogue.target.target])];
@@ -309,7 +314,8 @@ async function listViews(call: Call): Promise<OperationOutcome> {
   for (const record of records) for (const view of record.catalogue.views.filter((candidate) => candidate.typeId === typeId)) if (!views.has(view.id)) views.set(view.id, view);
   const ordered = [...views.values()].sort(viewSortKey);
   const examples = [...new Set(records.flatMap((record) => record.catalogue.examples.filter((example) => example.typeId === typeId).map((example) => example.id)))].sort(compareCodeUnits);
-  const lastRun = [...runs].reverse().find((run) => run.examples.some((example) => examples.includes(example.id)));
+  // F11: the last capture is the newest run in which one of these examples captured something; a run that was cancelled or crashed first has none
+  const lastRun = [...runs].reverse().find((run) => run.invocations.some((invocation) => examples.includes(invocation.exampleId) && invocation.capture.captureId !== undefined));
   const items: Item[] = ordered.map((view) => {
     const json = { id: view.id, title: view.title, question: view.question, component: view.component, priority: view.priority, source: view.source, renderer: view.renderer ?? null, exampleIds: examples, lastCapture: lastRun === undefined ? null : { runId: lastRun.runId, snapshotId: `snap-${lastRun.runId}` }, staleReasons: freshness.status === "stale" ? freshness.reasons ?? [] : [] };
     return { json, text: `${view.id} [${view.component}, priority ${view.priority}] ${view.title} -- ${view.question} (${view.source.path}:${view.source.line}); examples=${examples.length === 0 ? "none" : examples.join(",")}; last capture=${lastRun === undefined ? "never" : lastRun.runId}` };
