@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { executeV1Operation } from "./tools.ts";
 import { buildQexSubmitArgv, createJobService } from "./jobs.ts";
+import { createQexClient } from "./qex.ts";
 import { FIXTURES, fakeCargoAdapter, makeRepo, seedToolSession, useFakeQex, useV1Sessions } from "../../test/helpers/v1-world.ts";
 import { must } from "../../test/helpers/must.ts";
 import { useTempDirs } from "../../test/helpers/tmp.ts";
@@ -30,7 +31,9 @@ async function world(adapterOverrides: Record<string, unknown>) {
   const qex = fake();
   const adapter = fakeCargoAdapter({ executable: proxy, workspaceRoot: root, ...adapterOverrides });
   await seedToolSession(dir, session, root, adapter);
-  const service = createJobService({ session, sessionDir: dir, qex: qex.client, adapters: [adapter], env: bareMcpEnvironment(qex.env) });
+  // the MCP server was started with a bare environment, so the qex it spawns, and the job qex captures from it, have that environment and nothing else
+  const bare = bareMcpEnvironment(qex.env);
+  const service = createJobService({ session, sessionDir: dir, qex: createQexClient({ env: bare }), adapters: [adapter], env: bare });
   const finish = (id: string) => vi.waitFor(async () => { const s = must(await service.status(id, { waitSeconds: 5 }), "status"); expect(["succeeded", "failed", "cancelled"], JSON.stringify(s)).toContain(s.state); return s; }, { timeout: 60_000, interval: 100 });
   return { session, dir, service, finish, qex, adapter };
 }

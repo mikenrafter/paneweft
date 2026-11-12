@@ -178,6 +178,12 @@ before reporting `cancelled`; during importing -> `cancel-too-late`; after compl
 exist in the catalogue the collection resolves them against (section 10: the run's own export, or a stored catalogue proven fresh); request members `executable argv runner workspaceRoot cwd env shell command` are FORBIDDEN_PROPERTY; examples
 of different targets cannot share one process in week one.
 
+The record also pins the environment of its jobs (F21): `env.set` (fixed variables, which win), `env.passthrough` (names taken from the submitting process when it has them; `PANEWEFT_*` is refused in both).
+A job is submitted with `qex --env-capture minimal` (HOME, LANG, LOGNAME, PATH, SHELL, USER of the submitter), then the passthrough names (a default list: `RUSTUP_HOME CARGO_HOME RUSTUP_TOOLCHAIN CARGO_TARGET_DIR TMPDIR LC_ALL TERM SSL_CERT_FILE SSL_CERT_DIR`, plus the
+record's), then `env.set`. A CLI call from a login shell and an MCP call from a client with a bare environment therefore run the same job for every name the record fixes. A registered rustup `cargo` needs
+`RUSTUP_HOME` (and `CARGO_HOME`): pin them with `env.set`. `adapter add` refuses an executable that is not an executable file. A job qex could not start (executable gone, rustup without a default) is a `runner` diagnostic that
+says so and names the owner action, not a compile error. A job is driven to its end by a detached driver process the CLI and the MCP server start (F20; `src/v1/driver.ts`), so it advances when nobody polls.
+
 ## 10. Catalogue, inventory, freshness
 
 **A collection resolves its example ids against the catalogue it exports (T4).** `collect` needs no owner-only catalogue step. When a stored catalogue exists

@@ -19,7 +19,6 @@ import type { Session } from "../core/session.ts";
 import { createSessionJobService } from "../v1/service.ts";
 import { V1_TOOL_NAMES } from "../v1/schemas.ts";
 import { executeV1Operation, v1ToolDescriptors } from "../v1/tools.ts";
-import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { dereference } from "../schemas/dereference.ts";
 import { TOOL_NAMES, loadSchemaDocuments } from "../schemas/index.ts";
