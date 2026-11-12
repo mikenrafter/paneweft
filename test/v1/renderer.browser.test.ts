@@ -47,11 +47,13 @@ async function counterOrigin(): Promise<{ origin: string; hits: string[] }> {
 
 interface Stage { page: Page; browser: Browser; server: any; counter: { origin: string; hits: string[] }; responses: Array<{ url: string; status: number; headers: Record<string, string>; requestHeaders: Record<string, string> }>; url(view: string): string; dir: string }
 
-/** One session with four custom views of the mapping object: trusted card, hostile probe, misbehaving, and an untrusted card. */
+/** One session with five custom views of the mapping object: trusted card, hostile probe, misbehaving, an untrusted card (a real directory nobody trusted) and a card captured with other bytes than the ones under the root. */
 async function stage(): Promise<Stage> {
   const { session, dir } = await open();
   const repoRoot = tmp("cm-root");
   cpSync(join(FIXTURES, "renderers"), join(repoRoot, "renderers"), { recursive: true });
+  // an untrusted renderer that EXISTS: the same bytes under another id, which no trust entry names (trust is per repository, id and digest)
+  cpSync(join(repoRoot, "renderers/mapping-card"), join(repoRoot, "renderers/mapping-card-b"), { recursive: true });
   must(await session.registerRepository({ id: "cm", root: repoRoot }), "register root");
   const counter = await counterOrigin();
   const input = collectionImport("containmarks-mapping");
@@ -73,15 +75,16 @@ async function stage(): Promise<Stage> {
   const details = graph.views[0];
   const custom = (viewId: string, renderer: string, assetDigest: string, payload: object) => ({
     ...details, viewId, title: `Custom ${viewId}`, component: "custom", priority: 20,
-    renderer: { id: renderer, apiVersion: 1, payloadSchemaDigest: digests[renderer].payloadSchemaDigest, assetDigest },
-    data: { renderer: { id: renderer, apiVersion: 1, payloadSchemaDigest: digests[renderer].payloadSchemaDigest, assetDigest }, payload, objects: ["o1"], fallback: { component: "shape", data: details.data } },
+    renderer: { id: renderer, apiVersion: 1, payloadSchemaDigest: (digests[renderer] ?? digests["mapping-card"]).payloadSchemaDigest, assetDigest },
+    data: { renderer: { id: renderer, apiVersion: 1, payloadSchemaDigest: (digests[renderer] ?? digests["mapping-card"]).payloadSchemaDigest, assetDigest }, payload, objects: ["o1"], fallback: { component: "shape", data: details.data } },
   });
   graph.views.push(
     custom("mapping.hostile", "hostile", digests.hostile.digest, { counter: counter.origin }),
     custom("mapping.misbehaving", "misbehaving", digests.misbehaving.digest, {}),
-    custom("mapping.untrusted", "mapping-card", "e".repeat(64), { originalIndex: 4, containerId: "firefox-container-3", backupName: "Work" }),
+    custom("mapping.untrusted", "mapping-card-b", digests["mapping-card"].digest, { originalIndex: 4, containerId: "firefox-container-3", backupName: "Work" }),
+    custom("mapping.changed", "mapping-card", "e".repeat(64), { originalIndex: 4, containerId: "firefox-container-3", backupName: "Work" }),
   );
-  graph.objects[0].views.push( "mapping.hostile", "mapping.misbehaving", "mapping.untrusted");
+  graph.objects[0].views.push( "mapping.hostile", "mapping.misbehaving", "mapping.untrusted", "mapping.changed");
   must(await importCollection(session, input), "import");
   const trust = openTrustStore(dir);
   for (const id of ["mapping-card", "hostile", "misbehaving"]) must(await trust.trust({ repo: "cm", id, digest: digests[id].digest }), `trust ${id}`);
@@ -187,6 +190,21 @@ describe("[IV12] everything a hostile renderer tries", () => {
     await expectAppears("the denial notice", () => s.page.waitForSelector('[data-pw="renderer-notice"][data-state="untrusted"]', { timeout: 15_000 }));
     expect(await s.page.$('iframe[data-pw="renderer-frame"]')).toBeNull();
     expect(s.responses.filter((r) => r.url.includes("/renderer/"))).toEqual([]);
+    const fallback = await s.page.$eval('[data-pw="renderer-fallback"]', (el) => el.textContent ?? "");
+    for (const fact of ["4", "firefox-container-3", "Work"]) expect(fallback).toContain(fact);
+  }, 120_000);
+
+  // why: F26. A value captured with other bytes than the ones under the root (here a digest no file has) is denied just the same, with the state `changed`, not `untrusted`
+  // (no trust command could help: the digest names no files) and not `missing-asset` (the files are there). No iframe, no renderer request, the fallback shows the facts.
+  // proves: CLAIM(IV12) CLAIM(F26-changed-since-capture)
+  it("a value captured with other renderer bytes shows `changed` and the fallback, and requests nothing", async () => {
+    const s = await stage();
+    await s.page.goto(s.url("mapping.changed"));
+    await expectAppears("the changed notice", () => s.page.waitForSelector('[data-pw="renderer-notice"][data-state="changed"]', { timeout: 15_000 }));
+    expect(await s.page.$('iframe[data-pw="renderer-frame"]')).toBeNull();
+    expect(s.responses.filter((r) => r.url.includes("/renderer/"))).toEqual([]);
+    const notice = await s.page.$eval('[data-pw="renderer-notice"]', (el) => el.textContent ?? "");
+    expect(notice).toContain("changed since this value was captured");
     const fallback = await s.page.$eval('[data-pw="renderer-fallback"]', (el) => el.textContent ?? "");
     for (const fact of ["4", "firefox-container-3", "Work"]) expect(fallback).toContain(fact);
   }, 120_000);
