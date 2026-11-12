@@ -160,6 +160,17 @@ describe("[F12] the Rust scaffold applies to a crate that has no paneweft wiring
     expect(reply.patches[0]!.text).toContain("use super::Boat;");
   });
 
+  // why: F12, vigil's demo layout (F3's "demo change"): the crate already declares the feature and the dependency, with a path to a checkout next to the repository. The
+  // scaffold must not add them again (a second feature line is a Cargo error) and must say that the path is the thing to change, instead of copying an SDK nothing uses.
+  // proves: CLAIM(F12-rust-applies)
+  it("tells a crate whose dependency points outside the repository to point it at the vendored copy", async () => {
+    const world = await plainWorld();
+    appendFileSync(join(world.root, "Cargo.toml"), '\n[features]\npaneweft = ["dep:paneweft"]\n\n[dependencies.paneweft]\npath = "../paneweft/crates/paneweft"\noptional = true\n');
+    const reply = (await world.scaffold("scaffold_view", { type: "plain::Boat", question: "Which crew does this boat carry?" })) as Reply;
+    expect(reply.patches.map((patch) => patch.path), "no second feature or dependency").toEqual(["src/lib.rs"]);
+    expect(reply.setup.map((entry) => entry.step).join("\n")).toContain("point it at `vendor/paneweft/paneweft`");
+  });
+
   // why: F12. The text reply (what an agent reads) carries the setup, the test and a counts line that agrees with what was returned.
   // proves: CLAIM(F12-counts)
   it("counts the patches it returns", async () => {

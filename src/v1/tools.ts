@@ -445,6 +445,7 @@ function rustPlan(facts: RustFacts): RustPlan {
   }
   if (!wiring.dependency) lines.push("[dependencies.paneweft]", "path = \"vendor/paneweft/paneweft\"", "optional = true", "");
   if (lines.length > 0) cargoPatches.push({ path: "Cargo.toml", text: ["# Cargo.toml: the SDK is an optional development dependency behind the `paneweft` feature; a release build leaves the feature off.", ...lines].join("\n") });
+  if (wiring.dependency && facts.cargo !== undefined && !/vendor\/paneweft\/paneweft/.test(facts.cargo)) steps.push({ step: "Cargo.toml declares the paneweft dependency with another path (the field-test layout: a checkout next to the repository): point it at `vendor/paneweft/paneweft` or a plain build still needs that checkout" });
   if (facts.cargo !== undefined && /^\s*\[workspace\]/m.test(facts.cargo) && !/vendor\/paneweft/.test(facts.cargo)) steps.push({ step: "when this crate is the root of a Cargo workspace, list `vendor/paneweft/paneweft` and `vendor/paneweft/paneweft-macros` under `exclude` of [workspace] (the copy holds two crates)" });
   const viewTestsModule = "paneweft_view_tests";
   const examplesModule = "paneweft_examples";
