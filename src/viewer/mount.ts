@@ -220,12 +220,18 @@ export async function mountViewer(container: HTMLElement, options: MountOptions)
 
   function statusStrip(model: ViewModel, summary: ViewSummary): HTMLElement {
     const counts = PROVENANCE_ORDER.map((name) => `${name}=${summary.provenance[name]}`).join(" ");
+    const example = model.example;
+    const failedExample = example !== undefined && (example.outcome !== "passed" || example.failedClaims.length > 0)
+      ? h(doc, "div", { "data-pw": "example-outcome", "data-outcome": example.outcome, role: "note" },
+        `example ${example.id}: ${example.outcome}${example.failedClaims.length === 0 ? "" : `; failed claims: ${example.failedClaims.map((claim) => `${claim.claim}${claim.message === undefined ? "" : ` (${claim.message})`}`).join("; ")}`}. These values were captured by an example that did not pass: they show what it had built when it stopped, not an observation it vouched for.`)
+      : null;
     return h(doc, "div", { "data-pw": "status-strip" },
       h(doc, "div", { "data-pw": "completeness", "data-status": model.envelope.completeness.status }, completenessLine(model.envelope.completeness)),
       h(doc, "div", { "data-pw": "freshness", "data-status": model.freshness.status }, freshnessLine(model.freshness)),
       h(doc, "div", { "data-pw": "snapshot" }, model.envelope.snapshotId),
       h(doc, "div", { "data-pw": "provenance-summary" }, counts),
-      h(doc, "div", { "data-pw": "evidence-coverage" }, `sources=${summary.evidenceSources.join(",")}`));
+      h(doc, "div", { "data-pw": "evidence-coverage" }, `sources=${summary.evidenceSources.join(",")}`),
+      ...(failedExample === null ? [] : [failedExample]));
   }
 
   function builtinPanel(which: string, entity: Entity | undefined): HTMLElement {

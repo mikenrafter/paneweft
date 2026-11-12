@@ -8,6 +8,7 @@ import { rankViews, type RankOutput } from "../core/registry.ts";
 import { viewItems } from "../core/items.ts";
 import { searchSession } from "../core/search.ts";
 import { withStoredPages } from "../v1/pages.ts";
+import { exampleOfView } from "../v1/result-example.ts";
 import { collectedFreshness } from "../v1/snapshot-freshness.ts";
 import type { Session, SessionReader, ViewKey } from "../core/session.ts";
 import type { SearchHit, ViewerSource, ViewModel } from "./source.ts";
@@ -29,11 +30,12 @@ export function createSessionSource(session: Session): ViewerSource {
     if (!paged.ok) return paged;
     const envelope = paged.value;
     const { contentHash } = read.value.stored;
+    const example = await exampleOfView(session, envelope.snapshotId, envelope.entity.id);
     const freshness = (await collectedFreshness(session, envelope.snapshotId)) ?? (await checkFreshness(envelope.freshness, await session.repositories()));
     if (recorded !== undefined) {
-      return ok({ envelope, freshness, contentHash, recordedRuns: { runs: [...recorded.byItemId].map(([itemId, run]) => ({ itemId, ...run })), notice: recorded.notice } });
+      return ok({ envelope, freshness, contentHash, ...(example === undefined ? {} : { example }), recordedRuns: { runs: [...recorded.byItemId].map(([itemId, run]) => ({ itemId, ...run })), notice: recorded.notice } });
     }
-    if (envelope.component !== "notebook") return ok({ envelope, freshness, contentHash });
+    if (envelope.component !== "notebook") return ok({ envelope, freshness, contentHash, ...(example === undefined ? {} : { example }) });
     const page = await session.notebookGet(envelope.id, undefined, envelope.snapshotId);
     return ok({ envelope, freshness, contentHash, notebookRevision: page.ok ? page.value.revision : 1 });
   };

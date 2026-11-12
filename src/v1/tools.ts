@@ -24,6 +24,7 @@ import type { Inventory } from "../generated/v1/Inventory.ts";
 import type { Fingerprint } from "./fingerprint.ts";
 import type { JobService } from "./jobs.ts";
 import { withStoredPages } from "./pages.ts";
+import { exampleOfCapture, isFailedExample, type ExampleOfResult } from "./result-example.ts";
 import { adaptersOf, freshnessOf, judgeRun, type Consistency, type Freshness } from "./snapshot-freshness.ts";
 import { captureFile, committedImport, openV1Reader, readJsonFile } from "./read.ts";
 import { V1_READ_ONLY_TOOLS, V1_TOOL_NAMES, createV1SchemaRegistry, loadV1SchemaDocuments, validateAgainstV1, type V1ToolName } from "./schemas.ts";
@@ -636,6 +637,12 @@ function viewerUrl(sessionDir: string, key: { viewId: string; snapshotId: string
   }
 }
 
+/** One line naming the example of a result: its outcome, and the claims it failed (text from captured data, already bounded). */
+function exampleLine(example: ExampleOfResult): string {
+  const claims = example.failedClaims.map((claim) => `${claim.claim}${claim.message === undefined ? "" : ` (${claim.message})`}`).join("; ");
+  return `example ${example.id}: ${example.outcome}${example.nested ? " (called by another example)" : ""}${example.verified ? ", verified" : ""}${example.message === undefined || example.failedClaims.length > 0 ? "" : ` (${example.message})`}${claims === "" ? "" : `; failed claims: ${claims}`}`;
+}
+
 const objectNumber = (objectId: string): number => Number(objectId.replace(/\D+/g, "")) || 0;
 
 async function viewResult(call: Call): Promise<OperationOutcome> {
@@ -717,8 +724,7 @@ async function viewResult(call: Call): Promise<OperationOutcome> {
   const adapter = (await adaptersOf(sessionDir!)).find((candidate) => candidate.repo === record?.repo && candidate.kind === stored.value.run.runner.id);
   const freshness = (await judgeRun({ session, sessionDir: sessionDir! }, record?.repo ?? "", stored.value.run)).freshness;
   const completeness = envelope.completeness.status === "unsupported" ? { status: "unsupported" as const, reason: envelope.completeness.reason } : envelope.completeness.status === "partial" ? { status: "partial" as const, reason: envelope.completeness.gaps.map((gap) => gap.reason).join("; ").slice(0, 400) } : { status: "complete" as const };
-  const invocation = invocationOf(entry);
-  const example = invocation === undefined ? undefined : { id: invocation.exampleId, invocation: invocation.id, nested: invocation.parent !== null };
+  const example = exampleOfCapture(run, captureOf(entry));
   const details = {
     runId,
     snapshotId,
@@ -735,8 +741,9 @@ async function viewResult(call: Call): Promise<OperationOutcome> {
     example: example ?? null,
     recollect: example === undefined ? null : { command: `paneweft collect --request-id <new-id> --repo ${record?.repo ?? "<repo>"} --adapter ${adapter?.id ?? stored.value.run.runner.id} --example ${example.id}` },
   };
-  const head = [`view ${entry.viewId} (${envelope.component}) of ${runId}: ${envelope.title} -- ${envelope.question}`, `origin ${details.origin}; object ${details.objects[0]}; viewer ${details.viewerUrl ?? "not running"}`];
-  return serveListing({ tool: "view_result", completeness, freshness: { ...freshness, scope: `run ${runId}` }, unit: envelope.component === "list" ? "rows" : "fields", total: items.length, items, details: { ...details, text: head }, query: { tool: "view_result", runId, view: wanted, observation: observation ?? null } }, call);
+  const head = [`view ${entry.viewId} (${envelope.component}) of ${runId}: ${envelope.title} -- ${envelope.question}`, `origin ${details.origin}; object ${details.objects[0]}; viewer ${details.viewerUrl ?? "not running"}`, ...(example === undefined ? [] : [exampleLine(example)])];
+  const notices = example !== undefined && isFailedExample(example) ? [`this value was captured by a failed example (${example.id}: ${example.outcome}): it shows what the example had built when it stopped, not an observation the example vouched for`] : [];
+  return serveListing({ tool: "view_result", completeness, freshness: { ...freshness, scope: `run ${runId}` }, unit: envelope.component === "list" ? "rows" : "fields", total: items.length, items, notices, details: { ...details, text: head }, query: { tool: "view_result", runId, view: wanted, observation: observation ?? null } }, call);
 }
 
 /** Every stored diagnostic called `id` (a bare id), or the one `<runId>:<id>` names. A job's diagnostics are those of its run; the stored
