@@ -1,7 +1,7 @@
 // A job nobody polls (F20). In the field test the catalogue export finished in qex and, 20 s later, the job still said `running`: the run stage was submitted, and the results
 // imported, only by the next `collection status`. Every test before this one polled, so every job advanced. Here the CLI runs as separate processes, as an agent's does: `collect`
 // returns and exits, and nothing asks about the job again until the test looks at the files.
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { spawnPaneweft } from "../helpers/cli.ts";
@@ -63,6 +63,5 @@ describe("[F20] a job advances without anyone polling it", () => {
     expect(w.state("d2")?.state).toBe("cancelled");
     const pid = (JSON.parse(readFileSync(join(w.session, "jobs", "d2", "driver.json"), "utf8")) as { pid: number }).pid;
     await vi.waitFor(() => expect(() => process.kill(pid, 0), "the driver exited").toThrow(), { timeout: 20_000, interval: 250 });
-    mkdirSync(tmp("unused"), { recursive: true });
   }, 120_000);
 });

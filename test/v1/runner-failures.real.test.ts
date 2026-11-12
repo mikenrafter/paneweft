@@ -1,7 +1,7 @@
 // A runner that fails BEFORE it runs anything is reported as what it is (field test F7, F30a). Against the real Vitest 3.2.4 repository: an exception while
 // the catalogue export imports the manifest, and an adapter whose executable has vanished. Both used to surface as a registration problem with cargo advice
 // (`paneweft::test_adapter!()`), whatever the runner.
-import { writeFileSync, appendFileSync } from "node:fs";
+import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { executeV1Operation } from "../../src/v1/tools.ts";
@@ -62,4 +62,3 @@ describe("[F7, F30a] a runner that cannot start", () => {
     expect(`${diagnostic.message} ${diagnostic.nextAction}`).not.toMatch(/test_adapter/);
   }, 300_000);
 });
-void writeFileSync;

@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createJobService } from "../../src/v1/jobs.ts";
 import { openV1Reader } from "../../src/v1/read.ts";
 import { makeVitest3Repo } from "../helpers/vitest3.ts";
-import { REPO_ROOT, useFakeQex, useV1Sessions } from "../helpers/v1-world.ts";
+import { useFakeQex, useV1Sessions } from "../helpers/v1-world.ts";
 import { must } from "../helpers/must.ts";
 import { useTempDirs } from "../helpers/tmp.ts";
 
@@ -78,6 +78,5 @@ describe("[F2] the catalogue export on Vitest 3", () => {
     expect(run.run.examples.map((example: any) => [example.id, example.outcome]).sort()).toEqual([["mapping.renamed", "passed"], ["mapping.work", "passed"]]);
     expect(existsSync(join(root, "node_modules/vitest/package.json"))).toBe(true);
     expect((JSON.parse(readFileSync(join(root, "node_modules/vitest/package.json"), "utf8")) as { version: string }).version, "the repository runs the pinned Vitest 3").toBe("3.2.4");
-    void REPO_ROOT;
   }, 600_000);
 });
