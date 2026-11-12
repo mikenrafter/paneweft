@@ -17,7 +17,10 @@ Read the repo instructions and the paneweft manifest. State the question and the
 3. Write an output test with a WHY and a CLAIM id. Use independently expected values. Run it red (a failing assertion, not a
    compile error) before implementing the projection. Follow build-loop gates when that workflow is active.
 4. Implement over real values. Select fields deliberately. Preserve object targets, partial states and evidence. Keep hooks out
-   of release builds.
+   of release builds. In a Rust crate the SDK is an optional path dependency on a copy INSIDE the repository
+   (`node <paneweft checkout>/scripts/vendor-rust-sdk.mjs vendor/paneweft`; `docs/v1-red-contract.md` section 1a): a path
+   outside the repository breaks every plain build where that checkout is absent, because Cargo reads optional path
+   dependencies even when the feature is off.
 5. Call `collect` with a registered adapter and the exact example ids. The collection exports the catalogue itself, resolves
    your ids against what it exported (so an example you just wrote needs no extra step), runs those examples, and stores the
    catalogue it exported once it succeeds. An id that no export declares fails the job and names the nearest declared ids.

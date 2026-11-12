@@ -417,7 +417,7 @@ function scaffoldView(kind: "cargo" | "vitest", args: { typeId: string; source: 
         "}",
         "",
       ].join("\n") },
-      registration: "Rust: nothing to import; `#[paneweft::views]` registers the descriptor with linkme. Make sure the test binary calls `paneweft::test_adapter!();` once, then collect the example (the collection exports the catalogue itself).",
+      registration: "Rust: nothing to import; `#[paneweft::views]` registers the descriptor with linkme. Cargo.toml: `[features] paneweft = [\"dep:paneweft\"]` and `[dependencies.paneweft] path = \"vendor/paneweft/paneweft\"  optional = true`, where `vendor/paneweft` is a copy of the SDK inside this repository (`node <paneweft checkout>/scripts/vendor-rust-sdk.mjs vendor/paneweft`): Cargo reads an optional path dependency even when its feature is off, so a path outside the repository breaks every plain build (and a Nix build) where that checkout is absent. Make sure the test binary calls `paneweft::test_adapter!();` once, then collect the example (the collection exports the catalogue itself).",
     };
   }
   const view = (token: string): string[] => [
@@ -573,7 +573,7 @@ async function scaffold(call: Call, tool: "scaffold_view" | "scaffold_example"):
     const example = (call.args.example as string | undefined) ?? `${slug(source.symbol)}.new`;
     if (kind === "cargo") {
       plan.patches = [{ path: plan.outputTest.path, text: `#[cfg(all(test, feature = "paneweft"))]\nmod examples {\n    // the example returns a value of the type declared in the module around this one; adjust the path if the type is declared deeper\n    use super::${source.symbol};\n\n    #[paneweft::example(id = ${JSON.stringify(example)}, claims = [${JSON.stringify(claim)}])]\n    fn ${slug(example)}() -> ${source.symbol} {\n        // TODO: build the value with the real constructor; do not invent fields.\n        unimplemented!("TODO: construct ${source.symbol}")\n    }\n}\n` }];
-      plan.registration = "Rust: nothing to import; `#[paneweft::example]` registers the example descriptor with linkme. Make sure the test binary calls `paneweft::test_adapter!();` once, then collect the example by its id: the collection exports the catalogue itself.";
+      plan.registration = "Rust: nothing to import; `#[paneweft::example]` registers the example descriptor with linkme. Cargo.toml: `[features] paneweft = [\"dep:paneweft\"]` and `[dependencies.paneweft] path = \"vendor/paneweft/paneweft\"  optional = true`, where `vendor/paneweft` is a copy of the SDK inside this repository (`node <paneweft checkout>/scripts/vendor-rust-sdk.mjs vendor/paneweft`): Cargo reads an optional path dependency even when its feature is off, so a path outside the repository breaks every plain build (and a Nix build) where that checkout is absent. Make sure the test binary calls `paneweft::test_adapter!();` once, then collect the example by its id: the collection exports the catalogue itself.";
     } else {
       // S12: the example brings everything it imports. The token declaration the plan proposed (when the repository declares none) is returned
       // WITH the example, the example is registered in the manifest (not the view the plan shared), and a test file runs it.

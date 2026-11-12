@@ -21,6 +21,28 @@ Week-one scope is amendment S1; claims outside it are tagged `later` in the repo
 | CLI | `src/cli/v1-commands.ts` (table; wiring is green) | `paneweft <words>` as a process |
 | MCP | `src/mcp/server.ts` (wiring is green) | `paneweft mcp` over stdio |
 
+### 1a. The Rust SDK dependency (F3)
+
+A crate with in-crate views and examples declares the SDK as an optional dependency behind a `paneweft` feature. Cargo reads the manifest of every path dependency, optional ones included, whenever it
+resolves a package, so a path that leaves the repository (`../../paneweft/crates/paneweft`) makes `cargo build`, `cargo metadata` and a Nix build fail wherever that checkout is absent, with the
+feature off. The recipe therefore keeps the dependency inside the repository:
+
+```
+node <paneweft checkout>/scripts/vendor-rust-sdk.mjs vendor/paneweft      # run in the instrumented repository; run it again to update the copy
+```
+```toml
+[features]
+paneweft = ["dep:paneweft"]
+[dependencies.paneweft]
+path = "vendor/paneweft/paneweft"
+optional = true
+```
+
+A Nix build lists `./vendor` in its source fileset. A release build leaves the feature off: the SDK is not in its build graph (its few third-party dependencies are only in `Cargo.lock`) and nothing of it is linked.
+Alternatives rejected: a git dependency (resolved and fetched with the feature off, and Nix needs a hash for it; there is no remote), a separate instrumentation crate (Rust's orphan rule forbids
+implementing the SDK's trait for a type of another crate, and the spec's point is views beside the code), and a manifest the host generates at collect time (it breaks every `CARGO_MANIFEST_DIR`-relative path).
+Tested with real cargo in `test/v1/rust-vendoring.real.test.ts`.
+
 Green implements every module and wires the tools into the CLI and the MCP server: `grep -rn NOT_IMPLEMENTED src packages crates scripts` is empty. The v0 surface is
 unchanged except where `test/v1/surface.test.ts` says otherwise; the v0 pins of the tool count (`src/cli/usage.test.ts`, `src/mcp/server.test.ts`) and the help table
 (`src/cli/help.examples.test.ts`) are amended to the twenty-three tools (thirteen v0, ten v1).
