@@ -8,7 +8,7 @@ import { Budget, DetailsBuilder, TableBuilder, canonicalJson, sha256Hex, type Vi
 import { callerLine } from "./callsite.ts";
 import { applyLimitOverrides, defaultLimits } from "./limits.ts";
 import { ViewError, type Component, type DiagnosticRecord, type Json, type Limits, type ObjectRef } from "./types.ts";
-import { RESERVE, cutString, encodeValue, newStats, type ByteMeter, type CapturedValue } from "./values.ts";
+import { RESERVE, cutString, encodeValue, jsonStringBytes, newStats, type ByteMeter, type CapturedValue } from "./values.ts";
 
 /** The symbol a class implements to be inspectable without a token. */
 export const paneweftViews: unique symbol = Symbol.for("paneweft.views");
@@ -184,6 +184,8 @@ export class Capture {
   private readonly path: number[] = [];
   private references = 0;
   private readonly omitted = new Map<string, number>();
+  /** Omissions whose size the capture does not know (an object cut short mid-walk): reported `known: false`, never as a guessed count. */
+  private readonly unknownOmissions = new Set<string>();
   /** Bytes of JSON text charged to the current root and to the whole collection (S2). */
   private rootUsed = 0;
   private totalUsed = 0;
@@ -247,17 +249,19 @@ export class Capture {
   setField(index: number, name: string, value: CapturedValue): void {
     const object = this.objectAt(index);
     const known = Object.hasOwn(object.fields, name);
-    const keyCost = jsonBytes(name) + 2;
-    if (!known && keyCost > this.meter.room() - RESERVE) {
+    const nameBytes = known ? 0 : jsonStringBytes(name, this.meter.room() - RESERVE - 2);
+    if (nameBytes === undefined) {
       this.count("fields", 1);
       return;
     }
-    if (!known) this.meter.spend(keyCost);
+    if (!known) this.meter.spend(nameBytes + 2);
     const stats = newStats();
     const encoded = encodeValue(value, this.limits, stats, 0, this.meter);
     this.count("strings", stats.strings);
     this.count("values", stats.values);
-    object.fields[name] = encoded;
+    if (stats.open) this.unknownOmissions.add("values");
+    // defined, not assigned: a field named `__proto__` is a field, not the prototype of the record
+    Object.defineProperty(object.fields, name, { value: encoded, enumerable: true, writable: true, configurable: true });
   }
 
   setLabel(index: number, text: string): void {
@@ -269,7 +273,7 @@ export class Capture {
       return;
     }
     this.meter.spend(delta);
-    object.label = text;
+    object.label = label;
     object.chargedLabel = label;
   }
 
@@ -329,13 +333,16 @@ export class Capture {
     const selection = this.select(value, token, context);
     const typeId = selection.type.id;
     // the record of the object (and the edge that reaches it) is charged before the object exists: no room, no object
-    const label = cutString(key ?? typeId.split("::").pop() ?? typeId, 256)[0];
+    // a domain key is at most 256 characters in the schema; a longer one is cut (and counted), not kept whole
+    const [domainKey, keyCut] = key === undefined ? [null, 0] : cutString(key, 256);
+    const label = cutString(domainKey ?? typeId.split("::").pop() ?? typeId, 256)[0];
     const childEdge: Json | undefined = parent === undefined ? undefined : { name: parent.name, kind: "child", target: id };
-    const skeleton = 170 + jsonBytes(id) + jsonBytes(typeId) + jsonBytes(key ?? null) + jsonBytes(label) + (childEdge === undefined ? 0 : jsonBytes(childEdge) + 1);
+    const skeleton = 170 + jsonBytes(id) + jsonBytes(typeId) + jsonBytes(domainKey) + jsonBytes(label) + (childEdge === undefined ? 0 : jsonBytes(childEdge) + 1);
     const byteBound = this.byteRefusal(skeleton, parent === undefined);
     if (byteBound !== undefined) return this.refuse(parent, byteBound);
     this.meter.spend(skeleton - (childEdge === undefined ? 0 : jsonBytes(childEdge) + 1));
-    this.objects.push({ id, typeId, domainKey: key ?? null, label: undefined, fields: {}, edges: [], views: [], depth: parentDepth === undefined ? 0 : parentDepth + 1, chargedLabel: label });
+    if (keyCut > 0) this.count("strings", 1);
+    this.objects.push({ id, typeId, domainKey, label: undefined, fields: {}, edges: [], views: [], depth: parentDepth === undefined ? 0 : parentDepth + 1, chargedLabel: label });
     if (trackable) this.byObject.set(value, index);
     if (identity !== undefined) this.byToken.set(identity, index);
     if (parent === undefined) {
@@ -463,8 +470,9 @@ export class Capture {
   }
 
   finish(): ObjectGraph {
-    const omitted = Object.fromEntries([...this.omitted.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([name, count]) => [name, { known: true, count }]));
-    const completeness: Json = this.omitted.size === 0 ? { status: "complete" } : { status: "partial", omitted };
+    const names = [...new Set([...this.omitted.keys(), ...this.unknownOmissions])].sort();
+    const omitted = Object.fromEntries(names.map((name) => [name, this.unknownOmissions.has(name) ? { known: false, count: null } : { known: true, count: this.omitted.get(name) as number }]));
+    const completeness: Json = names.length === 0 ? { status: "complete" } : { status: "partial", omitted };
     return new ObjectGraph({
       schemaVersion: "paneweft.object-graph/1",
       captureId: this.options.captureId,

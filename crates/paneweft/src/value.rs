@@ -1,6 +1,6 @@
 //! Values with explicit tagged states for everything JSON cannot carry (spec section 4, decision 9; docs/v1-red-contract.md
 //! section 2). Display cells format a value; object records keep the tag.
-use crate::meter::{json_bytes, Meter, RESERVE};
+use crate::meter::{json_bytes, json_string_bytes, Meter, RESERVE};
 use serde_json::{json, Map, Number, Value as Json};
 
 /// 2^53 - 1: the largest integer a JavaScript number holds exactly.
@@ -140,8 +140,15 @@ impl Value {
                     if exhausted(meter) {
                         break;
                     }
+                    // a key is admitted only if it fits what is left after the reserve (S2); one that does not ends the map
                     if let Some(meter) = meter {
-                        meter.spend(u64::from(index > 0) + json_bytes(&Json::String(key.clone())) + 1);
+                        let room = meter.room().saturating_sub(RESERVE);
+                        let Some(key_bytes) = json_string_bytes(key, room) else { break };
+                        let cost = u64::from(index > 0) + key_bytes + 1;
+                        if cost > room {
+                            break;
+                        }
+                        meter.spend(cost);
                     }
                     let encoded = value.encode_with(limits, stats, meter, depth + 1);
                     let cut = meter.is_some() && is_marker(&encoded);

@@ -76,7 +76,9 @@ describe("[S2] byte budgets are charged while the graph is built", () => {
       const started = performance.now();
       const graph = publish({ items }, { collectionBytes: 4096 });
       expect(charged(graph)).toBeLessThanOrEqual(4096);
-      expect(graph.completeness.omitted.values.count).toBeGreaterThan(1000);
+      // an object's walk stops with the budget, so what it left is unknown (S2, round 2); an array and a Map know their size
+      if (items === wide) expect(graph.completeness.omitted.values).toEqual({ known: false, count: null });
+      else expect(graph.completeness.omitted.values.count).toBeGreaterThan(1000);
       expect(performance.now() - started, "milliseconds").toBeLessThan(2500);
     }
   });
@@ -131,5 +133,101 @@ describe("[S3] a caller can only lower a bound", () => {
   // proves: CLAIM(S3-clamp)
   it("reads PANEWEFT_LIMITS through the same clamp", () => {
     expect(limitsFromEnv({ PANEWEFT_LIMITS: JSON.stringify({ collectionBytes: 2 ** 45, objects: 3 }) })).toEqual({ ...defaultLimits(), objects: 3 });
+  });
+});
+
+// ---- fix round 2 ----------------------------------------------------------------------------------------------------------------------
+
+const hugeKey = "K".repeat(100_000);
+
+describe("[S2r2] a key is admitted only if it fits what is left, and enumeration stops with the budget", () => {
+  // why: S2 (round 2). The Map branch charged `jsonBytes(key)` and kept the key whether or not it fitted: a 100,000-character key under a
+  // 4,096-byte budget produced 100,905 bytes. Rejects an implementation that spends a key's bytes before asking whether they fit.
+  // proves: CLAIM(S2-budgets)
+  it.each([
+    ["a Map", () => new Map<string, unknown>([["a", 1], [hugeKey, 2], ["b", 3]])],
+    ["an object", () => ({ a: 1, [hugeKey]: 2, b: 3 })],
+  ])("drops a 100,000-character key in %s and stops there", (_name, make) => {
+    const graph = publish({ items: make() }, { collectionBytes: 4096 });
+    expect(charged(graph)).toBeLessThanOrEqual(4096);
+    expect(JSON.stringify(graph)).not.toContain("KKKKKKKKKK");
+    const items = graph.objects[0].fields.items;
+    expect(items.a).toBe(1);
+    expect(items["…"]).toEqual({ $paneweft: "not-captured", reason: "collection-limit" });
+    expect(graph.completeness.status).toBe("partial");
+    expect(graph.completeness.omitted.values).toBeDefined();
+  });
+
+  // why: S2 (round 2). The first key of a container too big for the budget: nothing of it is kept, the container says so.
+  // proves: CLAIM(S2-budgets)
+  it.each([
+    ["a Map", () => new Map<string, unknown>([[hugeKey, 1]])],
+    ["an object", () => ({ [hugeKey]: 1 })],
+  ])("keeps nothing of %s whose only key does not fit", (_name, make) => {
+    const graph = publish({ items: make() }, { collectionBytes: 4096 });
+    expect(charged(graph)).toBeLessThanOrEqual(4096);
+    expect(graph.objects[0].fields.items).toEqual({ "…": { $paneweft: "not-captured", reason: "collection-limit" } });
+  });
+
+  // why: S2 (round 2). `Object.keys` listed every member of an object before the first byte was charged. A Proxy counts what the encoder
+  // asks of the object: 200,000 keys under a 4,096-byte budget must cost a few thousand property reads at most, not one per key.
+  // Rejects an implementation that materializes the key list first.
+  // proves: CLAIM(S2-budgets)
+  it("does not ask for the property of every key of a huge object", () => {
+    const keys = Array.from({ length: 200_000 }, (_, i) => `k${i}`);
+    let reads = 0;
+    const proxy = new Proxy({} as Record<string, number>, {
+      ownKeys: () => keys,
+      getOwnPropertyDescriptor: () => { reads += 1; return { value: 1, enumerable: true, configurable: true, writable: true }; },
+    });
+    const graph = publish({ items: proxy }, { collectionBytes: 4096 });
+    expect(charged(graph)).toBeLessThanOrEqual(4096);
+    expect(reads, "property reads").toBeLessThan(2000);
+    expect(graph.completeness.status).toBe("partial");
+  });
+
+  // why: S2 (round 2). When the walk of an object stops early the number left is not known; saying a number would be a guess. The omission is
+  // recorded as unknown, never as a count the capture did not make.
+  // proves: CLAIM(S2-budgets)
+  it("records an object cut short as an unknown omission, and a Map (whose size is known) as a count", () => {
+    const wide: Record<string, number> = {};
+    for (let i = 0; i < 5000; i += 1) wide[`k${i}`] = i;
+    const cut = publish({ items: wide }, { collectionBytes: 2048 });
+    expect(cut.completeness.omitted.values).toEqual({ known: false, count: null });
+    const map = publish({ items: new Map(Object.entries(wide)) }, { collectionBytes: 2048 });
+    expect(map.completeness.omitted.values.known).toBe(true);
+    expect(map.completeness.omitted.values.count).toBeGreaterThan(4000);
+  });
+
+  // why: S2 (round 2), siblings. A label longer than 256 bytes was kept whole in memory, a domain key longer than 256 characters made the
+  // whole graph fail the host's schema (domainKey maxLength 256), and a column title longer than 256 characters did the same to the view.
+  // proves: CLAIM(S2-budgets)
+  it("keeps no label, domain key or column title longer than the schema allows", () => {
+    const capture = new Capture({ limits: specLimits({}) });
+    const Keyed = defineType<{ n: number }>({ id: "t::Keyed", source: { path: "bounds.test.ts", symbol: "Keyed" } });
+    Keyed.view({ id: "keyed.t", title: "T", question: "Q?", priority: 1, component: "list", render: (_v, view) => {
+      view.label("L".repeat(100_000));
+      return view.table().textColumn("a", "T".repeat(300)).done();
+    } });
+    const parent = defineType<{ n: number }>({ id: "t::Parent", source: { path: "bounds.test.ts", symbol: "Parent" } });
+    parent.view({ id: "parent.t", title: "P", question: "Q?", priority: 1, component: "shape", render: (_v, view) => { view.reference({ n: 1 }, Keyed, { key: "d".repeat(1000) }); return view.details().field("x", 1).done(); } });
+    capture.publish({ n: 1 }, parent);
+    const graph = capture.finish().toJSON() as any;
+    const child = graph.objects[1];
+    expect(child.domainKey.length).toBeLessThanOrEqual(256);
+    expect(child.label.length).toBeLessThanOrEqual(256);
+    expect(graph.diagnostics.map((d: any) => d.category)).toContain("output-schema");
+  });
+
+  // why: S2 (round 2), sibling. A field named `__proto__` was assigned to the prototype of the field record: its bytes were charged and the
+  // field vanished without a word.
+  // proves: CLAIM(S2-budgets)
+  it("keeps a field named __proto__ as a field", () => {
+    const Proto = defineType<{ n: number }>({ id: "t::Proto", source: { path: "bounds.test.ts", symbol: "Proto" } });
+    Proto.view({ id: "proto.d", title: "D", question: "Q?", priority: 1, component: "shape", render: (_v, view) => { view.field("__proto__", 7); view.field("plain", 1); return view.details().field("x", 1).done(); } });
+    const capture = new Capture({ limits: specLimits({}) });
+    capture.publish({ n: 1 }, Proto);
+    const graph = JSON.parse(JSON.stringify(capture.finish().toJSON()));
+    expect(Object.keys(graph.objects[0].fields).sort()).toEqual(["__proto__", "plain"]);
   });
 });

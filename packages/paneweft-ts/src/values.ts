@@ -22,8 +22,10 @@ export interface EncodeStats {
   strings: number;
   /** Array elements, map entries and object members left out because the byte budget ran out. */
   values: number;
+  /** True when an object was cut with members still unvisited: how many are left is not known, because the walk stopped (S2). */
+  open: boolean;
 }
-export const newStats = (): EncodeStats => ({ strings: 0, values: 0 });
+export const newStats = (): EncodeStats => ({ strings: 0, values: 0, open: false });
 
 /** The byte budget an encoding is charged against WHILE it builds its output (S2): `room()` is what is left of the smaller of the root and
  * collection budgets, `spend` charges bytes of JSON text, `reason()` names the budget that is closer to empty. */
@@ -46,25 +48,34 @@ function utf8Length(codePoint: number): number {
   return codePoint < 0x80 ? 1 : codePoint < 0x800 ? 2 : codePoint < 0x10000 ? 3 : 4;
 }
 
-/** `[kept prefix, omitted byte count]`; the cut never splits a code point. */
+/** `[kept prefix, omitted byte count]`; the cut never splits a code point. The walk ends at the cut: the work is the limit, not the string. */
 export function cutString(text: string, limitBytes: number): [string, number] {
   // Every UTF-16 unit is at most 3 UTF-8 bytes, so a short string cannot exceed the limit.
   if (text.length * 3 <= limitBytes) return [text, 0];
   let bytes = 0;
   let end = 0;
-  let total = 0;
-  let open = true;
   for (const char of text) {
     const length = utf8Length(char.codePointAt(0) as number);
-    total += length;
-    if (open && bytes + length <= limitBytes) {
-      bytes += length;
-      end += char.length;
-    } else {
-      open = false;
-    }
+    if (bytes + length > limitBytes) return [text.slice(0, end), Buffer.byteLength(text, "utf8") - bytes];
+    bytes += length;
+    end += char.length;
   }
-  return total <= limitBytes ? [text, 0] : [text.slice(0, end), total - bytes];
+  return [text, 0];
+}
+
+/** The bytes of the JSON text of the string `text` if they are at most `limit`, else undefined. Every UTF-16 unit takes at least one byte of
+ * JSON text, so a string longer than the limit is refused before any text is built (S2: a key is admitted only if it fits). */
+export function jsonStringBytes(text: string, limit: number): number | undefined {
+  if (text.length + 2 > limit) return undefined;
+  return Buffer.byteLength(JSON.stringify(text), "utf8");
+}
+
+/** True when `text` has more than `max` code points; never walks more than `2 * max + 1` units of it. */
+export function exceedsCodePoints(text: string, max: number): boolean {
+  if (text.length > 2 * max) return true;
+  let count = 0;
+  for (const _ of text) count += 1;
+  return count > max;
 }
 
 function isRecordLike(value: object): value is Record<string, CapturedValue> {
@@ -178,42 +189,57 @@ export function encodeValue(value: CapturedValue, limits: Limits, stats: EncodeS
     return out;
   }
   const pairs: Array<[string, Json]> = [];
-  let total: number;
   let stopped = false;
+  /** Charges the member name `name` if it fits what is left after the reserve; a name that does not fit ends the container (S2). */
+  const admitKey = (name: string): boolean => {
+    if (meter === undefined) return true;
+    const room = meter.room() - RESERVE;
+    const keyBytes = jsonStringBytes(name, room);
+    if (keyBytes === undefined) return false;
+    const cost = (pairs.length > 0 ? 1 : 0) + keyBytes + 1;
+    if (cost > room) return false;
+    meter.spend(cost);
+    return true;
+  };
+  let left = 0;
   if (value instanceof Map) {
-    total = value.size;
-    let index = 0;
+    const total = value.size;
     for (const [key, item] of value) {
       if (exhausted()) break;
       const name = String(key);
-      meter?.spend((index > 0 ? 1 : 0) + jsonBytes(name) + 1);
+      if (!admitKey(name)) break;
       const encoded = encodeValue(item, limits, stats, depth + 1, meter);
       pairs.push([name, encoded]);
-      index += 1;
       if (isMarker(encoded) && meter !== undefined) {
         stopped = true;
         break;
       }
     }
+    left = total - pairs.length;
   } else {
-    const keys = Object.keys(value);
-    total = keys.length;
-    for (const [index, key] of keys.entries()) {
-      if (exhausted()) break;
-      meter?.spend((index > 0 ? 1 : 0) + jsonBytes(key) + 1);
+    // A counted walk that ends with the budget (S2): `for...in` reads a member only when asked for the next one, so a huge object costs what
+    // is kept, not what it holds. How many members were left is then not known: it is recorded as unknown, never as a guess.
+    let more = false;
+    for (const key in value) {
+      if (!Object.hasOwn(value, key)) continue;
+      if (stopped || exhausted() || !admitKey(key)) {
+        more = true;
+        break;
+      }
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       const accessor = descriptor === undefined ? undefined : descriptor.get !== undefined || descriptor.set !== undefined ? ({ $paneweft: "unsupported", reason: "getter" } as Json) : undefined;
       const encoded = accessor === undefined ? encodeValue(descriptor?.value as CapturedValue, limits, stats, depth + 1, meter) : emit(accessor);
       pairs.push([key, encoded]);
-      if (isMarker(encoded) && meter !== undefined) {
-        stopped = true;
-        break;
-      }
+      if (isMarker(encoded) && meter !== undefined) stopped = true;
+    }
+    if (more) {
+      left = 1;
+      stats.open = true;
     }
   }
-  if (stopped) stats.values += total - pairs.length;
-  else if (pairs.length < total) {
-    stats.values += total - pairs.length;
+  if (stopped) stats.values += left;
+  else if (left > 0) {
+    stats.values += left;
     let cutKey = CUT_KEY;
     while (pairs.some(([key]) => key === cutKey)) cutKey += CUT_KEY;
     meter?.spend((pairs.length > 0 ? 1 : 0) + jsonBytes(cutKey) + 1);

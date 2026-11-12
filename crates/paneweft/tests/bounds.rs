@@ -159,3 +159,69 @@ fn an_override_that_is_not_an_integer_bound_is_ignored() {
     assert_eq!(base.with_overrides(&json!(null)), base);
     assert_eq!(base.with_overrides(&json!([7])), base);
 }
+
+// ---- fix round 2 ----------------------------------------------------------------------------------------------------------------------
+
+// why: S2 (round 2). The map branch charged the bytes of a key and kept it whether or not it fitted: a 100,000-character key under a 4,096-byte
+// budget produced about 100 KB. Rejects an implementation that spends a key's bytes before asking whether they fit.
+// proves: CLAIM(S2-budgets)
+#[test]
+fn a_key_that_does_not_fit_ends_the_map() {
+    let huge = "K".repeat(100_000);
+    let map = Value::Map(vec![("a".to_string(), Value::from(1)), (huge.clone(), Value::from(2)), ("b".to_string(), Value::from(3))]);
+    let graph = publish(&Big { items: map, rows: 0 }, |l| l.collection_bytes = 4096);
+    assert!(charged(&graph) <= 4096, "charged {} bytes", charged(&graph));
+    assert!(!graph.to_string().contains("KKKKKKKKKK"));
+    let items = &graph["objects"][0]["fields"]["items"];
+    assert_eq!(items["a"], json!(1));
+    assert_eq!(items["\u{2026}"], json!({"$paneweft": "not-captured", "reason": "collection-limit"}));
+    assert_eq!(graph["completeness"]["status"], "partial");
+}
+
+// why: S2 (round 2). The only key of a map is too big for the budget: nothing of it is kept and the map says so.
+// proves: CLAIM(S2-budgets)
+#[test]
+fn a_map_whose_only_key_does_not_fit_keeps_nothing() {
+    let map = Value::Map(vec![("K".repeat(100_000), Value::from(1))]);
+    let graph = publish(&Big { items: map, rows: 0 }, |l| l.collection_bytes = 4096);
+    assert!(charged(&graph) <= 4096, "charged {} bytes", charged(&graph));
+    assert_eq!(graph["objects"][0]["fields"]["items"], json!({"\u{2026}": {"$paneweft": "not-captured", "reason": "collection-limit"}}));
+}
+
+struct Keyed;
+impl Inspectable for Keyed {
+    const PANEWEFT_TYPE_ID: &'static str = "t::Keyed";
+    fn views(&self, cx: &mut Context) -> ViewSetResult {
+        cx.label(&"L".repeat(100_000));
+        let mut set = ViewSetResult::new();
+        set.run(cx, ViewMeta { id: "keyed.t", title: "T", question: "Q?", component: "list", priority: 1 }, |cx| cx.table().text_column("a", &"T".repeat(300)).finish());
+        set
+    }
+}
+struct KeyedParent;
+impl Inspectable for KeyedParent {
+    const PANEWEFT_TYPE_ID: &'static str = "t::KeyedParent";
+    fn views(&self, cx: &mut Context) -> ViewSetResult {
+        let mut set = ViewSetResult::new();
+        set.run(cx, DETAILS, |cx| {
+            cx.reference_keyed(&Keyed, &"d".repeat(1000)).expect("reference");
+            cx.details().finish()
+        });
+        set
+    }
+}
+
+// why: S2 (round 2), siblings. A domain key longer than 256 characters made the whole graph fail the host's schema (domainKey maxLength 256), a
+// column title longer than 256 characters did the same to the view, and a long label was kept whole in memory.
+// proves: CLAIM(S2-budgets)
+#[test]
+fn no_label_domain_key_or_column_title_is_longer_than_the_schema_allows() {
+    let mut capture = Capture::new(CaptureOptions { limits: default_limits(), ..CaptureOptions::default() });
+    capture.publish(&KeyedParent).expect("publishes");
+    let graph = capture.finish().to_json();
+    let child = &graph["objects"][1];
+    assert!(child["domainKey"].as_str().unwrap().len() <= 256, "domain key of {} bytes", child["domainKey"].as_str().unwrap().len());
+    assert!(child["label"].as_str().unwrap().len() <= 256);
+    let categories: Vec<&str> = graph["diagnostics"].as_array().unwrap().iter().map(|d| d["category"].as_str().unwrap()).collect();
+    assert!(categories.contains(&"output-schema"), "a column title over 256 characters is an output-schema fault: {categories:?}");
+}

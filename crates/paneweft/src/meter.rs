@@ -46,3 +46,12 @@ impl Meter {
 
 /// The size in bytes of the JSON text of `json`.
 pub(crate) fn json_bytes(json: &Json) -> u64 { json.to_string().len() as u64 }
+
+/// The bytes of the JSON text of the string `text` if they are at most `limit`, else `None`. Every byte of `text` takes at least one byte of
+/// JSON text, so a string longer than the limit is refused before any text is built (S2: a key is admitted only if it fits).
+pub(crate) fn json_string_bytes(text: &str, limit: u64) -> Option<u64> {
+    if (text.len() as u64).saturating_add(2) > limit {
+        return None;
+    }
+    Some(json_bytes(&Json::String(text.to_string())))
+}

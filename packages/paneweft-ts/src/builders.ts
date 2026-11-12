@@ -2,7 +2,7 @@
 // exhaustion gives partial output, never a failed view. Lowering follows docs/v1-red-contract.md section 3.
 import { createHash } from "node:crypto";
 import { ViewError, type Bounded, type Direction, type Json, type Limits, type ObjectRef } from "./types.ts";
-import { RESERVE, newStats, scalarOf, typeName, type ByteMeter, type CapturedValue, type EncodeStats } from "./values.ts";
+import { RESERVE, exceedsCodePoints, newStats, scalarOf, typeName, type ByteMeter, type CapturedValue, type EncodeStats } from "./values.ts";
 
 export interface BuiltPage {
   pageId: string;
@@ -50,7 +50,7 @@ export class Budget {
 const evidence = (): Json => ["run"];
 
 function validId(kind: string, text: string): void {
-  if (text.length === 0 || [...text].length > 120) throw new ViewError("output-schema", `${kind} ${JSON.stringify(text)} must be 1 to 120 characters`);
+  if (text.length === 0 || exceedsCodePoints(text, 120)) throw new ViewError("output-schema", `${kind} ${JSON.stringify(text)} must be 1 to 120 characters`);
 }
 
 /** Canonical JSON: keys sorted at every level (code-unit order), the text a page id and a content hash cover. */
@@ -182,6 +182,8 @@ export class TableBuilder {
     for (const column of this.columns) {
       validId("column key", column.key);
       if (column.title.length === 0) throw new ViewError("output-schema", `column ${JSON.stringify(column.key)} needs a title`);
+      // a title is a label of at most 256 characters in the list schema; a longer one would fail the whole view at the host
+      if (exceedsCodePoints(column.title, 256)) throw new ViewError("output-schema", `the title of column ${JSON.stringify(column.key)} must be 1 to 256 characters`);
       if (keys.has(column.key)) throw new ViewError("output-schema", `duplicate column key ${JSON.stringify(column.key)}`);
       keys.add(column.key);
     }

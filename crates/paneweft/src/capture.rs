@@ -6,7 +6,7 @@
 use crate::builders::{Budget, DetailsBuilder, TableBuilder, View, ViewBody};
 use crate::json::{canonical, sha256_hex};
 use crate::limits::Limits;
-use crate::meter::{json_bytes, Meter, RESERVE};
+use crate::meter::{json_bytes, json_string_bytes, Meter, RESERVE};
 use crate::value::{EncodeStats, Value};
 use serde_json::{json, Map, Value as Json};
 use std::cell::{Cell, RefCell};
@@ -294,13 +294,13 @@ impl State {
     /// Charges and stores a declared field. The value is encoded against the byte budget; what does not fit is cut and counted.
     fn set_field(&mut self, object: usize, name: &str, value: Value) {
         let known = self.objects[object].fields.contains_key(name);
-        let key_cost = json_bytes(&Json::String(name.to_string())) + 2;
-        if !known && key_cost > self.meter.room().saturating_sub(RESERVE) {
+        let name_bytes = if known { Some(0) } else { json_string_bytes(name, self.meter.room().saturating_sub(RESERVE + 2)) };
+        let Some(name_bytes) = name_bytes else {
             self.count("fields", 1);
             return;
-        }
+        };
         if !known {
-            self.meter.spend(key_cost);
+            self.meter.spend(name_bytes + 2);
         }
         let mut stats = EncodeStats::default();
         let encoded = value.encode_with(&self.limits(), &mut stats, Some(&self.meter), 0);
@@ -321,7 +321,7 @@ impl State {
         } else {
             self.meter.refund((-delta) as u64);
         }
-        self.objects[object].label = Some(text.to_string());
+        self.objects[object].label = Some(label.clone());
         self.objects[object].charged_label = label;
     }
 
@@ -407,15 +407,26 @@ impl State {
         let id = format!("o{}", index + 1);
         // the record of the object (and the edge that reaches it) is charged before the object exists: no room, no object
         let type_id = value.paneweft_type_id();
-        let default_label = crate::value::cut_str(&key.map_or_else(|| type_id.rsplit("::").next().unwrap_or(type_id).to_string(), str::to_string), 256).0.to_string();
+        // a domain key is at most 256 characters in the schema; a longer one is cut (and counted), not kept whole
+        let (domain_key, key_cut) = match key {
+            Some(key) => {
+                let (kept, omitted) = crate::value::cut_str(key, 256);
+                (Some(kept.to_string()), omitted > 0)
+            }
+            None => (None, false),
+        };
+        let default_label = crate::value::cut_str(&domain_key.clone().unwrap_or_else(|| type_id.rsplit("::").next().unwrap_or(type_id).to_string()), 256).0.to_string();
         let child_edge = parent.as_ref().map(|(_, name)| json!({"name": name, "kind": "child", "target": id}));
         let edge_cost = child_edge.as_ref().map_or(0, |edge| json_bytes(edge) + 1);
-        let skeleton = 170 + json_bytes(&json!(id)) + json_bytes(&json!(type_id)) + json_bytes(&json!(key)) + json_bytes(&json!(default_label)) + edge_cost;
+        let skeleton = 170 + json_bytes(&json!(id)) + json_bytes(&json!(type_id)) + json_bytes(&json!(domain_key)) + json_bytes(&json!(default_label)) + edge_cost;
         if let Some(bound) = self.byte_refusal(skeleton, parent.is_none()) {
             return self.refuse(&parent, bound);
         }
         self.meter.spend(skeleton - edge_cost);
-        self.objects.push(ObjectRec { id: id.clone(), type_id, domain_key: key.map(str::to_string), label: None, fields: Map::new(), edges: Vec::new(), views: Vec::new(), depth: parent_depth.map_or(0, |d| d + 1), charged_label: default_label });
+        if key_cut {
+            self.count("strings", 1);
+        }
+        self.objects.push(ObjectRec { id: id.clone(), type_id, domain_key, label: None, fields: Map::new(), edges: Vec::new(), views: Vec::new(), depth: parent_depth.map_or(0, |d| d + 1), charged_label: default_label });
         if let Some(token) = token {
             self.by_token.insert(token.to_string(), index);
         }

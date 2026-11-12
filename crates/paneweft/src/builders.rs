@@ -103,7 +103,7 @@ fn output_schema(message: String) -> ViewError {
 }
 
 fn valid_id(kind: &str, text: &str) -> Result<(), ViewError> {
-    if text.is_empty() || text.chars().count() > 120 {
+    if text.is_empty() || text.chars().take(121).count() > 120 {
         return Err(output_schema(format!("{kind} {text:?} must be 1 to 120 characters")));
     }
     Ok(())
@@ -253,6 +253,10 @@ impl TableBuilder {
             valid_id("column key", key)?;
             if title.is_empty() {
                 return Err(output_schema(format!("column {key:?} needs a title")));
+            }
+            // a title is a label of at most 256 characters in the list schema; a longer one would fail the whole view at the host
+            if title.chars().take(257).count() > 256 {
+                return Err(output_schema(format!("the title of column {key:?} must be 1 to 256 characters")));
             }
             if !column_keys.insert(key.as_str()) {
                 return Err(output_schema(format!("duplicate column key {key:?}")));
