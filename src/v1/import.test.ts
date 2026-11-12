@@ -147,15 +147,29 @@ it("[S27] refuses excessive nesting before recursive canonicalization", async ()
   if (!result.ok) expect(result.error.errors.some((e) => e.code === "LIMIT_EXCEEDED")).toBe(true);
 });
 
-// WHY CLAIM(S27): multiple individually bounded graphs cannot consume an unbounded aggregate import budget.
-it("[S27] refuses aggregate graph bytes without relying on caller byte counts", async () => {
+// WHY CLAIM(S39): collectionBytes bounds each capture document, not the sum of the run's captures (docs/v1-red-contract.md sections 2, 5).
+// Rejects an aggregate check in importCollection: the third graph of a run, each under the limit, was refused for the sum.
+it("[S39] imports several captures that are each under collectionBytes but together over it", async () => {
   const { session } = await open();
   const input = collectionImport("vigil-redelivered");
   const graph = input.graphs[0] as any;
   const cap = Buffer.byteLength(JSON.stringify(graph)) + 100;
   graph.limits.collectionBytes = cap;
-  input.graphs.push({ ...structuredClone(graph), captureId: "another-capture" });
+  for (const captureId of ["another-capture", "third-capture"]) input.graphs.push({ ...structuredClone(graph), captureId });
+  const result = await importCollection(session, { ...input, effective: { collectionBytes: cap }, graphBytes: input.graphs.map(() => cap - 10) });
+  expect(result.ok, JSON.stringify(result)).toBe(true);
+  if (result.ok) expect(result.value.captureIds).toHaveLength(3);
+});
+
+// WHY CLAIM(S39): the per-capture bound is the one that stays: one graph over collectionBytes is refused, measured from the document itself.
+it("[S39] refuses one capture over collectionBytes without relying on caller byte counts", async () => {
+  const { session } = await open();
+  const input = collectionImport("vigil-redelivered");
+  const graph = input.graphs[0] as any;
+  const cap = Buffer.byteLength(JSON.stringify(graph)) + 100;
+  graph.limits.collectionBytes = cap;
+  graph.objects[0].fields.pad = "x".repeat(cap);
   const result = await importCollection(session, { ...input, effective: { collectionBytes: cap } });
   expect(result.ok).toBe(false);
-  if (!result.ok) expect(result.error.message).toContain("aggregate captures");
+  if (!result.ok) expect(result.error.errors.some((e) => e.code === "LIMIT_EXCEEDED")).toBe(true);
 });

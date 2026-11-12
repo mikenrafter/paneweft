@@ -18,7 +18,7 @@ import type { Inventory } from "../generated/v1/Inventory.ts";
 import { validateAgainstV1 } from "./schemas.ts";
 import type { TestRun } from "../generated/v1/TestRun.ts";
 import { buildProcess, foldExactFilters, parseCargoLists, reconcile, selectExamples, type AdapterRecord, type ProcessSpec, type Selection } from "./adapters.ts";
-import { StagingBudget } from "./bounded-read.ts";
+import { readStaging } from "./staging.ts";
 import { validateObjectGraph } from "./capture.ts";
 import { checkInventory, mergeCatalogue, type CataloguePart, type InventoryProblem } from "./catalogue.ts";
 import { qualifyDiagnosticId } from "./diagnostic-id.ts";
@@ -375,44 +375,6 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
   }
   async function leaseIsLive(id: string): Promise<boolean> {
     return !(await withLease(id, async () => undefined)).held;
-  }
-
-  async function readStaging(stagingDir: string, collectionBytes = SDK_LIMITS.collectionBytes): Promise<{ invocations: Array<{ started: Record<string, unknown> | null; completed: Record<string, unknown> | null }>; captures: Map<string, { document: unknown; file: string; bytes: number }>; reporter: unknown; typecheck: { exitCode: number; output: string } | undefined; parts: Array<{ name: string; document: Record<string, unknown> }> }> {
-    const budget = new StagingBudget(collectionBytes);
-    const readArtifact = async <T>(path: string): Promise<T | undefined> => budget.json<T>(path).catch(() => undefined);
-    const list = async (sub: string): Promise<string[]> => (await readdir(join(stagingDir, sub)).catch(() => [])).sort();
-    const started = new Map<string, Record<string, unknown>>();
-    const completed = new Map<string, Record<string, unknown>>();
-    for (const name of await list("invocations")) {
-      const document = await readArtifact<Record<string, unknown>>(join(stagingDir, "invocations", name));
-      if (document === undefined || typeof document.id !== "string") continue;
-      if (name.endsWith(".started.json")) started.set(document.id, document);
-      else completed.set(document.id, document);
-    }
-    const ids = [...new Set([...started.keys(), ...completed.keys()])];
-    const timeOf = (id: string): string => String((started.get(id) ?? completed.get(id))?.startedAt ?? "");
-    const natural = (a: string, b: string): number => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0);
-    ids.sort((a, b) => (timeOf(a) < timeOf(b) ? -1 : timeOf(a) > timeOf(b) ? 1 : natural(a, b)));
-    const captures = new Map<string, { document: unknown; file: string; bytes: number }>();
-    for (const name of await list("captures")) {
-      // the size of a capture is the size of the file the worker wrote, which is the text its SDK counted
-      const file = join(stagingDir, "captures", name);
-      let bytes = 0;
-      let document: unknown;
-      try {
-        // The bounded reader checks the opened file and refuses growth; no full read or parse can precede its cap.
-        const read = await budget.jsonWithBytes<unknown>(file);
-        document = read.document;
-        bytes = read.bytes;
-      } catch { bytes = collectionBytes + 1; }
-      captures.set(name.replace(/\.json$/, ""), { document, file, bytes });
-    }
-    const parts: Array<{ name: string; document: Record<string, unknown> }> = [];
-    for (const name of await list("catalogue")) {
-      const document = await readArtifact<Record<string, unknown>>(join(stagingDir, "catalogue", name));
-      if (document !== undefined) parts.push({ name: name.replace(/\.json$/, ""), document });
-    }
-    return { invocations: ids.map((id) => ({ started: started.get(id) ?? null, completed: completed.get(id) ?? null })), captures, reporter: await readArtifact<unknown>(join(stagingDir, "reporter.json")), typecheck: await readArtifact<{ exitCode: number; output: string }>(join(stagingDir, "typecheck.json")), parts };
   }
 
   function compileDiagnostics(log: string, typecheck: { output: string } | undefined, kind: "cargo" | "vitest"): Diagnostic[] {

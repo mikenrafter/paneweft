@@ -576,6 +576,28 @@ describe("[D1] the host holds a capture to the operator's ceilings", () => {
   });
 });
 
+// WHY CLAIM(S39): collectionBytes bounds each capture document. Rejects one staging budget of collectionBytes for the whole run: the second
+// of three 2000-byte captures under a 3000-byte limit was quarantined and its invocation lost its capture.
+it("[S39] admits every capture of a run that is under collectionBytes though they exceed it together", async () => {
+  const { session, dir, qex, service } = await world();
+  qex.scenario({ padBytes: 2000, declaredCollectionBytes: 3000 });
+  must(await service().collect(request("s39", { examples: ["watch.cancelled", "watch.pending", "watch.redelivered"], limits: { collectionBytes: 3000 } })), "collect");
+  const view = await settle(service(), "s39", ["succeeded", "failed"]);
+  expect(view.state, JSON.stringify(view)).toBe("succeeded");
+  expect(existsSync(join(dir, "jobs", "s39", "quarantine", "captures", "inv-2.json"))).toBe(false);
+  const run = must(await openV1Reader(session).run("run-s39"), "run");
+  expect(run.run.invocations.map((invocation: any) => invocation.capture.outcome)).toEqual(["captured", "captured", "captured"]);
+});
+
+// WHY CLAIM(S39): the per-capture bound still holds at the job: a capture over collectionBytes is quarantined, its neighbours are not.
+it("[S39] quarantines a capture over collectionBytes", async () => {
+  const { dir, qex, service } = await world();
+  qex.scenario({ padBytes: 3001, declaredCollectionBytes: 3000 });
+  must(await service().collect(request("s39b", { limits: { collectionBytes: 3000 } })), "collect");
+  await settle(service(), "s39b", ["failed"]);
+  expect(existsSync(join(dir, "jobs", "s39b", "quarantine", "captures", "inv-1.json"))).toBe(true);
+});
+
 // WHY CLAIM(S31): rejects service-wide held.has(id) letting an unrelated status operation advance a live importer.
 it("[S31] concurrent calls on one service cannot reenter the owner's import lease", async () => {
   let enter!: () => void;

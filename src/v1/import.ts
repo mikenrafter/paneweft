@@ -92,14 +92,11 @@ export async function importCollection(session: Session, input: CollectionImport
   if (!run.ok) return run;
   const limits = resolveRequestedLimits(input.effective, input.ceilings);
   if (!limits.ok) return limits;
-  const total = input.graphBytes?.reduce((n, size) => n + size, 0);
-  if (total !== undefined && total > limits.value.report.effective.collectionBytes) return err("VALIDATION_FAILED", "aggregate captures exceed resolved collectionBytes");
-  let aggregateBytes = 0;
+  // CLAIM(S39): collectionBytes bounds each capture document (preflight and validateObjectGraph measure it per graph); the run has no sum bound here,
+  // the staging ceiling (staging.ts) bounds what the host reads.
   for (const [index, document] of input.graphs.entries()) {
     const preflight = preflightObjectGraph(document, { expectedRunId: input.runId, ...(input.effective === undefined ? {} : { effective: input.effective }), ...(input.ceilings === undefined ? {} : { ceilings: input.ceilings }) });
     if (!preflight.ok) return preflight;
-    aggregateBytes += input.graphBytes?.[index] ?? preflight.value;
-    if (aggregateBytes > limits.value.report.effective.collectionBytes) return err("VALIDATION_FAILED", "aggregate captures exceed resolved collectionBytes");
   }
   const digest = sha256Hex(canonicalJson({ repo: input.repo, run: input.run, graphs: input.graphs }));
   // A committed import answers without any lock (the answer cannot change: a committed run id is never rewritten); it is checked again

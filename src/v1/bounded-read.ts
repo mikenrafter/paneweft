@@ -1,4 +1,4 @@
-// CLAIM(S27): stat and a bounded read precede JSON parsing; all staging reads share one aggregate allowance [bounded-read.test.ts].
+// CLAIM(S27): stat and a bounded read precede JSON parsing; every read is bounded by its own maximum and by what is left of its allowance [bounded-read.test.ts].
 import { open } from "node:fs/promises";
 
 export class StagingBudget {
@@ -19,8 +19,9 @@ export class StagingBudget {
         const buffer = Buffer.alloc(Math.min(64 * 1024, cap - used + 1));
         const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
         if (bytesRead === 0) break;
+        // a file is charged at most its cap, so an allowance sized as n files of `cap` bytes is never spent by a file that grew
+        this.remaining -= Math.max(0, Math.min(bytesRead, cap - used));
         used += bytesRead;
-        this.remaining -= bytesRead;
         if (used > cap) throw new RangeError(`artifact grew beyond staging budget (${cap} bytes)`);
         chunks.push(buffer.subarray(0, bytesRead));
       }
