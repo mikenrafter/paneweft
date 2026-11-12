@@ -24,6 +24,7 @@ import type { Inventory } from "../generated/v1/Inventory.ts";
 import type { Fingerprint } from "./fingerprint.ts";
 import type { JobService } from "./jobs.ts";
 import { withStoredPages } from "./pages.ts";
+import { CHECKOUT_ROOT, adapterRoot, cargoWiring, declaresRustModule, rustFacts, typeScriptFacts, wordSlug, wordTitle, type RustFacts, type TypeScriptFacts } from "./scaffold-facts.ts";
 import { rendererOfCatalogue, rendererOfLastCapture, rendererOfStoredView, type StoredRenderer, type ViewRenderer } from "./renderer-status.ts";
 import { exampleOfCapture, isFailedExample, type ExampleOfResult } from "./result-example.ts";
 import { adaptersOf, freshnessOf, judgeRun, type Consistency, type Freshness } from "./snapshot-freshness.ts";
@@ -85,6 +86,8 @@ interface ReplySpec {
   textLines?: string[];
   /** What defines the listing a cursor continues (tool and its filters, never the budget). */
   query: Json;
+  /** Counts of a reply whose content is not an item list (a scaffold's patches): they replace the ones derived from `items`. */
+  fixedCounts?: { total?: number; matched: number; returned: number; omitted: number };
 }
 
 function freshnessLine(freshness: Freshness): string {
@@ -100,6 +103,7 @@ function renderReply(spec: ReplySpec, format: ReplyFormat, start: number, count:
   const page = spec.items.slice(start, start + count);
   const counts = { unit: spec.unit, total: spec.total, matched: spec.items.length, returned: page.length, omitted: spec.items.length - page.length - start + Math.max(0, start - 0) - Math.max(0, start), truncated: cursor !== null };
   counts.omitted = spec.items.length - start - page.length;
+  if (spec.fixedCounts !== undefined) Object.assign(counts, spec.fixedCounts);
   if (format === "json") {
     return JSON.stringify({ schemaVersion: "paneweft.reply/2", tool: spec.tool, completeness: spec.completeness, freshness: spec.freshness, counts, items: page.map((item) => item.json), notices: spec.notices ?? [], cursor, ...(spec.details === undefined ? {} : { details: spec.details }) });
   }
@@ -359,6 +363,10 @@ interface ScaffoldPlan {
   token?: { symbol: string; module: string; declared: boolean };
   /** TypeScript, `declared` false: the module that declares the token and nothing else; whatever uses the token must return it too (S12). */
   tokenPatch?: Patch;
+  /** What the repository still lacks before the patches work (an install, a copy of the SDK, a reporter line); a step with a `command` is run as given. */
+  setup: SetupStep[];
+  /** Facts about the repository the reader should know before applying (an existing module the scaffold goes around). */
+  notices: string[];
 }
 
 /** The module specifier that imports `target` (a repository-relative path) from a file in the directory `from`. */
@@ -385,73 +393,186 @@ async function declaredToken(adapter: AdapterRecord | undefined, catalogue: Cata
   return undefined;
 }
 
-function scaffoldView(kind: "cargo" | "vitest", args: { typeId: string; source: { path: string; symbol: string }; question: string; component: "shape" | "list"; claim: string; token?: { symbol: string; module: string } }): ScaffoldPlan {
-  const name = slug(args.question);
-  const title = args.question.replace(/\?$/, "").slice(0, 60);
+interface SetupStep { step: string; command?: string }
+
+/** A shell word for `text`: as is when it needs no quoting, else in single quotes. */
+const shellWord = (text: string): string => (/^[\w@%+=:,./-]+$/.test(text) ? text : `'${text.replace(/'/g, "'\\''")}'`);
+
+/** A module of a manifest: the symbols it exports, by kind. */
+interface ManifestEntry { path: string; types?: string[]; views?: string[]; examples?: string[] }
+
+/** The `paneweft.views.ts` of a repository that has none: imports exactly the symbols the entries list, from the modules that export them. */
+function manifestPatch(entries: ManifestEntry[]): Patch {
+  const imports = entries.map((entry) => `import { ${[...(entry.types ?? []), ...(entry.views ?? []), ...(entry.examples ?? [])].join(", ")} } from ${JSON.stringify(importFrom(".", entry.path))};`);
+  const modules = entries.map((entry) => `    { ${[`path: ${JSON.stringify(entry.path)}`, ...(["types", "views", "examples"] as const).filter((kind) => (entry[kind] ?? []).length > 0).map((kind) => `${kind}: [${(entry[kind] as string[]).join(", ")}]`)].join(", ")} },`);
+  return { path: "paneweft.views.ts", text: [
+    "// The explicit import manifest: the modules that hold types, views and examples are listed here, not discovered. A module that is not listed is invisible to the catalogue.",
+    "import { defineManifest } from \"@paneweft/sdk\";",
+    ...imports,
+    "",
+    "export const manifest = defineManifest({",
+    "  runners: [\"vitest\"],",
+    "  modules: [",
+    ...modules,
+    "  ],",
+    "});",
+    "",
+  ].join("\n") };
+}
+
+/** What a TypeScript repository still lacks before a collect can work: the SDK, the reporter in the vitest config. The manifest is a patch (`manifestPatch`). */
+function typeScriptSetup(facts: TypeScriptFacts): { steps: SetupStep[]; patches: Patch[] } {
+  const steps: SetupStep[] = [];
+  const patches: Patch[] = [];
+  if (!facts.sdkInstalled) steps.push({ step: "install the SDK as a development dependency, in the package directory (it is not published; this is the checkout this server runs from)", command: `npm install --save-dev @paneweft/sdk@file:${shellWord(`${CHECKOUT_ROOT}/packages/paneweft-ts`)}` });
+  if (!facts.config.exists) patches.push({ path: facts.config.path, text: ["import { defineConfig } from \"vitest/config\";", "", "export default defineConfig({", "  test: {", "    // the reporter finalizes the outcome of every example after its hooks and teardown; it must be listed or a collection is incomplete", "    reporters: [\"default\", \"@paneweft/sdk/vitest-reporter\"],", "  },", "});", ""].join("\n") });
+  else if (!facts.config.reporter) steps.push({ step: `list the reporter in ${facts.config.path}: inside \`test\`, add reporters: ["default", "@paneweft/sdk/vitest-reporter"] (a repository that already lists reporters keeps them and adds this one)` });
+  return { steps, patches };
+}
+
+interface RustPlan { cargoPatches: Patch[]; steps: SetupStep[]; viewTestsModule: string; examplesModule: string }
+
+/** The Cargo wiring a crate still lacks (patches that append cleanly, steps for what cannot be appended) and the names of the modules the scaffold would add. */
+function rustPlan(facts: RustFacts): RustPlan {
+  const wiring = cargoWiring(facts.cargo);
+  const steps: SetupStep[] = [];
+  const cargoPatches: Patch[] = [];
+  if (!facts.vendored) steps.push({ step: "copy the SDK into this repository, in the crate root (a path outside it breaks every plain build where the paneweft checkout is absent; run it again to update the copy)", command: `node ${shellWord(`${CHECKOUT_ROOT}/scripts/vendor-rust-sdk.mjs`)} vendor/paneweft` });
+  const lines: string[] = [];
+  if (!wiring.feature) {
+    if (wiring.featuresTable) steps.push({ step: "add `paneweft = [\"dep:paneweft\"]` under the existing [features] of Cargo.toml" });
+    else lines.push("[features]", "paneweft = [\"dep:paneweft\"]", "");
+  }
+  if (!wiring.dependency) lines.push("[dependencies.paneweft]", "path = \"vendor/paneweft/paneweft\"", "optional = true", "");
+  if (lines.length > 0) cargoPatches.push({ path: "Cargo.toml", text: ["# Cargo.toml: the SDK is an optional development dependency behind the `paneweft` feature; a release build leaves the feature off.", ...lines].join("\n") });
+  if (facts.cargo !== undefined && /^\s*\[workspace\]/m.test(facts.cargo) && !/vendor\/paneweft/.test(facts.cargo)) steps.push({ step: "when this crate is the root of a Cargo workspace, list `vendor/paneweft/paneweft` and `vendor/paneweft/paneweft-macros` under `exclude` of [workspace] (the copy holds two crates)" });
+  const viewTestsModule = "paneweft_view_tests";
+  const examplesModule = "paneweft_examples";
+  return { cargoPatches, steps, viewTestsModule, examplesModule };
+}
+
+function rustViewTest(args: { symbol: string; viewId: string; name: string; question: string; claim: string; module: string; existing: boolean; path: string }): string {
+  const body = [
+    "    // WHY: the view must answer the question with independently expected values; it fails until the view is implemented.",
+    `    // CLAIM: ${args.claim}`,
+    `    /// TODO: return a \`${args.symbol}\` built with its real constructor; invent no fields.`,
+    `    fn sample_${args.name}() -> Option<${args.symbol}> {`,
+    "        None",
+    "    }",
+    "",
+    "    #[test]",
+    `    fn ${args.name}_answers_the_question() {`,
+    `        let value = sample_${args.name}().expect("TODO: build a ${args.symbol} in sample_${args.name}() with its real constructor");`,
+    "        let mut capture = paneweft::Capture::new(paneweft::CaptureOptions::default());",
+    "        capture.publish(&value).expect(\"the value publishes\");",
+    "        let graph = capture.finish().to_json();",
+    "        let view = graph[\"views\"]",
+    "            .as_array()",
+    "            .expect(\"the graph has views\")",
+    "            .iter()",
+    `            .find(|view| view["viewId"] == "${args.viewId}")`,
+    "            .expect(\"the view is registered on the type\");",
+    "        // an unsupported view has no data: assert its state first, so an unimplemented view fails here and not on a missing field",
+    `        assert_eq!(view["completeness"]["status"], "complete", "the view is still unsupported: implement the projection for: ${args.question.replace(/["\\]/g, "'")}");`,
+    "        // TODO: assert independently expected values, e.g. assert_eq!(view[\"data\"][\"fields\"][1][\"example\"], 3);",
+    "    }",
+  ];
+  if (args.existing) return [`// ${args.path}: add inside the existing \`mod ${args.module}\` (it is already behind the feature gate), after its \`use\` lines.`, ...body.map((line) => line.replace(/^ {4}/, ""))].join("\n") + "\n";
+  return ["#[cfg(all(test, feature = \"paneweft\"))]", `mod ${args.module} {`, `    use super::${args.symbol};`, "", ...body, "}", ""].join("\n");
+}
+
+function scaffoldView(kind: "cargo" | "vitest", args: { typeId: string; source: { path: string; symbol: string }; question: string; component: "shape" | "list"; claim: string; token?: { symbol: string; module: string }; rust?: RustFacts; ts?: TypeScriptFacts }): ScaffoldPlan {
+  const name = wordSlug(args.question, 48);
+  const title = wordTitle(args.question, 80);
+  const viewId = `${wordSlug(args.source.symbol, 48)}.${name}`;
   if (kind === "cargo") {
+    const facts = args.rust ?? { source: undefined, cargo: undefined, vendored: false, testAdapter: false };
+    const plan = rustPlan(facts);
+    const existing = declaresRustModule(facts.source, plan.viewTestsModule);
+    const notices = declaresRustModule(facts.source, "tests") ? [`${args.source.path} already has a \`mod tests\`: the scaffold's test goes into its own module \`${plan.viewTestsModule}\` (two modules of one name are error E0428)`] : [];
     return {
       template: "rust-views-v1",
+      notices,
       patches: [{ path: args.source.path, text: [
         `// ${args.source.path}: add to the existing \`#[paneweft::views]\` impl of ${args.source.symbol} if there is one (a type has ONE views impl);`,
         "// otherwise add this block. Every use of the SDK stays behind the `paneweft` feature.",
         "#[cfg(feature = \"paneweft\")]",
         `#[paneweft::views(type_id = "${args.typeId}")]`,
         `impl ${args.source.symbol} {`,
-        `    #[paneweft::view(id = "${slug(args.source.symbol)}.${name}", title = ${JSON.stringify(title)}, component = "${args.component}", priority = 50, question = ${JSON.stringify(args.question)})]`,
-        `    fn ${name}_view(&self, cx: &mut paneweft::Context) -> paneweft::ViewResult {`,
-        "        // TODO: read the receiver and select the fields that answer the question; open the type's definition first, do not guess field names.",
-        `        Ok(paneweft::View::unsupported("TODO: implement the projection for: ${args.question.replace(/"/g, "'")}"))`,
+        `    #[paneweft::view(id = "${viewId}", title = ${JSON.stringify(title)}, component = "${args.component}", priority = 50, question = ${JSON.stringify(args.question)})]`,
+        `    fn ${name}_view(&self, _cx: &mut paneweft::Context) -> paneweft::ViewResult {`,
+        "        // TODO: read the receiver; the context is `_cx` until the body uses it (rename it to `cx`: an unused variable fails clippy -D warnings). Select the fields that answer the question; open the type's definition first, do not guess field names.",
+        args.component === "list"
+          ? "        // A list: `let mut table = cx.table().text_column(\"id\", \"Id\"); table.row(paneweft::Row::new(\"row-0\").cell(\"id\", self.id.as_str())); table.finish()`"
+          : "        // A shape: `let mut details = cx.details(); details.field(\"name\", self.name.as_str()); details.finish()`",
+        `        Ok(paneweft::View::unsupported("TODO: implement the projection for: ${args.question.replace(/["\\]/g, "'")}"))`,
         "    }",
         "}",
         "",
-      ].join("\n") }],
-      outputTest: { path: args.source.path, text: [
-        "#[cfg(all(test, feature = \"paneweft\"))]",
-        "mod tests {",
-        "    // WHY: the view must answer the question with independently expected values; this fails until it is implemented.",
-        `    // CLAIM: ${args.claim}`,
-        "    #[test]",
-        `    fn ${name}_answers_the_question() {`,
-        `        assert!(false, "TODO: write the expected fields for: ${args.question.replace(/"/g, "'")}, then implement the view");`,
-        "    }",
-        "}",
-        "",
-      ].join("\n") },
-      registration: "Rust: nothing to import; `#[paneweft::views]` registers the descriptor with linkme. Cargo.toml: `[features] paneweft = [\"dep:paneweft\"]` and `[dependencies.paneweft] path = \"vendor/paneweft/paneweft\"  optional = true`, where `vendor/paneweft` is a copy of the SDK inside this repository (`node <paneweft checkout>/scripts/vendor-rust-sdk.mjs vendor/paneweft`): Cargo reads an optional path dependency even when its feature is off, so a path outside the repository breaks every plain build (and a Nix build) where that checkout is absent. Make sure the test binary calls `paneweft::test_adapter!();` once, then collect the example (the collection exports the catalogue itself).",
+      ].join("\n") }, ...plan.cargoPatches],
+      outputTest: { path: args.source.path, text: rustViewTest({ symbol: args.source.symbol, viewId, name, question: args.question, claim: args.claim, module: plan.viewTestsModule, existing, path: args.source.path }) },
+      registration: "Rust: `#[paneweft::views]` registers the descriptor with linkme; nothing to import. Once the Cargo wiring below is in, the view is visible to a collection through any example of the type (`scaffold_example` writes one; it also writes `paneweft::test_adapter!();`, the reserved catalogue-export test, once per test binary).",
+      setup: plan.steps,
     };
   }
+  const facts = args.ts ?? { sdkInstalled: true, manifest: true, config: { path: "vitest.config.ts", exists: true, reporter: true } };
+  const { steps, patches: configPatches } = typeScriptSetup(facts);
   const view = (token: string): string[] => [
     `export const ${name} = ${token}.view({`,
-    `  id: ${JSON.stringify(`${slug(args.source.symbol)}.${name}`)},`,
+    `  id: ${JSON.stringify(viewId)},`,
     `  title: ${JSON.stringify(title)},`,
     `  question: ${JSON.stringify(args.question)},`,
     "  priority: 50,",
     `  component: "${args.component}",`,
     "  render(value, view) {",
     "    // TODO: select the fields that answer the question; read the type's definition, do not guess property names.",
+    args.component === "list"
+      ? "    // A list: `const table = view.table().textColumn(\"id\", \"Id\"); table.row({ id: \"row-0\", cells: { id: value.id } }); return table.done();`"
+      : "    // A shape: `return view.details().field(\"name\", value.name).done();`",
     `    return view.unsupported(${JSON.stringify(`TODO: implement the projection for: ${args.question}`)});`,
     "  },",
     "});",
     "",
   ];
-  const outputTest: Patch = { path: "tests/views.paneweft.test.ts", text: [
-    "import { assert, it } from \"vitest\";",
+  const outputTest = (token: { symbol: string; module: string }): Patch => ({ path: "tests/views.paneweft.test.ts", text: [
+    "import { Capture } from \"@paneweft/sdk\";",
+    "import { expect, it } from \"vitest\";",
+    `import { ${token.symbol} } from ${JSON.stringify(importFrom("tests", token.module))};`,
     "",
-    "// WHY: the view must answer the question with independently expected values; this fails until it is implemented.",
+    "// WHY: the view must answer the question with independently expected values; it fails until the view is implemented.",
     `// CLAIM: ${args.claim}`,
+    `/** TODO: return a ${args.source.symbol} built with its real constructor; invent no fields. */`,
+    "function sample(): unknown {",
+    "  return undefined;",
+    "}",
+    "",
     `it(${JSON.stringify(`${name} answers the question`)}, () => {`,
-    `  assert.fail(${JSON.stringify(`TODO: write the expected fields for: ${args.question}, then implement the view`)});`,
+    "  const value = sample();",
+    `  expect(value, ${JSON.stringify(`TODO: build a ${args.source.symbol} in sample() with its real constructor`)}).not.toBeUndefined();`,
+    "  const capture = new Capture();",
+    `  expect(capture.publish(value, ${token.symbol}).status).toBe("published");`,
+    "  const graph = capture.finish().toJSON() as { views: Array<{ viewId: string; completeness: unknown }> };",
+    `  const view = graph.views.find((candidate: { viewId: string }) => candidate.viewId === ${JSON.stringify(viewId)});`,
+    "  expect(view, \"the view is registered on the type\").toBeDefined();",
+    "  // an unsupported view has no data: assert its state first, so an unimplemented view fails here and not with a TypeError on a missing field",
+    `  expect(view?.completeness, ${JSON.stringify(`the view is still unsupported: implement the projection for: ${args.question}`)}).toEqual({ status: "complete" });`,
+    "  // TODO: assert independently expected values, e.g. expect(view.data.fields[1].example).toBe(3);",
     "});",
     "",
-  ].join("\n") };
+  ].join("\n") });
   if (args.token !== undefined) {
     // the repository already declares the token for this type: extend the module that holds it
+    const token = { ...args.token, declared: true };
     return {
       template: "ts-token-view-v1",
-      patches: [{ path: args.token.module, text: [`// ${args.token.module}: append to the existing module; \`${args.token.symbol}\` is the token it already declares for ${args.typeId}.`, ...view(args.token.symbol)].join("\n") }],
-      token: { ...args.token, declared: true },
-      outputTest,
-      registration: `TypeScript: add \`${name}\` to the \`views\` of the entry for "${args.token.module}" in paneweft.views.ts (the module is already part of the manifest), then collect the example (the collection exports the catalogue itself).`,
+      notices: [],
+      patches: [{ path: args.token.module, text: [`// ${args.token.module}: append to the existing module; \`${args.token.symbol}\` is the token it already declares for ${args.typeId}.`, ...view(args.token.symbol)].join("\n") }, ...(facts.manifest ? [] : [manifestPatch([{ path: args.token.module, types: [args.token.symbol], views: [name] }])]), ...configPatches],
+      token,
+      outputTest: outputTest(args.token),
+      registration: facts.manifest
+        ? `TypeScript: add \`${name}\` to the \`views\` of the entry for "${args.token.module}" in paneweft.views.ts (the module is already part of the manifest), then collect the example (the collection exports the catalogue itself).`
+        : `TypeScript: paneweft.views.ts did not exist: the manifest above lists "${args.token.module}"; modules that hold other types, views or examples of this repository are added to it the same way. Then collect the example (the collection exports the catalogue itself).`,
+      setup: steps,
     };
   }
   // no module declares a token for the type: the patch is a whole module that declares its own and imports only what exists
@@ -471,11 +592,15 @@ function scaffoldView(kind: "cargo" | "vitest", args: { typeId: string; source: 
   ];
   return {
     template: "ts-token-view-v1",
-    patches: [{ path: modulePath, text: [...declaration, ...view(tokenName)].join("\n") }],
+    notices: [],
+    patches: [{ path: modulePath, text: [...declaration, ...view(tokenName)].join("\n") }, ...(facts.manifest ? [] : [manifestPatch([{ path: modulePath, types: [tokenName], views: [name] }])]), ...configPatches],
     token: { symbol: tokenName, module: modulePath, declared: false },
     tokenPatch: { path: modulePath, text: declaration.join("\n") },
-    outputTest,
-    registration: `TypeScript: add an entry for "${modulePath}" to paneweft.views.ts with \`types: [${tokenName}]\` and \`views: [${name}]\`, then collect the example (the collection exports the catalogue itself).`,
+    outputTest: outputTest({ symbol: tokenName, module: modulePath }),
+    registration: facts.manifest
+      ? `TypeScript: add an entry for "${modulePath}" to paneweft.views.ts with \`types: [${tokenName}]\` and \`views: [${name}]\`, then collect the example (the collection exports the catalogue itself).`
+      : `TypeScript: paneweft.views.ts did not exist: the manifest above lists "${modulePath}"; modules that hold other types, views or examples of this repository are added to it the same way. Then collect the example (the collection exports the catalogue itself).`,
+    setup: steps,
   };
 }
 
@@ -490,20 +615,24 @@ function resolveType(catalogue: Catalogue, requested: string): { typeId: string;
 function servePatches(call: Call, spec: Omit<ReplySpec, "items"> & { details: Json }, patches: Patch[]): OperationOutcome {
   const { format, budget } = call;
   const query = queryDigest(spec.query);
-  const content = queryDigest(patches).slice(0, 8);
+  /** A paged walk visits the patches and then the output test as one more file (`role`): the test of a real scaffold is larger than the smallest budget leaves room for beside the header. */
+  const outputTest = (spec.details as { outputTest?: Patch }).outputTest;
+  const walk: Array<Patch & { role?: string }> = [...patches, ...(outputTest === undefined ? [] : [{ ...outputTest, role: "output-test" }])];
+  const content = queryDigest(walk).slice(0, 8);
   /** What the text form shows beyond the header (S12): every patch, the output test, the registration step and the collect recipe. */
-  const textOf = (shown: Array<{ path: string; text: string; note?: string }>, withTail: boolean): string[] => {
+  const textOf = (shown: Array<{ path: string; text: string; note?: string; role?: string }>, withTail: boolean, paged = false): string[] => {
     const lines: string[] = [];
-    for (const patch of shown) lines.push(`patch ${patch.path}${patch.note ?? ""}:`, patch.text.replace(/\n$/, ""));
+    for (const patch of shown) lines.push(patch.role === "output-test" ? `output test ${patch.path}${patch.note ?? ""}:` : `patch ${patch.path}${patch.note ?? ""}:`, patch.text.replace(/\n$/, ""));
     if (withTail) {
-      const details = spec.details as { outputTest?: Patch; registration?: string; recipe?: { command: string } };
-      if (details.outputTest !== undefined) lines.push(`output test ${details.outputTest.path}:`, details.outputTest.text.replace(/\n$/, ""));
+      const details = spec.details as { outputTest?: Patch; registration?: string; setup?: SetupStep[]; recipe?: { command: string } };
+      if (details.outputTest !== undefined && !paged) lines.push(`output test ${details.outputTest.path}:`, details.outputTest.text.replace(/\n$/, ""));
       if (details.registration !== undefined) lines.push(`registration: ${details.registration}`);
+      if (details.setup !== undefined && details.setup.length > 0) lines.push("setup:", ...details.setup.map((entry) => `  - ${entry.step}${entry.command === undefined ? "" : `: ${entry.command}`}`));
       if (details.recipe !== undefined) lines.push(`recipe: ${details.recipe.command}`);
     }
     return lines;
   };
-  const whole = { ...spec, items: [] as Item[], details: { ...spec.details, patches }, textLines: textOf(patches, true) };
+  const whole = { ...spec, items: [] as Item[], details: { ...spec.details, patches }, textLines: textOf(patches, true), fixedCounts: { matched: patches.length, returned: patches.length, omitted: 0 } };
   const wholeBody = renderReply(whole, format, 0, 0, null);
   let position = { index: 0, offset: 0 };
   if (call.cursor !== undefined) {
@@ -515,22 +644,26 @@ function servePatches(call: Call, spec: Omit<ReplySpec, "items"> & { details: Js
   } else if (bytes(wholeBody) <= budget) {
     return { ok: true, format, body: wholeBody, payload: JSON.parse(renderReply({ ...whole }, "json", 0, 0, null)), cursor: null };
   }
-  const file = patches[position.index];
+  const file = walk[position.index];
   if (file === undefined) return failure(format, "CURSOR_INVALID", "the cursor points outside the patch");
   const buffer = Buffer.from(file.text, "utf8");
-  const total = patches.reduce((sum, patch) => sum + bytes(patch.text), 0);
+  const total = walk.reduce((sum, patch) => sum + bytes(patch.text), 0);
   const make = (size: number): { body: string; payload: unknown; cursor: string | null } => {
     let end = Math.min(buffer.length, position.offset + size);
     while (end < buffer.length && ((buffer[end] as number) & 0xc0) === 0x80) end -= 1;
     const nextIndex = end >= buffer.length ? position.index + 1 : position.index;
     const nextOffset = end >= buffer.length ? 0 : end;
-    const cursor = nextIndex < patches.length ? encodeCursor(query, { index: nextIndex, offset: nextOffset, ...(nextOffset > 0 ? { format } : {}) }, content) : null;
+    const cursor = nextIndex < walk.length ? encodeCursor(query, { index: nextIndex, offset: nextOffset, ...(nextOffset > 0 ? { format } : {}) }, content) : null;
     const slice = buffer.subarray(position.offset, end).toString("utf8");
     const sliceSize = Math.max(1, size);
     const ofParts = Math.max(2, Math.ceil(total / sliceSize));
-    const part = Math.min(ofParts, Math.floor((patches.slice(0, position.index).reduce((sum, patch) => sum + bytes(patch.text), 0) + position.offset) / sliceSize) + 1);
-    const details = { ...spec.details, patches: [{ path: file.path, text: slice, part, ofParts }] };
-    const reply = { ...spec, items: [] as Item[], details, textLines: textOf([{ path: file.path, text: slice, note: ` (part ${part} of ${ofParts})` }], position.index === 0 && position.offset === 0) };
+    const part = Math.min(ofParts, Math.floor((walk.slice(0, position.index).reduce((sum, patch) => sum + bytes(patch.text), 0) + position.offset) / sliceSize) + 1);
+    // the output test is a file of the walk; the registration and the setup are said once, with the first part
+    const { outputTest: _held, registration: _registration, setup: _setup, ...later } = spec.details as Json;
+    const rest = position.index === 0 && position.offset === 0 ? { ...later, registration: spec.details.registration, setup: spec.details.setup } : later;
+    const details = { ...rest, patches: [{ path: file.path, text: slice, part, ofParts, ...(file.role === undefined ? {} : { role: file.role }) }] };
+    const finished = end >= buffer.length;
+    const reply = { ...spec, items: [] as Item[], details, textLines: textOf([{ path: file.path, text: slice, note: ` (part ${part} of ${ofParts})`, ...(file.role === undefined ? {} : { role: file.role }) }], position.index === 0 && position.offset === 0, true), fixedCounts: { total: walk.length, matched: walk.length, returned: finished ? 1 : 0, omitted: walk.length - position.index - (finished ? 1 : 0) } };
     return { body: renderReply(reply, format, 0, 0, cursor), payload: JSON.parse(renderReply(reply, "json", 0, 0, cursor)), cursor };
   };
   let size = Math.max(64, budget - 1500);
@@ -568,21 +701,40 @@ async function scaffold(call: Call, tool: "scaffold_view" | "scaffold_example"):
   const question = tool === "scaffold_view" ? (call.args.question as string) : `Example of ${typeId}`;
   const claim = `${slug(source.symbol).toUpperCase().slice(0, 12)}-1`;
   const token = kind === "vitest" ? await declaredToken(adapter, record.catalogue, typeId) : undefined;
-  const plan = scaffoldView(kind, { typeId, source, question, component: (call.args.component as "shape" | "list" | undefined) ?? "shape", claim, ...(token === undefined ? {} : { token }) });
+  const rust = kind === "cargo" && adapter !== undefined ? rustFacts(adapter, source.path) : undefined;
+  const ts = kind === "vitest" && adapter !== undefined ? typeScriptFacts(adapter) : undefined;
+  const plan = scaffoldView(kind, { typeId, source, question, component: (call.args.component as "shape" | "list" | undefined) ?? "shape", claim, ...(token === undefined ? {} : { token }), ...(rust === undefined ? {} : { rust }), ...(ts === undefined ? {} : { ts }) });
+  notices.push(...plan.notices);
+  if (tool === "scaffold_example" && kind === "cargo" && !record.catalogue.views.some((view) => view.typeId === typeId)) notices.push(`${source.symbol} has no view in the catalogue yet: an example returns a value of a type that has views (the trait \`Inspectable\`), so scaffold_view comes first and its \`#[paneweft::views]\` impl must be in place before this example compiles`);
   if (tool === "scaffold_example") {
     const example = (call.args.example as string | undefined) ?? `${slug(source.symbol)}.new`;
     if (kind === "cargo") {
-      plan.patches = [{ path: plan.outputTest.path, text: `#[cfg(all(test, feature = "paneweft"))]\nmod examples {\n    // the example returns a value of the type declared in the module around this one; adjust the path if the type is declared deeper\n    use super::${source.symbol};\n\n    #[paneweft::example(id = ${JSON.stringify(example)}, claims = [${JSON.stringify(claim)}])]\n    fn ${slug(example)}() -> ${source.symbol} {\n        // TODO: build the value with the real constructor; do not invent fields.\n        unimplemented!("TODO: construct ${source.symbol}")\n    }\n}\n` }];
-      plan.registration = "Rust: nothing to import; `#[paneweft::example]` registers the example descriptor with linkme. Cargo.toml: `[features] paneweft = [\"dep:paneweft\"]` and `[dependencies.paneweft] path = \"vendor/paneweft/paneweft\"  optional = true`, where `vendor/paneweft` is a copy of the SDK inside this repository (`node <paneweft checkout>/scripts/vendor-rust-sdk.mjs vendor/paneweft`): Cargo reads an optional path dependency even when its feature is off, so a path outside the repository breaks every plain build (and a Nix build) where that checkout is absent. Make sure the test binary calls `paneweft::test_adapter!();` once, then collect the example by its id: the collection exports the catalogue itself.";
+      const facts = rust as RustFacts;
+      const rustSetup = rustPlan(facts);
+      const existing = declaresRustModule(facts.source, rustSetup.examplesModule);
+      const body = [
+        "    // the example returns a value of the type declared in the module around this one; adjust the path if the type is declared deeper",
+        `    #[paneweft::example(id = ${JSON.stringify(example)}, claims = [${JSON.stringify(claim)}])]`,
+        `    fn ${slug(example)}() -> ${source.symbol} {`,
+        "        // TODO: build the value with the real constructor and record checks with paneweft::check_eq!(\"CLAIM\", actual, expected); do not invent fields.",
+        `        unimplemented!("TODO: construct ${source.symbol}")`,
+        "    }",
+      ];
+      const text = existing
+        ? [`// ${source.path}: add inside the existing \`mod ${rustSetup.examplesModule}\` (it is already behind the feature gate and imports ${source.symbol}).`, ...body.map((line) => line.replace(/^ {4}/, ""))].join("\n") + "\n"
+        : ["#[cfg(all(test, feature = \"paneweft\"))]", `mod ${rustSetup.examplesModule} {`, `    use super::${source.symbol};`, "", ...(facts.testAdapter ? [] : ["    // once per test binary: the reserved test the catalogue export runs", "    paneweft::test_adapter!();", ""]), ...body, "}", ""].join("\n");
+      plan.patches = [{ path: source.path, text }, ...rustSetup.cargoPatches];
+      plan.registration = `Rust: \`#[paneweft::example]\` registers the example descriptor with linkme; nothing to import. ${facts.testAdapter ? "This crate already invokes `paneweft::test_adapter!()` (the reserved catalogue-export test, once per test binary)." : "The module invokes `paneweft::test_adapter!()` once: the reserved catalogue-export test of this test binary."} Collect the example by its id once the Cargo wiring is in: the collection exports the catalogue itself.`;
     } else {
       // S12: the example brings everything it imports. The token declaration the plan proposed (when the repository declares none) is returned
       // WITH the example, the example is registered in the manifest (not the view the plan shared), and a test file runs it.
       const token = plan.token as NonNullable<ScaffoldPlan["token"]>;
-      const name = slug(example);
+      const name = wordSlug(example, 48, "example");
       const examplePath = `tests/${name}.examples.ts`;
       const testPath = `tests/${name}.paneweft.test.ts`;
       const exampleText = `import { example } from "@paneweft/sdk";\nimport { ${token.symbol} } from ${JSON.stringify(importFrom("tests", token.module))};${token.declared ? "" : " // declared by the first patch of this reply"}\n\nexport const ${name} = example({ id: ${JSON.stringify(example)}, type: ${token.symbol}, claims: [${JSON.stringify(claim)}], run(cx) {\n  // TODO: build the value with the real code, then record a check\n  cx.check(${JSON.stringify(claim)}, () => { throw new Error("TODO: write the expected assertion"); });\n  throw new Error("TODO: construct ${source.symbol}");\n} });\n`;
-      plan.patches = [...(plan.tokenPatch === undefined ? [] : [plan.tokenPatch]), { path: examplePath, text: exampleText }];
+      const facts = ts as TypeScriptFacts;
+      plan.patches = [...(plan.tokenPatch === undefined ? [] : [plan.tokenPatch]), { path: examplePath, text: exampleText }, ...(facts.manifest ? [] : [manifestPatch([{ path: token.module, types: [token.symbol] }, { path: examplePath, examples: [name] }])]), ...typeScriptSetup(facts).patches];
       plan.outputTest = { path: testPath, text: [
         "import { exampleTest } from \"@paneweft/sdk/vitest\";",
         `import { ${name} } from ${JSON.stringify(`./${name}.examples.ts`)};`,
@@ -592,15 +744,15 @@ async function scaffold(call: Call, tool: "scaffold_view" | "scaffold_example"):
         `exampleTest(${name});`,
         "",
       ].join("\n") };
-      plan.registration = [
+      plan.registration = facts.manifest ? [
         `TypeScript: in paneweft.views.ts import { ${name} } from ${JSON.stringify(`./${examplePath}`)} and add { path: ${JSON.stringify(examplePath)}, examples: [${name}] } to the modules of the manifest.`,
         ...(token.declared ? [] : [`The token is new: also import { ${token.symbol} } from ${JSON.stringify(`./${token.module}`)} and add { path: ${JSON.stringify(token.module)}, types: [${token.symbol}] } to the modules.`]),
         `${testPath} runs the example under vitest. Then collect the example: the collection exports the catalogue itself.`,
-      ].join(" ");
+      ].join(" ") : `TypeScript: paneweft.views.ts did not exist: the manifest above lists ${token.declared ? "" : `"${token.module}" and `}"${examplePath}"; ${testPath} runs the example under vitest. Then collect the example: the collection exports the catalogue itself.`;
     }
   }
   const recipe = { command: `paneweft collect --request-id <id> --repo ${record.repo} --adapter ${record.adapter} --example <example-id>`, adapter: record.adapter };
-  return servePatches(call, { tool, completeness: { status: "complete" }, freshness: await scopeFreshness(call, record), unit: "patches", total: plan.patches.length, notices, query: { tool, repo: call.args.repo, type: requested, question: call.args.question ?? null, component: call.args.component ?? null, example: call.args.example ?? null }, details: { typeId, source, template: plan.template, outputTest: plan.outputTest, registration: plan.registration, recipe } }, plan.patches);
+  return servePatches(call, { tool, completeness: { status: "complete" }, freshness: await scopeFreshness(call, record), unit: "patches", total: plan.patches.length, notices, query: { tool, repo: call.args.repo, type: requested, question: call.args.question ?? null, component: call.args.component ?? null, example: call.args.example ?? null }, details: { typeId, source, template: plan.template, outputTest: plan.outputTest, registration: plan.registration, setup: plan.setup, recipe } }, plan.patches);
 }
 
 // ---- collection ---------------------------------------------------------------------------------------------------------------------

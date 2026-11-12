@@ -156,16 +156,19 @@ describe("[IV15] scaffold_view", () => {
     const full = await okCall("scaffold_view", { repo: "vg", type: "vigil::watch::WatchFile", question: "Q?", maxBytes: 32768 });
     const fullText = full.payload.details.patches.map((p: any) => p.text).join("");
     const parts: string[] = [];
+    const outputTest: string[] = [];
     let cursor: string | undefined;
     for (let i = 0; i < 100; i += 1) {
       const page = await okCall("scaffold_view", { repo: "vg", type: "vigil::watch::WatchFile", question: "Q?", maxBytes: 2048, ...(cursor ? { cursor } : {}) });
       expect(page.outcome.ok, page.outcome.body.slice(0, 200)).toBe(true);
       expect(Buffer.byteLength(page.outcome.body)).toBeLessThanOrEqual(2048);
-      for (const patch of page.payload.details.patches) { expect(patch.part).toBeDefined(); expect(patch.ofParts).toBeGreaterThan(1); parts.push(patch.text); }
+      for (const patch of page.payload.details.patches) { expect(patch.part).toBeDefined(); expect(patch.ofParts).toBeGreaterThan(1); (patch.role === "output-test" ? outputTest : parts).push(patch.text); }
       cursor = page.payload.cursor ?? undefined;
       if (cursor === undefined) break;
     }
     expect(parts.join("")).toBe(fullText);
+    // the output test of a real scaffold does not fit beside the header at the smallest budget: a paged walk delivers it as the last file
+    expect(outputTest.join("")).toBe(full.payload.details.outputTest.text);
   });
 
   // why: IV15. A bare symbol that several catalogued types share requires disambiguation: the error lists the candidate type ids and
@@ -351,7 +354,7 @@ describe("[S12] scaffolds can be used from the text reply", () => {
     expect(outcome.body).toContain("src/watch.rs");
     expect(outcome.body).toContain(tool === "scaffold_view" ? "#[paneweft::views(type_id = \"vigil::watch::WatchFile\")]" : "#[paneweft::example(id = ");
     expect(outcome.body).toContain("output test");
-    expect(outcome.body).toContain("assert!(false");
+    expect(outcome.body).toContain("assert_eq!(view[\"completeness\"][\"status\"], \"complete\"");
     expect(outcome.body).toContain("registration:");
     expect(outcome.body).toContain("test_adapter!()");
     expect(outcome.body).toContain("paneweft collect --request-id <id> --repo vg --adapter cargo --example <example-id>");
@@ -586,7 +589,7 @@ describe("[D4] the Rust scaffold compiles", () => {
     const { call } = await toolWorld();
     const { payload } = await call("scaffold_example", { repo: "vg", type: "vigil::watch::WatchFile", example: "watch.new", maxBytes: 32768 });
     const patch = payload.details.patches[0].text as string;
-    expect(patch).toMatch(/mod examples \{\s+(\/\/[^\n]*\n\s+)?use super::WatchFile;/);
+    expect(patch).toMatch(/mod paneweft_examples \{\s+(\/\/[^\n]*\n\s+)?use super::WatchFile;/);
   });
 
   // why: D4 / S12 (round 3). The scaffold is code a person pastes: one generated Rust example is compiled, with the SDK and its feature, in a copy
