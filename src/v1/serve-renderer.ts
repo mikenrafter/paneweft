@@ -28,6 +28,26 @@ const TYPES: Record<string, string> = { "index.html": "text/html; charset=utf-8"
  * mapping card draws into; other renderers create their own elements under `#root`. */
 const INDEX_HTML = '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>renderer</title><link rel="stylesheet" href="style.css"></head><body><main id="root"><svg id="card" xmlns="http://www.w3.org/2000/svg" role="group" aria-label="renderer"></svg></main><script src="bundle.js"></script></body></html>';
 
+/** Whether the viewer would run the renderer of a stored custom view, and if not why not: the one decision the viewer's frame and the text replies
+ * (`view_result`) share. Reads the trust store and the renderer files under the registered root; executes nothing. */
+export async function decideRenderer(session: Pick<Session, "repositories">, sessionDirectory: string | undefined, overlay: CustomOverlay): Promise<{ state: CustomRendering["state"]; message: string }> {
+  const renderer = overlay.renderer;
+  const refuse = (state: CustomRendering["state"], message: string): { state: CustomRendering["state"]; message: string } => ({ state, message });
+  const trust = sessionDirectory === undefined ? undefined : openTrustStore(sessionDirectory);
+  if (trust === undefined || !(await trust.isTrusted({ repo: overlay.repo, id: renderer.id, digest: renderer.assetDigest }))) {
+    return refuse("untrusted", `the renderer "${renderer.id}" (digest ${renderer.assetDigest.slice(0, 12)}...) is not trusted: submitted data cannot authorize code. The standard view below shows the same facts. The session owner can review the files and run: paneweft renderers trust --repo ${overlay.repo} --id ${renderer.id} --digest ${renderer.assetDigest}`);
+  }
+  if (!SUPPORTED_RENDERER_API.includes(renderer.apiVersion)) return refuse("incompatible", `the renderer speaks API ${renderer.apiVersion}; this viewer speaks ${SUPPORTED_RENDERER_API.join(", ")}`);
+  const registered = (await session.repositories()).find((candidate) => candidate.id === overlay.repo);
+  const digested = registered === undefined ? undefined : await digestRenderer(join(registered.root, "renderers"), renderer.id);
+  if (digested === undefined || !digested.ok || digested.value.digest !== renderer.assetDigest) return refuse("missing-asset", `the renderer files of "${renderer.id}" are missing, or changed since they were trusted (expected digest ${renderer.assetDigest.slice(0, 12)}...)`);
+  const definition = JSON.parse(digested.value.buffers["renderer.json"]!.toString("utf8")) as { payloadSchema?: unknown };
+  const schemaDigest = overlay.renderer.payloadSchemaDigest;
+  const problems = definition?.payloadSchema === undefined ? ["renderer.json has no payloadSchema"] : validateRendererPayload({ payloadSchemaDigest: schemaDigest }, overlay.payload, { [schemaDigest]: definition.payloadSchema }).map((issue) => `${issue.pointer}: ${issue.constraint}`);
+  if (problems.length > 0) return refuse("failed", `the payload does not satisfy the renderer's registered schema: ${problems.slice(0, 3).join("; ")}`);
+  return { state: "ready", message: "" };
+}
+
 export function createRendererServing(options: { session: Session; sessionDirectory: string | undefined; now?: () => number }): RendererServing {
   const issuer = createCapabilityIssuer({ now: options.now ?? Date.now, ttlMs: 10 * 60 * 1000 });
   const trust = options.sessionDirectory === undefined ? undefined : openTrustStore(options.sessionDirectory);
@@ -44,18 +64,8 @@ export function createRendererServing(options: { session: Session; sessionDirect
       const overlay = await readJsonFile<CustomOverlay>(customFile(options.session, runId, key.viewId));
       if (overlay === undefined) return undefined;
       const renderer = { id: overlay.renderer.id, apiVersion: overlay.renderer.apiVersion, assetDigest: overlay.renderer.assetDigest };
-      const refuse = (state: CustomRendering["state"], message: string): CustomRendering => ({ state, renderer, message });
-      if (trust === undefined || !(await trust.isTrusted({ repo: overlay.repo, id: renderer.id, digest: renderer.assetDigest }))) {
-        return refuse("untrusted", `the renderer "${renderer.id}" (digest ${renderer.assetDigest.slice(0, 12)}...) is not trusted: submitted data cannot authorize code. The standard view below shows the same facts. The session owner can review the files and run: paneweft renderers trust --repo ${overlay.repo} --id ${renderer.id} --digest ${renderer.assetDigest}`);
-      }
-      if (!SUPPORTED_RENDERER_API.includes(renderer.apiVersion)) return refuse("incompatible", `the renderer speaks API ${renderer.apiVersion}; this viewer speaks ${SUPPORTED_RENDERER_API.join(", ")}`);
-      const root = await rendererRoot(overlay.repo);
-      const digested = root === undefined ? undefined : await digestRenderer(root, renderer.id);
-      if (digested === undefined || !digested.ok || digested.value.digest !== renderer.assetDigest) return refuse("missing-asset", `the renderer files of "${renderer.id}" are missing, or changed since they were trusted (expected digest ${renderer.assetDigest.slice(0, 12)}...)`);
-      const definition = JSON.parse(digested.value.buffers["renderer.json"]!.toString("utf8")) as { payloadSchema?: unknown };
-      const schemaDigest = overlay.renderer.payloadSchemaDigest;
-      const problems = definition?.payloadSchema === undefined ? ["renderer.json has no payloadSchema"] : validateRendererPayload({ payloadSchemaDigest: schemaDigest }, overlay.payload, { [schemaDigest]: definition.payloadSchema }).map((issue) => `${issue.pointer}: ${issue.constraint}`);
-      if (problems.length > 0) return refuse("failed", `the payload does not satisfy the renderer's registered schema: ${problems.slice(0, 3).join("; ")}`);
+      const decided = await decideRenderer(options.session, options.sessionDirectory, overlay);
+      if (decided.state !== "ready") return { state: decided.state, renderer, message: decided.message };
       const frameId = `frame-${randomBytes(6).toString("hex")}`;
       const { token } = issuer.mint({ digest: renderer.assetDigest, frameId });
       return { state: "ready", renderer, message: "", frame: { src: `/renderer/${renderer.assetDigest}/${token}/index.html`, frameId, nonce: randomBytes(16).toString("hex"), payload: overlay.payload, objects: overlay.objects } };

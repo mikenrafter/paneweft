@@ -24,6 +24,7 @@ import type { Inventory } from "../generated/v1/Inventory.ts";
 import type { Fingerprint } from "./fingerprint.ts";
 import type { JobService } from "./jobs.ts";
 import { withStoredPages } from "./pages.ts";
+import { rendererOfCatalogue, rendererOfStoredView, type CatalogueRenderer, type StoredRenderer } from "./renderer-status.ts";
 import { exampleOfCapture, isFailedExample, type ExampleOfResult } from "./result-example.ts";
 import { adaptersOf, freshnessOf, judgeRun, type Consistency, type Freshness } from "./snapshot-freshness.ts";
 import { captureFile, committedImport, openV1Reader, readJsonFile } from "./read.ts";
@@ -292,9 +293,13 @@ async function listViews(call: Call): Promise<OperationOutcome> {
   const examples = [...new Set(records.flatMap((record) => record.catalogue.examples.filter((example) => example.typeId === typeId).map((example) => example.id)))].sort(compareCodeUnits);
   // F11: the last capture is the newest run in which one of these examples captured something; a run that was cancelled or crashed first has none
   const lastRun = [...runs].reverse().find((run) => run.invocations.some((invocation) => examples.includes(invocation.exampleId) && invocation.capture.captureId !== undefined));
+  // F25: a view that needs a renderer says which one, the digest of its files and whether the owner trusts it (the skill reports "renderer trust needs")
+  const rendererOf = new Map<string, CatalogueRenderer>();
+  for (const view of ordered) if (view.renderer !== undefined) rendererOf.set(view.id, await rendererOfCatalogue(call.context.session, call.context.sessionDir, call.args.repo as string, view.renderer));
   const items: Item[] = ordered.map((view) => {
-    const json = { id: view.id, title: view.title, question: view.question, component: view.component, priority: view.priority, source: view.source, renderer: view.renderer ?? null, exampleIds: examples, lastCapture: lastRun === undefined ? null : { runId: lastRun.runId, snapshotId: `snap-${lastRun.runId}` }, staleReasons: freshness.status === "stale" ? freshness.reasons ?? [] : [] };
-    return { json, text: `${view.id} [${view.component}, priority ${view.priority}] ${view.title} -- ${view.question} (${view.source.path}:${view.source.line}); examples=${examples.length === 0 ? "none" : examples.join(",")}; last capture=${lastRun === undefined ? "never" : lastRun.runId}` };
+    const status = rendererOf.get(view.id) ?? null;
+    const json = { id: view.id, title: view.title, question: view.question, component: view.component, priority: view.priority, source: view.source, renderer: view.renderer ?? null, ...(status === null ? {} : { rendererStatus: status }), exampleIds: examples, lastCapture: lastRun === undefined ? null : { runId: lastRun.runId, snapshotId: `snap-${lastRun.runId}` }, staleReasons: freshness.status === "stale" ? freshness.reasons ?? [] : [] };
+    return { json, text: `${view.id} [${view.component}, priority ${view.priority}] ${view.title} -- ${view.question} (${view.source.path}:${view.source.line}); ${status === null ? "" : `renderer=${status.id} (${status.digest === null ? "no files" : `digest ${status.digest.slice(0, 12)}...`}, ${status.state === "ready" ? "trusted" : status.state}${status.trustCommand === undefined ? "" : `; owner runs: ${status.trustCommand}`}); `}examples=${examples.length === 0 ? "none" : examples.join(",")}; last capture=${lastRun === undefined ? "never" : lastRun.runId}` };
   });
   const notices: string[] = loaded.uncatalogued ? [NO_CATALOGUE_NOTICE(call.args.repo as string)] : [];
   const covered = records.map((record) => `${record.catalogue.linkedScope.join(", ")} (linked scope; target ${record.catalogue.target.target ?? record.catalogue.target.package}, features ${record.catalogue.target.features.join(",") || "none"})`).join("; ");
@@ -643,6 +648,11 @@ function exampleLine(example: ExampleOfResult): string {
   return `example ${example.id}: ${example.outcome}${example.nested ? " (called by another example)" : ""}${example.verified ? ", verified" : ""}${example.message === undefined || example.failedClaims.length > 0 ? "" : ` (${example.message})`}${claims === "" ? "" : `; failed claims: ${claims}`}`;
 }
 
+/** One line for a custom view: the renderer it needs, the digest of its bytes and whether the viewer would run it; the fields below are the fallback. */
+function customLine(custom: StoredRenderer): string {
+  return `custom view: renderer ${custom.renderer.id} (api ${custom.renderer.apiVersion}, digest ${custom.renderer.assetDigest}): ${custom.state}${custom.message === "" ? "" : ` -- ${custom.message}`}; the fields below are its standard fallback`;
+}
+
 const objectNumber = (objectId: string): number => Number(objectId.replace(/\D+/g, "")) || 0;
 
 async function viewResult(call: Call): Promise<OperationOutcome> {
@@ -726,6 +736,7 @@ async function viewResult(call: Call): Promise<OperationOutcome> {
   const freshness = (await judgeRun({ session, sessionDir: sessionDir! }, record?.repo ?? "", stored.value.run)).freshness;
   const completeness = envelope.completeness.status === "unsupported" ? { status: "unsupported" as const, reason: envelope.completeness.reason } : envelope.completeness.status === "partial" ? { status: "partial" as const, reason: envelope.completeness.gaps.map((gap) => gap.reason).join("; ").slice(0, 400) } : { status: "complete" as const };
   const example = exampleOfCapture(run, captureOf(entry));
+  const custom = await rendererOfStoredView(session, sessionDir!, runId, entry.viewId);
   const details = {
     runId,
     snapshotId,
@@ -740,9 +751,10 @@ async function viewResult(call: Call): Promise<OperationOutcome> {
     viewerUrl: viewerUrl(sessionDir!, { viewId: entry.viewId, snapshotId }),
     storedPages: envelope.completeness.status === "partial" ? envelope.completeness.gaps.filter((gap) => gap.id === "stored-pages").map((gap) => gap.reason) : [],
     example: example ?? null,
+    ...(custom === undefined ? {} : { custom }),
     recollect: example === undefined ? null : { command: `paneweft collect --request-id <new-id> --repo ${record?.repo ?? "<repo>"} --adapter ${adapter?.id ?? stored.value.run.runner.id} --example ${example.id}` },
   };
-  const head = [`view ${entry.viewId} (${envelope.component}) of ${runId}: ${envelope.title} -- ${envelope.question}`, `origin ${details.origin}; object ${details.objects[0]}; viewer ${details.viewerUrl ?? "not running"}`, ...(example === undefined ? [] : [exampleLine(example)])];
+  const head = [`view ${entry.viewId} (${envelope.component}) of ${runId}: ${envelope.title} -- ${envelope.question}`, `origin ${details.origin}; object ${details.objects[0]}; viewer ${details.viewerUrl ?? "not running"}`, ...(example === undefined ? [] : [exampleLine(example)]), ...(custom === undefined ? [] : [customLine(custom)])];
   const notices = example !== undefined && isFailedExample(example) ? [`this value was captured by a failed example (${example.id}: ${example.outcome}): it shows what the example had built when it stopped, not an observation the example vouched for`] : [];
   return serveListing({ tool: "view_result", completeness, freshness: { ...freshness, scope: `run ${runId}` }, unit: envelope.component === "list" ? "rows" : "fields", total: items.length, items, notices, details: { ...details, text: head }, query: { tool: "view_result", runId, view: wanted, observation: observation ?? null } }, call);
 }
