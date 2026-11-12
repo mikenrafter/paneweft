@@ -23,7 +23,7 @@ import { V1_TOOL_NAMES, type V1ToolName } from "../v1/schemas.ts";
 import { loadAdapters, registerAdapter } from "../v1/adapters.ts";
 import type { JobService } from "../v1/jobs.ts";
 import { createSessionJobService } from "../v1/service.ts";
-import { digestRenderer, openTrustStore } from "../v1/renderer.ts";
+import { digestRenderer, identifyRenderer, openTrustStore } from "../v1/renderer.ts";
 import { INVENTORY_FILE, formatInventory, loadInventory, updateInventory } from "../v1/inventory.ts";
 import { writeDurably } from "../v1/durable.ts";
 import type { Catalogue } from "../generated/v1/Catalogue.ts";
@@ -128,12 +128,13 @@ const OWNER_COMMANDS: Command[] = [
   { words: ["adapter", "add"], summary: "register a collection adapter record (owner decision; CLI only)", flags: { "--file": () => undefined }, example: "paneweft adapter add --file fixtures/v1/adapters/cargo.json" },
   { words: ["adapter", "list"], summary: "list the registered adapters", flags: { "--format": () => undefined }, example: "paneweft adapter list --format json" },
   { words: ["renderers", "trust"], summary: "trust a repo-owned renderer by its content digest (owner decision; CLI only)", flags: { "--repo": () => undefined, "--id": () => undefined, "--digest": () => undefined }, example: "paneweft renderers trust --repo cm --id mapping-card --digest e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" },
+  { words: ["renderers", "digest"], summary: "print the asset digest and the payload schema digest of a renderer directory, and the declaration that names them (CLI only)", flags: { "--repo": () => undefined, "--id": () => undefined, "--format": () => undefined }, example: "paneweft renderers digest --repo cm --id mapping-card" },
   { words: ["renderers", "list"], summary: "list the renderers under a registered root with their digests and trust", flags: { "--repo": () => undefined, "--format": () => undefined }, example: "paneweft renderers list --repo cm" },
   { words: ["inventory", "update"], summary: "write paneweft.inventory.json from the stored catalogue: lists every id the catalogue has, keeps declared ids it lacks unless --prune (owner/developer command; CLI only)", flags: { "--repo": () => undefined, "--adapter": () => undefined }, switches: ["--prune"], example: "paneweft inventory update --repo vg --adapter cargo" },
   { words: ["catalogue", "refresh"], summary: "rebuild the stored catalogue ahead of time by running the reserved export tests through qex (owner/developer command; a collect exports it itself)", flags: { "--repo": () => undefined, "--adapter": () => undefined, "--request-id": () => undefined }, example: "paneweft catalogue refresh --repo vg --adapter cargo" },
 ];
 COMMANDS.push(...V1_COMMANDS.map(v1Command), ...OWNER_COMMANDS);
-const GROUP_SUMMARY: Record<string, string> = { notebook: "create, get and update notebook pages", repo: "register and list repository roots (CLI only)", example: "record or run examples", scaffold: "print a patch for a new view or example (writes nothing)", collection: "status and cancel of collection jobs", adapter: "register and list collection adapters (CLI only)", renderers: "trust and list repo-owned renderers (CLI only)", catalogue: "refresh the compiled catalogue", inventory: "write the checked-in view inventory from the stored catalogue (CLI only)" };
+const GROUP_SUMMARY: Record<string, string> = { notebook: "create, get and update notebook pages", repo: "register and list repository roots (CLI only)", example: "record or run examples", scaffold: "print a patch for a new view or example (writes nothing)", collection: "status and cancel of collection jobs", adapter: "register and list collection adapters (CLI only)", renderers: "trust, list and digest repo-owned renderers (CLI only)", catalogue: "refresh the compiled catalogue", inventory: "write the checked-in view inventory from the stored catalogue (CLI only)" };
 
 
 function helpText(): string {
@@ -452,12 +453,25 @@ async function ownerCommand(parsed: Parsed, session: Session | null, dir: string
     io.stdout(format === "json" ? JSON.stringify({ schemaVersion: "paneweft.adapters/1", adapters: adapters.value }) : adapters.value.map((adapter) => `${adapter.id} repo=${adapter.repo} ${adapter.grammar} ${adapter.executable} root=${adapter.workspaceRoot}/${adapter.entry} features=${adapter.features.join(",") || "none"}\n`).join(""));
     return 0;
   }
-  if (word === "renderers trust" || word === "renderers list") {
+  if (word === "renderers trust" || word === "renderers list" || word === "renderers digest") {
     const repo = required(parsed, "--repo");
     const root = (await session.repositories()).find((candidate) => candidate.id === repo);
     if (root === undefined) return errorBody("REPOSITORY_NOT_REGISTERED", `repository "${repo}" has no registered root; run: paneweft repo add ${repo}=<dir>`, io);
     const renderers = resolve(root.root, "renderers");
     const trust = openTrustStore(sessionDir);
+    if (word === "renderers digest") {
+      const id = required(parsed, "--id");
+      const identity = await identifyRenderer(renderers, id);
+      if (!identity.ok) return printError(identity.error, io);
+      const { assetDigest, payloadSchemaDigest, apiVersion } = identity.value;
+      const declaration = `defineRenderer({ id: ${JSON.stringify(id)}, apiVersion: ${apiVersion}, assetDigest: ${JSON.stringify(assetDigest)}, payloadSchemaDigest: ${JSON.stringify(payloadSchemaDigest)} })`;
+      const rust = `paneweft::Renderer::<Payload>::new(${JSON.stringify(id)}, ${apiVersion}, ${JSON.stringify(assetDigest)}, ${JSON.stringify(payloadSchemaDigest)})`;
+      const trusted = await trust.isTrusted({ repo, id, digest: assetDigest });
+      io.stdout(format === "json"
+        ? JSON.stringify({ schemaVersion: "paneweft.renderer-digests/1", repo, id, apiVersion, assetDigest, payloadSchemaDigest, trusted, declarations: { typescript: declaration, rust } })
+        : [`renderer ${id} of ${repo} (apiVersion ${apiVersion}, ${trusted ? "trusted" : "not trusted"})`, `assetDigest: ${assetDigest}`, `payloadSchemaDigest: ${payloadSchemaDigest}`, `TypeScript: ${declaration}`, `Rust: ${rust}`, `then collect again; the owner reviews the files and runs: paneweft renderers trust --repo ${repo} --id ${id} --digest ${assetDigest}`, ""].join("\n"));
+      return 0;
+    }
     if (word === "renderers trust") {
       const id = required(parsed, "--id");
       const digest = required(parsed, "--digest");
@@ -549,7 +563,7 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
       if (word === "example run") return await runExampleCommand(parsed, session, io);
       if (word === "repo add" || word === "repo list") return await repoCommand(parsed, session, io);
       if (word === "serve") return await serveCommand(parsed, session, io, dir);
-      if (["adapter add", "adapter list", "renderers trust", "renderers list", "catalogue refresh", "inventory update"].includes(word)) return await ownerCommand(parsed, session, dir, io);
+      if (["adapter add", "adapter list", "renderers trust", "renderers list", "renderers digest", "catalogue refresh", "inventory update"].includes(word)) return await ownerCommand(parsed, session, dir, io);
       if ((V1_TOOL_NAMES as readonly string[]).includes(command.tool as string)) {
         const context = await v1Context(session, dir, io);
         return print(io, await executeV1Operation(context, command.tool as string, args));

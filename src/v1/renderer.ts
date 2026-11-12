@@ -47,6 +47,30 @@ export async function digestRenderer(root: string, dir: string): Promise<Result<
   return ok({ digest: sha256(lines.join("")), files: [...RENDERER_FILES], buffers });
 }
 
+export interface RendererIdentity {
+  id: string;
+  apiVersion: number;
+  /** The digest `trust` and the `assetDigest` of a `defineRenderer` declaration name: sha256 over `<file>\0<sha256(file)>\n` for the three files. */
+  assetDigest: string;
+  /** sha256 of the canonical JSON of renderer.json's `payloadSchema`. */
+  payloadSchemaDigest: string;
+}
+
+/** Both digests a renderer declaration needs, read from the files of `<root>/<dir>` (F26): what the author would otherwise compute by hand. */
+export async function identifyRenderer(root: string, dir: string): Promise<Result<RendererIdentity>> {
+  const digested = await digestRenderer(root, dir);
+  if (!digested.ok) return digested;
+  let definition: { apiVersion?: unknown; payloadSchema?: unknown };
+  try {
+    definition = JSON.parse((digested.value.buffers["renderer.json"] as Buffer).toString("utf8"));
+  } catch (cause) {
+    return err("INVALID_ARGUMENT", `renderers/${dir}/renderer.json is not JSON: ${(cause as Error).message}`.slice(0, 300));
+  }
+  if (definition === null || typeof definition !== "object" || definition.payloadSchema === undefined || definition.payloadSchema === null || typeof definition.payloadSchema !== "object") return err("INVALID_ARGUMENT", `renderers/${dir}/renderer.json has no payloadSchema object: the payload schema digest is the digest of that schema`);
+  if (!Number.isInteger(definition.apiVersion)) return err("INVALID_ARGUMENT", `renderers/${dir}/renderer.json has no integer apiVersion (this host speaks ${SUPPORTED_RENDERER_API.join(", ")})`);
+  return ok({ id: dir, apiVersion: definition.apiVersion as number, assetDigest: digested.value.digest, payloadSchemaDigest: sha256(canonicalJson(definition.payloadSchema)) });
+}
+
 export interface TrustEntry {
   repo: string;
   id: string;

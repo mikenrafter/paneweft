@@ -26,6 +26,7 @@ import { checkInventory, mergeCatalogue, type CataloguePart, type InventoryProbl
 import { qualifyDiagnosticId } from "./diagnostic-id.ts";
 import { compareFingerprints, computeFingerprint, sampleConsistency, type Fingerprint } from "./fingerprint.ts";
 import { importCollection } from "./import.ts";
+import { rendererDiagnostics } from "./renderer-check.ts";
 import { SDK_LIMITS, resolveRequestedLimits, type LimitsReport } from "./limits.ts";
 import { QEX_TERMINAL_STATES, type QexClient, type QexJob } from "./qex.ts";
 import { snapshotOfRun } from "./read.ts";
@@ -604,6 +605,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
         }
       }
       for (const entry of graphs) for (const diagnostic of ((entry as { diagnostics?: Diagnostic[] }).diagnostics ?? [])) diagnostics.push(diagnostic);
+      diagnostics.push(...(await rendererDiagnostics({ repo: adapter.repo, repositoryRoot: (await deps.session.repositories()).find((candidate) => candidate.id === adapter.repo)?.root, graphs: graphs as never })));
       await writeDurably(join(jobDir(id), "job.log"), log.slice(-adapter.limits.logBytes));
       await writeDurably(join(jobDir(id), "diagnostics.json"), JSON.stringify(diagnostics));
       finalized = { run, graphs, graphBytes, diagnostics };

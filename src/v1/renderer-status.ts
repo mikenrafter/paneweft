@@ -30,7 +30,7 @@ export interface ViewRenderer {
   id: string | null;
   /** The digest of the renderer's bytes: the files under the root now (catalogue), or the digest the last capture recorded. */
   digest: string | null;
-  state: "ready" | "untrusted" | "missing-asset" | "incompatible" | "failed" | "unknown";
+  state: "ready" | "untrusted" | "changed" | "missing-asset" | "incompatible" | "failed" | "unknown";
   message: string;
   /** For an untrusted renderer: the command the session owner runs after reviewing the files. */
   trustCommand?: string;

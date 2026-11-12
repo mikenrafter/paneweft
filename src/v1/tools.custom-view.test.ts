@@ -49,10 +49,10 @@ describe("[F25] view_result says that a view is custom, which renderer it needs 
     expect(body).toContain("name: string");
   });
 
-  // why: F25. After the owner trusts the digest the same reply says `ready`; editing a renderer file afterwards makes it `missing-asset` again (the
-  // trusted bytes are not the bytes under the root).
-  // proves: CLAIM(F25-renderer-in-replies)
-  it("follows the trust state: ready after trust, missing-asset after an edit", async () => {
+  // why: F25. After the owner trusts the digest the same reply says `ready`; editing a renderer file afterwards makes it `changed` (F26: the value was
+  // captured with other bytes than the ones under the root; the field test's `missing-asset` said the files were gone).
+  // proves: CLAIM(F25-renderer-in-replies) CLAIM(F26-changed-since-capture)
+  it("follows the trust state: ready after trust, changed after an edit", async () => {
     const { okCall, text, dir, root } = await cardWorld();
     must(await openTrustStore(dir).trust({ repo: "vg", id: "mapping-card", digest: DIGESTS.digest }), "trust");
     expect((await okCall("view_result", { run: "run-1", view: "watch.card" })).payload.details.custom).toMatchObject({ state: "ready", message: "" });
@@ -60,8 +60,8 @@ describe("[F25] view_result says that a view is custom, which renderer it needs 
     const style = join(root, "renderers/mapping-card/style.css");
     writeFileSync(style, `${readFileSync(style, "utf8")}\n/* edited */\n`);
     const edited = (await okCall("view_result", { run: "run-1", view: "watch.card" })).payload.details.custom;
-    expect(edited.state).toBe("missing-asset");
-    expect(edited.message).toMatch(/changed since they were trusted/);
+    expect(edited.state).toBe("changed");
+    expect(edited.message).toMatch(/changed since this value was captured/);
   });
 
   // why: F25. A view that is not custom says nothing about renderers: the reply of every ordinary view is unchanged.

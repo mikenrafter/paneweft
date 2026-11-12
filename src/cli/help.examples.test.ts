@@ -18,7 +18,7 @@ const COMMANDS: string[][] = [
   ["notebook", "create"], ["notebook", "get"], ["notebook", "update"], ["example", "record"], ["example", "run"], ["repo", "add"], ["repo", "list"], ["serve"], ["mcp"],
   // v1 (docs/v1-red-contract.md section 11): the agent tools and the owner-only commands, pinned by name like the v0 ones
   ["types"], ["views"], ["examples"], ["scaffold", "view"], ["scaffold", "example"], ["collect"], ["collection", "status"], ["collection", "cancel"], ["result"], ["failure"],
-  ["adapter", "add"], ["adapter", "list"], ["renderers", "trust"], ["renderers", "list"], ["catalogue", "refresh"], ["inventory", "update"],
+  ["adapter", "add"], ["adapter", "list"], ["renderers", "trust"], ["renderers", "list"], ["renderers", "digest"], ["catalogue", "refresh"], ["inventory", "update"],
 ];
 /** These two run until interrupted, so their example is checked against the command's own option list instead of being run. */
 const LONG_RUNNING = new Set(["serve", "mcp"]);

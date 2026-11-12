@@ -243,8 +243,8 @@ Handshake: parent posts `{protocol:1,type:"bootstrap",nonce,frameId,viewId,snaps
 frame's first port message is `ready` echoing the nonce; the host then sends `init` `{payload, objects, theme, locale, label}`. Rejection
 order: closed, window, handshake, shape, protocol, frame, view, snapshot, sequence, type (renderer may send ready/resize/select_item/
 open_object/request_page/render_error only), size (64 KiB), permitted object, rate. Visible states: `data-pw="renderer-notice"` with
-`data-state` untrusted | missing-asset | incompatible | failed | protocol-error (with `data-rejected=<n>`) | revoked; the fallback sits
-in `data-pw="renderer-fallback"`. An unexpected second frame load revokes the port.
+`data-state` untrusted | changed | missing-asset | incompatible | failed | protocol-error (with `data-rejected=<n>`) | revoked; the fallback sits
+in `data-pw="renderer-fallback"`. An unexpected second frame load revokes the port. `changed` (F26): the files under the root hash to a digest other than the one the value was captured with; renderer files are not stored with a snapshot (policy: trust follows the reviewed current bytes). A collection compares each declared `assetDigest` and `payloadSchemaDigest` with the files and adds a `renderer` diagnostic on a difference; `paneweft renderers digest --repo R --id ID` prints both. Author guide, page and message protocol: `docs/renderers.md`.
 
 ## 13. Trail lowering (S8)
 

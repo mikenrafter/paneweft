@@ -10,7 +10,7 @@ import { SUPPORTED_RENDERER_API, createCapabilityIssuer, digestRenderer, openTru
 
 /** The `custom` member of a view model: everything the browser needs to decide between the frame and the notice. */
 export interface CustomRendering {
-  state: "ready" | "untrusted" | "missing-asset" | "incompatible" | "failed";
+  state: "ready" | "untrusted" | "changed" | "missing-asset" | "incompatible" | "failed";
   renderer: { id: string; apiVersion: number; assetDigest: string };
   message: string;
   /** Present when ready. */
@@ -33,14 +33,19 @@ const INDEX_HTML = '<!doctype html><html lang="en"><head><meta charset="utf-8"><
 export async function decideRenderer(session: Pick<Session, "repositories">, sessionDirectory: string | undefined, overlay: CustomOverlay): Promise<{ state: CustomRendering["state"]; message: string }> {
   const renderer = overlay.renderer;
   const refuse = (state: CustomRendering["state"], message: string): { state: CustomRendering["state"]; message: string } => ({ state, message });
+  const registered = (await session.repositories()).find((candidate) => candidate.id === overlay.repo);
+  const digested = registered === undefined ? undefined : await digestRenderer(join(registered.root, "renderers"), renderer.id);
+  // Policy (F26): a renderer file is not stored with the snapshot. Trust follows the reviewed bytes of the files that exist now, so a value captured with
+  // other bytes cannot run them. It says so, in those words, instead of reporting a missing asset: the files are there, they are not the ones it was captured with.
+  if (digested?.ok === true && digested.value.digest !== renderer.assetDigest) {
+    return refuse("changed", `the renderer "${renderer.id}" changed since this value was captured: it was captured with digest ${renderer.assetDigest.slice(0, 12)}..., the files under the registered root hash to ${digested.value.digest.slice(0, 12)}... now. Renderer files are not stored with a snapshot, so this value shows its standard view (the same facts). Collect the example again to capture it with the current renderer; the owner then reviews the files and runs: paneweft renderers trust --repo ${overlay.repo} --id ${renderer.id} --digest ${digested.value.digest}`);
+  }
   const trust = sessionDirectory === undefined ? undefined : openTrustStore(sessionDirectory);
   if (trust === undefined || !(await trust.isTrusted({ repo: overlay.repo, id: renderer.id, digest: renderer.assetDigest }))) {
     return refuse("untrusted", `the renderer "${renderer.id}" (digest ${renderer.assetDigest.slice(0, 12)}...) is not trusted: submitted data cannot authorize code. The standard view below shows the same facts. The session owner can review the files and run: paneweft renderers trust --repo ${overlay.repo} --id ${renderer.id} --digest ${renderer.assetDigest}`);
   }
   if (!SUPPORTED_RENDERER_API.includes(renderer.apiVersion)) return refuse("incompatible", `the renderer speaks API ${renderer.apiVersion}; this viewer speaks ${SUPPORTED_RENDERER_API.join(", ")}`);
-  const registered = (await session.repositories()).find((candidate) => candidate.id === overlay.repo);
-  const digested = registered === undefined ? undefined : await digestRenderer(join(registered.root, "renderers"), renderer.id);
-  if (digested === undefined || !digested.ok || digested.value.digest !== renderer.assetDigest) return refuse("missing-asset", `the renderer files of "${renderer.id}" are missing, or changed since they were trusted (expected digest ${renderer.assetDigest.slice(0, 12)}...)`);
+  if (digested === undefined || !digested.ok) return refuse("missing-asset", `the renderer files of "${renderer.id}" are missing (expected digest ${renderer.assetDigest.slice(0, 12)}...): they must be under renderers/${renderer.id}/ of the registered root of repository "${overlay.repo}"`);
   const definition = JSON.parse(digested.value.buffers["renderer.json"]!.toString("utf8")) as { payloadSchema?: unknown };
   const schemaDigest = overlay.renderer.payloadSchemaDigest;
   const problems = definition?.payloadSchema === undefined ? ["renderer.json has no payloadSchema"] : validateRendererPayload({ payloadSchemaDigest: schemaDigest }, overlay.payload, { [schemaDigest]: definition.payloadSchema }).map((issue) => `${issue.pointer}: ${issue.constraint}`);

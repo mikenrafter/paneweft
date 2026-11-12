@@ -158,7 +158,7 @@
             "failedClaims": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["claim"], "properties": { "claim": { "type": "string" }, "message": { "type": "string" }, "source": { "type": "object", "additionalProperties": false, "required": ["path", "line"], "properties": { "path": { "type": "string" }, "line": { "type": "integer" } } } } } }
           }
         },
-        "custom": { "description": "v1: a repo-owned renderer overlay on this stored view (state ready, untrusted, missing-asset, incompatible or failed, with the frame location and the objects the renderer may name). Absent for every view that has no renderer.", "type": "object" },
+        "custom": { "description": "v1: a repo-owned renderer overlay on this stored view (state ready, untrusted, changed, missing-asset, incompatible or failed, with the frame location and the objects the renderer may name). Absent for every view that has no renderer.", "type": "object" },
         "recordedRuns": {
           "description": "Example views with recorded runs: which run items of 'envelope' were recorded rather than stored in the envelope, and why a recorded run was left out.",
           "type": "object",
