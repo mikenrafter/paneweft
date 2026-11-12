@@ -2,6 +2,16 @@
 
 Portable moldable-development views: a catalogue of visualization components that coding agents fill with facts about any codebase, rendered in a local browser viewer and returned to agents as bounded text over MCP and CLI. Derived from Glamorous Toolkit. Design: docs/design.md.
 
+## Why "paneweft"
+
+The name joins two words, one from screens and one from weaving.
+
+**Pane.** A pane is one framed section of a window, like a single pane of glass. In paneweft's viewer, each pane shows one view of one object: a list of a watch's events, say, or the details of one bookmark mapping. Opening a row opens another pane beside it, so you move through the code's data one pane at a time.
+
+**Weft.** Cloth on a loom is made from two sets of threads. The warp threads run lengthwise and are stretched tight on the loom before weaving starts; they stay fixed. The weft is the thread the weaver passes crosswise, over and under the warp, row after row. Neither set alone is cloth. The pattern you see comes from how the weft crosses the warp.
+
+**Together.** Here the code is the warp: it is there first and it holds the structure. The views are the weft: they are threaded through the code, crossing it at the places worth seeing, and they are what make its shape visible. Since v1, views and their examples live inside the code they explain, so they are woven in rather than laid on top. When the code changes, views that no longer fit show up as stale, the way a dropped thread shows in cloth.
+
 ## Requirements
 
 * Node.js >= 22.18. The CLI and the MCP server are TypeScript run directly by Node's built-in type stripping (unflagged from 22.18); there is no compile step and no `tsx` at run time. Older Node versions fail on the first import.
@@ -300,3 +310,7 @@ npm run build && grep -li paneweft src/background.js src/preferences/options.js 
 ### 7. Custom renderers
 
 `renderers/<id>/` of the registered root, trust by digest, `paneweft renderers digest|list|trust`, the page and the message protocol: `docs/renderers.md`.
+
+## License
+
+MIT. See LICENSE.

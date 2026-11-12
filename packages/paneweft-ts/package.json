@@ -1,6 +1,7 @@
 {
   "name": "@paneweft/sdk",
   "version": "0.0.0",
+  "license": "MIT",
   "private": true,
   "description": "Paneweft TypeScript SDK: typed views and executable examples beside the code they explain. Development-only: never import it from a production entry point.",
   "type": "module",
