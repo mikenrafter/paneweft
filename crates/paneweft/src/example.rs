@@ -110,7 +110,8 @@ fn checks_json(checks: &[Check]) -> Json {
                 if let Some(message) = &check.message {
                     entry.insert("message".into(), json!(crate::value::cut_str(message, 1000).0));
                 }
-                if let Some(location) = &check.location {
+                // only a failed check is reported anywhere, so only a failed check carries its site on the wire
+                if let (false, Some(location)) = (check.passed, &check.location) {
                     entry.insert("source".into(), json!({"path": location.file, "line": location.line}));
                 }
                 Json::Object(entry)
