@@ -178,12 +178,14 @@ function normalizeParams(request: { repo: string; adapter: string; examples: str
   return { repo: request.repo, adapter: request.adapter, examples: sorted(request.examples), ...(request.views === undefined || request.views.length === 0 ? {} : { views: sorted(request.views) }), ...(request.limits === undefined || Object.keys(request.limits).length === 0 ? {} : { limits: request.limits }), ...(mode === "catalogue" ? { mode } : {}) };
 }
 
-/** Where a failed example lives: the panic location in the log ("panicked at tests/seeded.rs:12:5") when the log has one, else the declaration. */
-function panicLocation(log: string, declared: { source: { path: string; line: number } } | undefined): { path: string; line: number } | undefined {
-  const hits = [...log.matchAll(/panicked at ([^:\s]+):(\d+):\d+/g)];
-  const named = hits.find((hit) => declared !== undefined && (hit[1] as string).endsWith(declared.source.path)) ?? hits[0];
-  if (named !== undefined) return { path: named[1] as string, line: Number(named[2]) };
-  return declared === undefined ? undefined : { path: declared.source.path, line: declared.source.line };
+/** The panic of THE TEST named `testName` in a libtest log: `thread '<name>' panicked at path:line:col`. Another test's panic is never returned, because the log of a run holds every test's. */
+function panicLocation(log: string, testName: string | undefined): { path: string; line: number } | undefined {
+  if (testName === undefined) return undefined;
+  for (const hit of log.matchAll(/thread '([^']+)' panicked at (?:'[^\n]*', )?([^:\s]+):(\d+):\d+/g)) {
+    const thread = hit[1] as string;
+    if (thread === testName || thread.endsWith(`::${testName}`) || testName.endsWith(`::${thread}`)) return { path: hit[2] as string, line: Number(hit[3]) };
+  }
+  return undefined;
 }
 
 /** The catalogue the owner's last `catalogue refresh` stored for a repository and adapter (`catalogues/<repo>/<adapter>.json`). */
@@ -469,9 +471,15 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     return found.slice(0, 20);
   }
 
-  async function locateFailure(log: string, exampleId: string, adapter: AdapterRecord): Promise<{ path: string; line: number } | undefined> {
-    const declared = (await deps.catalogueFor?.(adapter.repo, adapter.id))?.examples.find((example) => example.id === exampleId);
-    return panicLocation(log, declared);
+  /** F10, F30c: where a failed example failed, in order of trust: the call site its failed check recorded (`check!`, `check_eq!`, the first author frame of a TypeScript assertion),
+   * the panic of its own test in the log, the declaration of the example. Never a location that belongs to another test. */
+  async function locateFailure(log: string, invocation: TestRun["invocations"][number], testName: string | undefined, adapter: AdapterRecord): Promise<{ path: string; line: number } | undefined> {
+    const checked = invocation.checks.find((check) => !check.passed && check.source !== undefined)?.source;
+    if (checked !== undefined) return { path: checked.path, line: checked.line };
+    const own = panicLocation(log, testName);
+    if (own !== undefined) return own;
+    const declared = (await deps.catalogueFor?.(adapter.repo, adapter.id))?.examples.find((example) => example.id === invocation.exampleId);
+    return declared === undefined ? undefined : { path: declared.source.path, line: declared.source.line };
   }
 
   async function packageName(adapter: AdapterRecord): Promise<string> {
@@ -611,7 +619,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
         if (outcome === "failed" || outcome === "error" || outcome === "blocked") {
           const message = "message" in invocation.native && invocation.native.message !== undefined ? invocation.native.message : `blocked by ${(invocation.native as { blockedBy?: string }).blockedBy ?? "a child example"}`;
           const claims = invocation.checks.filter((check) => !check.passed).map((check) => check.claim);
-          const where = await locateFailure(log, invocation.exampleId, adapter);
+          const where = await locateFailure(log, invocation, names[invocation.exampleId], adapter);
           diagnostics.push({ id: `diag-${invocation.id}`, category: outcome === "failed" ? "assertion" : "runner", message: String(message).slice(0, 2000), exampleId: invocation.exampleId, ...(where === undefined ? {} : { source: where }), nextAction: outcome === "failed" ? `Fix the code or the expectation behind the failed claim${claims.length === 1 ? "" : "s"} ${claims.join(", ") || "of the example"} (example ${invocation.exampleId}), then recollect.` : "Read the message and the captured log, fix the failing code, then recollect." } as Diagnostic);
         }
       }

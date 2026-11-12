@@ -4,7 +4,8 @@
 //   { "mode": "pass" | "fail" | "hang" | "heartbeat" , "heartbeatFile": path, "countFile": path,
 //     "padBytes": n (trailing JSON whitespace so each capture file is at least n bytes), "declaredCollectionBytes": n (the collectionBytes each capture declares),
 //     "catalogueExtra": path of {types?, views?, examples?} added to the catalogue the export writes; "exportExit": n (the catalogue export fails with this status),
-//     "captureFile": path of a complete object graph that replaces the built-in one (captureId, runId and invocationId are stamped) }
+//     "captureFile": path of a complete object graph that replaces the built-in one (captureId, runId and invocationId are stamped),
+//     "checkSource": {path, line} recorded on the failing check (what check!/check_eq! write), "extraLog": text printed before the test lines (another test's panic, F10) }
 // Each execution appends one line to countFile (so a test can prove ONE execution) and writes worker artifacts in the layout of
 // docs/v1-red-contract.md section 7 when PANEWEFT_COLLECT=1. `hang` spawns a grandchild that appends to heartbeatFile.
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -58,8 +59,9 @@ if (scenario.mode === "hang" || scenario.mode === "heartbeat") {
       const capture = scenario.captureFile ? JSON.stringify({ ...JSON.parse(readFileSync(scenario.captureFile, "utf8")), captureId, runId: scenario.graphRunId ?? runId, invocationId: id }) : baseCapture;
       writeFileSync(join(staging, "captures", `${captureId}.json`), capture + " ".repeat(Math.max(0, (scenario.padBytes ?? 0) - Buffer.byteLength(capture))));
       writeFileSync(join(staging, "invocations", `${id}.started.json`), JSON.stringify({ id, exampleId, attempt: 1, parent: null, startedAt: T }));
-      writeFileSync(join(staging, "invocations", `${id}.json`), JSON.stringify({ id, exampleId, attempt: 1, parent: null, native: failing ? { outcome: "failed", message: "check failed" } : { outcome: "passed" }, capture: { outcome: "captured", captureId, diagnostics: [] }, checks: [{ claim: "C", passed: !failing }], result: { captureId, object: "o1" }, startedAt: T, finishedAt: T }));
+      writeFileSync(join(staging, "invocations", `${id}.json`), JSON.stringify({ id, exampleId, attempt: 1, parent: null, native: failing ? { outcome: "failed", message: "check failed" } : { outcome: "passed" }, capture: { outcome: "captured", captureId, diagnostics: [] }, checks: [{ claim: "C", passed: !failing, ...(failing && scenario.checkSource ? { source: scenario.checkSource } : {}) }], result: { captureId, object: "o1" }, startedAt: T, finishedAt: T }));
     }
+    if (scenario.extraLog) console.log(scenario.extraLog);
     console.log(`test ${name} ... ${failing ? "FAILED" : "ok"}`);
   }
   console.log(`\ntest result: ${failing ? "FAILED" : "ok"}. ${failing ? 0 : names.length} passed; ${failing ? names.length : 0} failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s`);

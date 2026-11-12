@@ -90,7 +90,7 @@ describe("[S6] outcomes", () => {
     takeInvocations();
     const result = await callAsync(() => runExample(failing), "runExample");
     expect(result.invocation.native).toEqual({ outcome: "failed", message: "expected 1 to equal 2" });
-    expect(result.invocation.checks).toEqual([{ claim: "F1", passed: false }]);
+    expect(result.invocation.checks, "F30c: the failed check also names where it failed").toEqual([{ claim: "F1", passed: false, source: { path: "packages/paneweft-ts/src/examples.test.ts", line: expect.any(Number) } }]);
     expect(result.invocation.verified).toBe(false);
     expect(result.error).toBeInstanceOf(Error);
   });

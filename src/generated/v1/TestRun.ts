@@ -119,6 +119,13 @@ export interface Invocation {
     claim: Id;
     passed: boolean;
     message?: string;
+    /**
+     * Where the check was made (the call site of check!/check_eq!, or the first frame of the failure that is the author's code). The host reports a failed example there.
+     */
+    source?: {
+      path: string;
+      line: number;
+    };
   }[];
   /**
    * True only for a passed invocation with at least one executed recorded domain check, a captured result and a completed runner record. A zero-check invocation is exploratory (verified false).

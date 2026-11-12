@@ -36,7 +36,7 @@ pub use value::Value;
 #[macro_export]
 macro_rules! check {
     ($claim:expr, $cond:expr $(,)?) => {
-        $crate::example::check_lazy($claim, $cond, || ::std::string::String::from(stringify!($cond)))
+        $crate::example::check_at($claim, $cond, ::std::file!(), ::std::line!(), || ::std::string::String::from(stringify!($cond)))
     };
 }
 
@@ -45,7 +45,7 @@ macro_rules! check {
 macro_rules! check_eq {
     ($claim:expr, $left:expr, $right:expr $(,)?) => {
         match (&$left, &$right) {
-            (left, right) => $crate::example::check_lazy($claim, *left == *right, || {
+            (left, right) => $crate::example::check_at($claim, *left == *right, ::std::file!(), ::std::line!(), || {
                 ::std::format!("{} == {} (left: {:?}, right: {:?})", stringify!($left), stringify!($right), left, right)
             }),
         }

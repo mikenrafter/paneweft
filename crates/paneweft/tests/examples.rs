@@ -1,7 +1,7 @@
 //! Examples as tests (IV5, IV6 (zero-check), IV7) and the outcome vocabulary (S6, N4) at invocation level.
 //! The macro examples below are ordinary functions: composing them is a normal call, as `<gtExample>` factories do.
 mod support;
-use paneweft::example::{expect_failure, invoke, invoke_result, take_invocations, Matcher, NativeOutcome};
+use paneweft::example::{expect_failure, invoke, invoke_result, take_invocations, CheckLocation, Matcher, NativeOutcome};
 use paneweft::{ExampleDescriptor, ExampleKind, Inspectable, SourceLocation};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -227,4 +227,36 @@ fn the_generated_wrapper_runs_the_example_under_libtest() {
     let invocations = take_invocations();
     assert_eq!(invocations.iter().map(|i| i.example_id.as_str()).collect::<Vec<_>>(), vec!["watch.pending"]);
     assert_eq!(<WatchFile as Inspectable>::PANEWEFT_TYPE_ID, "fixture::watch::WatchFile");
+}
+
+// why: F10. `check!` and `check_eq!` panic inside the SDK once the body has returned, so the panic location in a test log is the SDK's, and a host that
+// reads the log takes another test's line. The macros record the file and line of THEIR call; a check made through the plain functions has none.
+// proves: CLAIM(F10-check-site)
+#[test]
+fn a_check_records_the_file_and_line_of_the_macro_call() {
+    reset();
+    let (mut check_line, mut eq_line) = (0, 0);
+    let unwound = catch_unwind(AssertUnwindSafe(|| {
+        invoke(&DESCRIPTOR_A, || {
+            check_line = line!() + 1;
+            paneweft::check!("CA", 1 + 1 == 3);
+            eq_line = line!() + 1;
+            paneweft::check_eq!("CB", 1 + 1, 3);
+            paneweft::check!("CC", true);
+            paneweft::example::check("CD", false, "plain text");
+            WatchFile::pending()
+        })
+    }));
+    assert!(unwound.is_err());
+    let invocations = take_invocations();
+    let sites: Vec<_> = invocations[0].checks.iter().map(|c| (c.claim.as_str(), c.location.clone())).collect();
+    assert_eq!(
+        sites,
+        vec![
+            ("CA", Some(CheckLocation { file: file!().to_string(), line: check_line })),
+            ("CB", Some(CheckLocation { file: file!().to_string(), line: eq_line })),
+            ("CC", Some(CheckLocation { file: file!().to_string(), line: eq_line + 1 })),
+            ("CD", None),
+        ]
+    );
 }

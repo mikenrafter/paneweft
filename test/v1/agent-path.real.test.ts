@@ -83,8 +83,12 @@ describe("[IV22 groundwork] Rust: real cargo, real SDK", () => {
     expect(Object.fromEntries(run.run.examples.map((e) => [e.id, e.outcome]))).toEqual({ "watch.seeded-failure": "failed", "watch.seeded-error": "error" });
     const diagnostics = await Promise.all(failed.diagnosticIds.map(async (id) => (await w.call("explain_failure", { diagnostic: id })).payload.items[0]));
     const byExample = Object.fromEntries(diagnostics.map((d: any) => [d.exampleId, d]));
-    expect(byExample["watch.seeded-failure"]).toMatchObject({ category: "assertion", source: { path: "tests/seeded.rs" } });
-    expect(byExample["watch.seeded-error"]).toMatchObject({ category: "runner" });
+    // F10: each diagnostic names the line of its own failure, though both tests share one log: the `check_eq!` at line 11, and the panic of the second test, which
+    // rustc places inside that function (lines 16 to 18; the first test's check is in lines 8 to 13)
+    expect(byExample["watch.seeded-failure"]).toMatchObject({ category: "assertion", source: { path: "tests/seeded.rs", line: 11 } });
+    expect(byExample["watch.seeded-error"]).toMatchObject({ category: "runner", source: { path: "tests/seeded.rs" } });
+    expect(byExample["watch.seeded-error"].source.line).toBeGreaterThanOrEqual(16);
+    expect(byExample["watch.seeded-error"].source.line).toBeLessThanOrEqual(18);
     write(w.root, "tests/seeded.rs", readFileSync(join(w.root, "tests/seeded.rs"), "utf8").replace("WatchStatus::Cancelled); // wrong on purpose", "WatchStatus::Pending);"));
     expect((await w.call("list_types", { repo: "vg" })).payload.freshness).toMatchObject({ status: "stale", reasons: ["tests/seeded.rs: modified"] });
     must(await w.jobs.collect({ requestId: "seed-2", repo: "vg", adapter: "cargo", examples: ["watch.seeded-failure"] }), "recollect");

@@ -25,11 +25,20 @@ pub enum NativeOutcome {
     Blocked { by: String },
 }
 
+/// Where a check was made: the `file!()` and `line!()` of the `check!` / `check_eq!` call (F10).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckLocation {
+    pub file: String,
+    pub line: u32,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Check {
     pub claim: String,
     pub passed: bool,
     pub message: Option<String>,
+    /// The call site of the macro that made the check; `None` for a check made through [`check`] / [`check_lazy`].
+    pub location: Option<CheckLocation>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -100,6 +109,9 @@ fn checks_json(checks: &[Check]) -> Json {
                 entry.insert("passed".into(), json!(check.passed));
                 if let Some(message) = &check.message {
                     entry.insert("message".into(), json!(crate::value::cut_str(message, 1000).0));
+                }
+                if let Some(location) = &check.location {
+                    entry.insert("source".into(), json!({"path": location.file, "line": location.line}));
                 }
                 Json::Object(entry)
             })
@@ -323,10 +335,20 @@ pub fn check(claim: &str, passed: bool, text: &str) {
 
 /// As [`check`], formatting the description only when the check fails.
 pub fn check_lazy(claim: &str, passed: bool, text: impl FnOnce() -> String) {
+    record_check(claim, passed, None, text);
+}
+
+/// As [`check_lazy`], for a check made at `file`:`line`: what the `check!` and `check_eq!` macros call with `file!()` and `line!()`, so a failed check is reported where the author
+/// wrote it and not at the panic inside this crate (F10).
+pub fn check_at(claim: &str, passed: bool, file: &str, line: u32, text: impl FnOnce() -> String) {
+    record_check(claim, passed, Some(CheckLocation { file: file.to_string(), line }), text);
+}
+
+fn record_check(claim: &str, passed: bool, location: Option<CheckLocation>, text: impl FnOnce() -> String) {
     let message = (!passed).then(|| format!("check {claim} failed: {}", text()));
     let recorded = STACK.with(|stack| match stack.borrow_mut().last_mut() {
         Some(frame) => {
-            frame.checks.push(Check { claim: claim.to_string(), passed, message: message.clone() });
+            frame.checks.push(Check { claim: claim.to_string(), passed, message: message.clone(), location });
             if let (Some(message), None) = (&message, &frame.pending_failure) {
                 frame.pending_failure = Some(message.clone());
             }

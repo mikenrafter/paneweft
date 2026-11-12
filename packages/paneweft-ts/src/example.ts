@@ -4,7 +4,8 @@
 // the object it built (failed tests retain valid objects). `runExample` never throws: the failure is in the record and in `error`,
 // and `exampleTest` rethrows `error` so the runner still fails.
 import { AsyncLocalStorage } from "node:async_hooks";
-import { join } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { limitsFromEnv, stagingFromEnv, writeArtifact, writeArtifactText, type Staging } from "./artifacts.ts";
 import { Capture, runWithCapture, type TypeToken } from "./capture.ts";
 import { callerLine } from "./callsite.ts";
@@ -20,6 +21,27 @@ export type NativeOutcome =
 export interface CheckRecord {
   claim: string;
   passed: boolean;
+  /** Where a failed check failed: the first frame of the failure in the author's code (F30c). Absent for a passing check or a failure with no such frame. */
+  source?: { path: string; line: number };
+}
+
+const SDK_DIRECTORY = dirname(fileURLToPath(import.meta.url));
+
+/** The first frame of `error`'s stack that is the author's code: inside the working directory (the repository root a runner starts from), not in a dependency and not in the SDK's own
+ * modules. A runner's frames are source-mapped, so the line is the one the author reads. */
+export function failureSite(error: unknown): { path: string; line: number } | undefined {
+  const stack = typeof error === "object" && error !== null && typeof (error as { stack?: unknown }).stack === "string" ? (error as { stack: string }).stack : "";
+  for (const frame of stack.split("\n").slice(1)) {
+    const match = /\(?((?:file:\/\/)?[^()\s]+?):(\d+):\d+\)?\s*$/.exec(frame);
+    if (match === null) continue;
+    const named = match[1] as string;
+    const absolute = resolve(process.cwd(), named.startsWith("file://") ? fileURLToPath(named) : named);
+    const path = relative(process.cwd(), absolute);
+    if (path.startsWith("..") || isAbsolute(path) || path.split(sep).includes("node_modules")) continue;
+    if (dirname(absolute) === SDK_DIRECTORY && !/\.test\.[cm]?[jt]sx?$/.test(absolute)) continue;
+    return { path: path.split(sep).join("/"), line: Number(match[2]) };
+  }
+  return undefined;
 }
 
 export interface InvocationRecord {
@@ -117,7 +139,8 @@ export function takeInvocations(): InvocationRecord[] {
 
 function checkContext(frame: Frame): ExampleContext {
   const record = (claim: string, error: unknown, failed: boolean): void => {
-    frame.checks.push({ claim, passed: !failed });
+    const site = failed ? failureSite(error) : undefined;
+    frame.checks.push({ claim, passed: !failed, ...(site === undefined ? {} : { source: site }) });
     if (failed && frame.pending === undefined) frame.pending = { message: messageOf(error), error };
   };
   return {

@@ -271,6 +271,24 @@
               "message": {
                 "type": "string",
                 "maxLength": 1024
+              },
+              "source": {
+                "type": "object",
+                "description": "Where the check was made (the call site of check!/check_eq!, or the first frame of the failure that is the author's code). The host reports a failed example there.",
+                "additionalProperties": false,
+                "required": [
+                  "path",
+                  "line"
+                ],
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  },
+                  "line": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
               }
             }
           }
