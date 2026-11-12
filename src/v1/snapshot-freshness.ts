@@ -59,10 +59,27 @@ export async function freshnessOf(context: { session: Pick<SessionReader, "repos
   return (await judgeFreshness(context, repo, adapterId, captured, digest, consistency)).freshness;
 }
 
-/** The judgement of a stored run: its recorded fingerprint against the repository it was collected from, through the adapter that collected it. */
+/** The id of the adapter that collected `run` (S4). The host stamps the run with its job (`meta.jobId`, never read from a payload) and the job's intent records the adapter it ran
+ * (`jobs/<job>/intent.json`); a run without a job, or whose job record is gone or names another repository, has no known adapter. */
+export async function originatingAdapter(sessionDir: string, repo: string, run: TestRun): Promise<string | undefined> {
+  const jobId = run.meta?.jobId;
+  if (typeof jobId !== "string" || jobId === "") return undefined;
+  const intent = await readJsonFile<{ params?: { repo?: unknown; adapter?: unknown } }>(join(sessionDir, "jobs", jobId, "intent.json"));
+  return intent?.params?.repo === repo && typeof intent.params.adapter === "string" ? intent.params.adapter : undefined;
+}
+
+/** The judgement of a stored run: its recorded fingerprint against the repository it was collected from, through the adapter that collected it. Two adapters of one runner kind cover
+ * different package directories, so the kind does not identify the root; a run whose adapter cannot be identified is `unverified`, never judged against another adapter's root. */
 export async function judgeRun(context: { session: Pick<SessionReader, "repositories">; sessionDir: string }, repo: string, run: TestRun): Promise<Judgement> {
-  const adapter = (await adaptersOf(context.sessionDir)).find((candidate) => candidate.repo === repo && candidate.kind === run.runner.id);
-  return judgeFreshness(context, repo, adapter?.id, { digest: run.inputFingerprint.digest, members: run.inputFingerprint.members ?? [], declaredExtras: [], exclusions: [] }, undefined, run.inputFingerprint.sampledConsistency);
+  const originating = await originatingAdapter(context.sessionDir, repo, run);
+  const adapter = originating === undefined ? undefined : (await adaptersOf(context.sessionDir)).find((candidate) => candidate.repo === repo && candidate.id === originating);
+  if (adapter === undefined) {
+    const reason = originating === undefined
+      ? "the adapter that collected this run is not recorded (its job record is missing), so the right package directory cannot be compared: collect again"
+      : `the adapter "${originating}" that collected this run is not registered for repository "${repo}" any more, so its package directory cannot be compared: register it again or collect again`;
+    return { freshness: { status: "unverified", reasons: [reason] }, changes: [], unverified: [{ code: "FINGERPRINT_UNAVAILABLE", reason }] };
+  }
+  return judgeFreshness(context, repo, adapter.id, { digest: run.inputFingerprint.digest, members: run.inputFingerprint.members ?? [], declaredExtras: [], exclusions: [] }, undefined, run.inputFingerprint.sampledConsistency);
 }
 
 /** The v0 shape of a judgement, for the surfaces that print a `FreshnessResult`. */

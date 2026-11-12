@@ -22,6 +22,7 @@ const toolWorld = makeToolWorld({ open, tmp, fake });
 async function importedRun(options: { edit?: boolean; sampled?: "consistent-sampled" | "mixed-input" | "unverified"; fingerprint?: boolean } = {}) {
   const world = await toolWorld();
   const input = multiExampleImport("run-v-1", [{ id: "watch.pending" }]);
+  world.collectedBy(input);
   const fingerprint = independentFingerprint(world.root);
   if (options.fingerprint !== false) (input.run as any).inputFingerprint = { digest: fingerprint.digest, memberCount: fingerprint.members.length, sampledConsistency: options.sampled ?? "consistent-sampled", members: fingerprint.members };
   must(await importCollection(world.session, input), "import");

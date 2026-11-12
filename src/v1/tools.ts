@@ -28,7 +28,7 @@ import { SDK_GIT_REV, SDK_GIT_URL, sdkDependencySource, sdkDependencyToml } from
 import { CHECKOUT_ROOT, adapterRoot, cargoWiring, declaresRustModule, rustFacts, typeScriptFacts, wordSlug, wordTitle, type RustFacts, type TypeScriptFacts } from "./scaffold-facts.ts";
 import { rendererOfCatalogue, rendererOfLastCapture, rendererOfStoredView, type StoredRenderer, type ViewRenderer } from "./renderer-status.ts";
 import { exampleOfCapture, isFailedExample, type ExampleOfResult } from "./result-example.ts";
-import { adaptersOf, freshnessOf, judgeRun, type Consistency, type Freshness } from "./snapshot-freshness.ts";
+import { adaptersOf, freshnessOf, judgeRun, originatingAdapter, type Consistency, type Freshness } from "./snapshot-freshness.ts";
 import { captureFile, committedImport, openV1Reader, readJsonFile } from "./read.ts";
 import { V1_READ_ONLY_TOOLS, V1_TOOL_NAMES, createV1SchemaRegistry, loadV1SchemaDocuments, validateAgainstV1, type V1ToolName } from "./schemas.ts";
 
@@ -911,7 +911,7 @@ async function viewResult(call: Call): Promise<OperationOutcome> {
     for (const field of data.fields as Json[]) items.push({ json: { id: field.id, path: field.path, type: field.type, example: field.example ?? null, provenance: field.provenance }, text: `${field.path}: ${field.type}${field.example === undefined ? "" : ` = ${JSON.stringify(field.example)}`}; ${field.provenance}` });
   }
   const record = await committedImport(session, runId);
-  const adapter = (await adaptersOf(sessionDir!)).find((candidate) => candidate.repo === record?.repo && candidate.kind === stored.value.run.runner.id);
+  const adapterId = await originatingAdapter(sessionDir!, record?.repo ?? "", stored.value.run);
   const freshness = (await judgeRun({ session, sessionDir: sessionDir! }, record?.repo ?? "", stored.value.run)).freshness;
   const completeness = envelope.completeness.status === "unsupported" ? { status: "unsupported" as const, reason: envelope.completeness.reason } : envelope.completeness.status === "partial" ? { status: "partial" as const, reason: envelope.completeness.gaps.map((gap) => gap.reason).join("; ").slice(0, 400) } : { status: "complete" as const };
   const example = exampleOfCapture(run, captureOf(entry));
@@ -931,7 +931,7 @@ async function viewResult(call: Call): Promise<OperationOutcome> {
     storedPages: envelope.completeness.status === "partial" ? envelope.completeness.gaps.filter((gap) => gap.id === "stored-pages").map((gap) => gap.reason) : [],
     example: example ?? null,
     ...(custom === undefined ? {} : { custom }),
-    recollect: example === undefined ? null : { command: `paneweft collect --request-id <new-id> --repo ${record?.repo ?? "<repo>"} --adapter ${adapter?.id ?? stored.value.run.runner.id} --example ${example.id}` },
+    recollect: example === undefined ? null : { command: `paneweft collect --request-id <new-id> --repo ${record?.repo ?? "<repo>"} --adapter ${adapterId ?? "<adapter>"} --example ${example.id}` },
   };
   const head = [`view ${entry.viewId} (${envelope.component}) of ${runId}: ${envelope.title} -- ${envelope.question}`, `origin ${details.origin}; object ${details.objects[0]}; viewer ${details.viewerUrl ?? "not running"}`, ...(example === undefined ? [] : [exampleLine(example)]), ...(custom === undefined ? [] : [customLine(custom)])];
   const notices = example !== undefined && isFailedExample(example) ? [`this value was captured by a failed example (${example.id}: ${example.outcome}): it shows what the example had built when it stopped, not an observation the example vouched for`] : [];

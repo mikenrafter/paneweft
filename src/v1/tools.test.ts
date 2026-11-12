@@ -250,8 +250,9 @@ describe("[IV19][S12] results and failures", () => {
   // source edit view_result says stale WITH the path, and the exact recollection command.
   // proves: CLAIM(IV18) CLAIM(IV14)
   it("an old capture stays stale after a source edit and names the recollection command", async () => {
-    const { call, session, root, fingerprint } = await toolWorld();
+    const { call, session, root, fingerprint, collectedBy } = await toolWorld();
     const input = collectionImport("vigil-redelivered");
+    collectedBy(input);
     (input.run as any).inputFingerprint = { digest: fingerprint.digest, memberCount: fingerprint.members.length, sampledConsistency: "consistent-sampled", members: fingerprint.members };
     must(await importCollection(session, input), "import");
     expect((await call("view_result", { run: "run-1", view: "watch.status" })).payload.freshness.status).toBe("fresh");
@@ -674,8 +675,9 @@ describe("[S14] freshness never blesses what changed while it was being compiled
   // `mixed-input`: an edit made during the run and then restored compared equal, so the result read "fresh". A recorded mixed (or unverified) sample caps freshness at unverified.
   // proves: CLAIM(S14-freshness)
   it.each(["mixed-input", "unverified"] as const)("a run recorded as %s is never reported fresh, even when the sources match", async (consistency) => {
-    const { call, session, fingerprint } = await toolWorld();
+    const { call, session, fingerprint, collectedBy } = await toolWorld();
     const input = collectionImport("vigil-redelivered");
+    collectedBy(input);
     (input.run as any).inputFingerprint = { digest: fingerprint.digest, memberCount: fingerprint.members.length, sampledConsistency: consistency, members: fingerprint.members };
     must(await importCollection(session, input), "import");
     const { payload } = await call("view_result", { run: "run-1", view: "watch.status" });
@@ -686,8 +688,9 @@ describe("[S14] freshness never blesses what changed while it was being compiled
   // why: S14 control. The same run recorded as consistently sampled and matching the sources is fresh: the cap applies only to a recorded doubt.
   // proves: CLAIM(S14-freshness)
   it("a consistently sampled run that matches the sources is fresh", async () => {
-    const { call, session, fingerprint } = await toolWorld();
+    const { call, session, fingerprint, collectedBy } = await toolWorld();
     const input = collectionImport("vigil-redelivered");
+    collectedBy(input);
     (input.run as any).inputFingerprint = { digest: fingerprint.digest, memberCount: fingerprint.members.length, sampledConsistency: "consistent-sampled", members: fingerprint.members };
     must(await importCollection(session, input), "import");
     expect((await call("view_result", { run: "run-1", view: "watch.status" })).payload.freshness.status).toBe("fresh");

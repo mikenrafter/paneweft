@@ -46,6 +46,12 @@ export function makeToolWorld(hooks: { open: () => Promise<V1Env>; tmp: (name: s
     const text = async (tool: string, args: Record<string, unknown> = {}) => executeV1Operation(context, tool, { format: "text", ...args });
     /** A call that must succeed: the assertion happens here, so a failing stub is an assertion failure and not a TypeError further down. */
     const okCall = async (tool: string, args: Record<string, unknown> = {}) => { const result = await call(tool, args); expect(result.outcome.ok, `${tool}: ${result.outcome.body.slice(0, 300)}`).toBe(true); return result; };
-    return { session, dir, root, qex, call, okCall, text, context, fingerprint, adapter };
+    /** The record a collection job leaves of the adapter it ran (S4): an imported run that names this job is judged through that adapter. `input` is a CollectionImport. */
+    const collectedBy = (input: { jobId: string | null }, adapterId = adapter.id, jobId = "job-fixture"): void => {
+      input.jobId = jobId;
+      mkdirSync(join(dir, "jobs", jobId), { recursive: true });
+      writeFileSync(join(dir, "jobs", jobId, "intent.json"), JSON.stringify({ schemaVersion: "paneweft.job-intent/1", requestId: jobId, params: { repo: "vg", adapter: adapterId, examples: [] } }));
+    };
+    return { session, dir, root, qex, call, okCall, text, context, fingerprint, adapter, collectedBy };
   };
 }
