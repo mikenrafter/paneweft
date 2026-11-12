@@ -151,7 +151,14 @@ describe("[F26] a value captured with other renderer bytes says that the rendere
       expect(custom.message).toContain("Collect the example again");
       expect(custom.message).not.toContain("missing");
     }
+    // the stored catalogue declares the custom view, as the compiled one does; without the entry the listing has no item to check
+    const file = join(world.dir, "catalogues", "vg", "cargo.json");
+    const stored = JSON.parse(readFileSync(file, "utf8"));
+    stored.catalogue.views.push({ id: "watch.card", typeId: "vigil::watch::WatchFile", title: "Card", question: "Which mapping is this?", component: "custom", priority: 20, source: { path: "src/watch.rs", line: 40 }, renderer: "mapping-card" });
+    writeFileSync(file, JSON.stringify(stored));
     const views = (await world.okCall("list_views_for_type", { repo: "vg", type: "vigil::watch::WatchFile" })).payload.items.find((item: any) => item.id === "watch.card");
-    expect(views?.rendererStatus?.state ?? "changed", "the discovery listing agrees").toMatch(/changed|untrusted|ready|unknown/);
+    expect(views, "the listing carries the view").toBeDefined();
+    // the listing judges the renderer the catalogue names by the files that exist now (the loop's last step trusted them), so it says `ready` for the current digest; the value-level `changed` is view_result's
+    expect(views.rendererStatus, "the discovery listing agrees with the trust given to the current bytes").toMatchObject({ id: "mapping-card", digest: current, state: "ready" });
   });
 });

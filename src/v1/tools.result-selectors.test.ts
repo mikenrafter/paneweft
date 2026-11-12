@@ -2,11 +2,13 @@
 // "o1" names three objects; the selector that names ONE of them is the example (or the stored view id), and the reply says which example it
 // answers, so the recollect command repeats that example and no other.
 import { describe, expect, it } from "vitest";
+import { Capture, defineType } from "../../packages/paneweft-ts/src/index.ts";
+import { specLimits } from "../../packages/paneweft-ts/test/support.ts";
 import { runCliInProcess } from "../../test/helpers/cli.ts";
 import { must } from "../../test/helpers/must.ts";
 import { multiExampleImport } from "../../test/helpers/v1-runs.ts";
 import { makeToolWorld } from "../../test/helpers/v1-tool-world.ts";
-import { useFakeQex, useV1Sessions } from "../../test/helpers/v1-world.ts";
+import { collectionFixture, useFakeQex, useV1Sessions } from "../../test/helpers/v1-world.ts";
 import { useTempDirs } from "../../test/helpers/tmp.ts";
 import { importCollection } from "./import.ts";
 
@@ -53,6 +55,31 @@ describe("[F8] a run of several examples is addressable by example", () => {
     expect(payload.code).toBe("NOT_FOUND");
     expect(payload.message).toMatch(/watch\.missing/);
     expect(payload.details.examples).toEqual(["watch.cancelled", "watch.nested", "watch.pending", "watch.redelivered"]);
+  });
+
+  // why: NIT-STASH (review field r1). The cursor query of `view_result` omitted the example, and the captures of two examples can hold equal rows: a cursor issued for one example
+  // continued the other instead of being refused. The example is part of what a cursor continues.
+  // proves: CLAIM(cursor-content-bound)
+  it("a cursor issued for one example is refused for another", async () => {
+    const Row = defineType<{ n: number }>({ id: "vigil::watch::Row", source: { path: "src/watch.rs", symbol: "Row" } });
+    Row.view({ id: "watch.rows", title: "Rows", question: "Which rows?", priority: 10, component: "list", render(_row, view) {
+      const table = view.table().textColumn("n", "N");
+      for (let index = 0; index < 60; index += 1) table.row({ id: `r${index}`, cells: { n: `row ${index}` } });
+      return table.done();
+    } });
+    const capture = new Capture({ captureId: "inv-1", runId: "run-1", invocationId: "inv-1", limits: specLimits() });
+    capture.publish({ n: 1 }, Row);
+    const world = await toolWorld();
+    const base = collectionFixture("vigil-redelivered");
+    must(await importCollection(world.session, multiExampleImport("run-v-1", [{ id: "watch.cancelled" }, { id: "watch.redelivered" }], { ...base, graphs: [capture.finish().toJSON()] })), "import");
+    const ask = (example: string, cursor?: string) => world.call("view_result", { run: "run-v-1", view: "watch.rows", example, maxBytes: 4096, ...(cursor === undefined ? {} : { cursor }) });
+    const page = await ask("watch.cancelled");
+    expect(page.outcome.ok, page.outcome.body.slice(0, 300)).toBe(true);
+    expect(page.payload.cursor, "60 rows do not fit one page").not.toBeNull();
+    const other = await ask("watch.redelivered", page.payload.cursor);
+    expect(other.outcome.ok).toBe(false);
+    expect(other.payload.code).toBe("CURSOR_MISMATCH");
+    expect((await ask("watch.cancelled", page.payload.cursor)).outcome.ok, "the same example continues").toBe(true);
   });
 
   // why: F8. The error of an ambiguous selector must say something that can be followed: the old hint asked for "observation (an object id)" and all

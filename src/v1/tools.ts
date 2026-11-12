@@ -935,7 +935,7 @@ async function viewResult(call: Call): Promise<OperationOutcome> {
   };
   const head = [`view ${entry.viewId} (${envelope.component}) of ${runId}: ${envelope.title} -- ${envelope.question}`, `origin ${details.origin}; object ${details.objects[0]}; viewer ${details.viewerUrl ?? "not running"}`, ...(example === undefined ? [] : [exampleLine(example)]), ...(custom === undefined ? [] : [customLine(custom)])];
   const notices = example !== undefined && isFailedExample(example) ? [`this value was captured by a failed example (${example.id}: ${example.outcome}): it shows what the example had built when it stopped, not an observation the example vouched for`] : [];
-  return serveListing({ tool: "view_result", completeness, freshness: { ...freshness, scope: `run ${runId}` }, unit: envelope.component === "list" ? "rows" : "fields", total: items.length, items, notices, details: { ...details, text: head }, query: { tool: "view_result", runId, view: wanted, observation: observation ?? null } }, call);
+  return serveListing({ tool: "view_result", completeness, freshness: { ...freshness, scope: `run ${runId}` }, unit: envelope.component === "list" ? "rows" : "fields", total: items.length, items, notices, details: { ...details, text: head }, query: { tool: "view_result", runId, view: wanted, observation: observation ?? null, example: example?.id ?? null } }, call);
 }
 
 /** Every stored diagnostic called `id` (a bare id), or the one `<runId>:<id>` names. A job's diagnostics are those of its run; the stored
