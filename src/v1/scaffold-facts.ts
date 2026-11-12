@@ -34,7 +34,7 @@ export interface RustFacts {
   source: string | undefined;
   /** `Cargo.toml` of the adapter root. */
   cargo: string | undefined;
-  /** Some `.rs` file of the crate already invokes `paneweft::test_adapter!()`. */
+  /** Some `.rs` file of the TEST BINARY that holds `source` already invokes `paneweft::test_adapter!()` (S3: the hook is needed once per test binary, not once per crate). */
   testAdapter: boolean;
 }
 
@@ -52,14 +52,26 @@ function rustFiles(root: string, relative: string, found: string[]): void {
   }
 }
 
+/** The files of the test binary that `sourcePath` is compiled into: `tests/x.rs` (or the directory `tests/x/`) is its own integration-test binary, `src/main.rs`, `src/bin/x.rs` and
+ * `src/bin/x/` are binary targets, and any other file of `src/` belongs to the library's test binary. A binary target's own `mod` files are not followed. */
+export function binaryFiles(sourcePath: string): (file: string) => boolean {
+  const parts = sourcePath.split(/[\\/]+/).filter((part) => part !== "" && part !== ".");
+  const [first, second] = parts;
+  if (first === "tests") return parts.length <= 2 ? (file) => file === parts.join("/") : (file) => file.startsWith(`tests/${second}/`);
+  if (sourcePath === "src/main.rs") return (file) => file === "src/main.rs";
+  if (first === "src" && second === "bin") return parts.length <= 3 ? (file) => file === parts.join("/") : (file) => file.startsWith(`src/bin/${parts[2]}/`);
+  return (file) => file.startsWith("src/") && file !== "src/main.rs" && !file.startsWith("src/bin/");
+}
+
 export function rustFacts(adapter: AdapterRecord, sourcePath: string): RustFacts {
   const root = adapterRoot(adapter);
   const files: string[] = [];
   for (const directory of ["src", "tests"]) rustFiles(root, directory, files);
+  const sameBinary = binaryFiles(sourcePath);
   return {
     source: readInside(root, sourcePath),
     cargo: readInside(root, "Cargo.toml"),
-    testAdapter: files.some((file) => /test_adapter!\s*[(\[{]/.test(readInside(root, file) ?? "")),
+    testAdapter: files.filter(sameBinary).some((file) => /test_adapter!\s*[(\[{]/.test(readInside(root, file) ?? "")),
   };
 }
 

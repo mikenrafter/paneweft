@@ -230,7 +230,7 @@ describe("[F12] the Rust scaffold applies to a crate that has no paneweft wiring
   });
 });
 
-describe("[S2] repeated Rust scaffolds apply to a crate that already has the module", () => {
+describe("[S2] [S3] repeated Rust scaffolds apply to a crate that already has the module and the hook", () => {
   // Same world as above, with a second type in the file: the field reproduction used sibling structs Boat and Dock in src/lib.rs.
   async function twoTypes() {
     const { session, dir } = await open();
@@ -297,6 +297,43 @@ describe("[S2] repeated Rust scaffolds apply to a crate that already has the mod
     world.apply(dock, { skipOutputTest: true });
     const built = world.cargo({}, "test", "--no-run");
     expect(built.status, `the repeated example scaffolds must compile as given:\n${world.messages(built.output)}`).toBe(0);
+  }, 600_000);
+
+  // why: S3. `paneweft::test_adapter!()` is needed once per TEST BINARY, but the scaffold looked for it in any file of the crate. Here the only hook is in an integration test
+  // (tests/existing.rs); the example scaffold then left the library-test binary without the reserved export test, and a catalogue export of the crate did not list the new example.
+  // The export is run for real, as the collector does (PANEWEFT_CATALOGUE=1), and the new id must be in what the binaries wrote.
+  // proves: CLAIM(S3-hook-per-binary)
+  it("an example in the library gets its own hook when only an integration test has one, and the export lists it", async () => {
+    const world = await twoTypes();
+    world.apply(await world.scaffold("scaffold_view", { ...world.boat, question: "Which crew does this boat carry?" }), { skipOutputTest: true });
+    mkdirSync(join(world.root, "tests"), { recursive: true });
+    writeFileSync(join(world.root, "tests/existing.rs"), '#![cfg(feature = "paneweft")]\n\npaneweft::test_adapter!();\n');
+    const reply = await world.scaffold("scaffold_example", { ...world.boat, example: "boat.new" });
+    world.apply(reply, { skipOutputTest: true });
+    const lib = join(world.root, "src/lib.rs");
+    writeFileSync(lib, readFileSync(lib, "utf8").replace('unimplemented!("TODO: construct Boat")', 'Boat::new("Ada", 3)'));
+    const staging = tmp("staging");
+    const exported = world.cargo({ PANEWEFT_COLLECT: "1", PANEWEFT_RUN_ID: "run-s3", PANEWEFT_STAGING_DIR: staging, PANEWEFT_CATALOGUE: "1" }, "test", "paneweft_catalogue_export");
+    expect(exported.status, world.messages(exported.output)).toBe(0);
+    const parts = readdirSync(join(staging, "catalogue")).map((name) => JSON.parse(readFileSync(join(staging, "catalogue", name), "utf8")) as { examples: Array<{ id: string }> });
+    expect(parts.length, "one part per test binary: the library tests and tests/existing.rs").toBe(2);
+    expect(parts.flatMap((part) => part.examples.map((example) => example.id)), "the new example is exported").toContain("boat.new");
+    expect(reply.patches[0]!.text, "the library-test binary needs its own hook").toContain("paneweft::test_adapter!();");
+  }, 600_000);
+
+  // why: S3, the other half. When the library-test binary already has its hook (a hook in src/), the example scaffold must not add a second: two `paneweft_catalogue_export`
+  // functions in one binary are error E0428.
+  // proves: CLAIM(S3-hook-per-binary)
+  it("an example scaffold does not add a second hook to a binary that has one", async () => {
+    const world = await twoTypes();
+    world.apply(await world.scaffold("scaffold_view", { ...world.boat, question: "Which crew does this boat carry?" }), { skipOutputTest: true });
+    appendFileSync(join(world.root, "src/lib.rs"), '\n#[cfg(feature = "paneweft")]\nmod hook;\n');
+    writeFileSync(join(world.root, "src/hook.rs"), "paneweft::test_adapter!();\n");
+    const reply = await world.scaffold("scaffold_example", { ...world.boat, example: "boat.new" });
+    expect(reply.patches[0]!.text).not.toContain("test_adapter!");
+    world.apply(reply, { skipOutputTest: true });
+    const built = world.cargo({}, "test", "--no-run");
+    expect(built.status, world.messages(built.output)).toBe(0);
   }, 600_000);
 });
 

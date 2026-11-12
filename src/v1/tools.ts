@@ -716,6 +716,7 @@ async function scaffold(call: Call, tool: "scaffold_view" | "scaffold_example"):
       const facts = rust as RustFacts;
       const rustSetup = rustPlan(facts);
       const existing = declaresRustModule(facts.source, rustSetup.examplesModule);
+      const hook = facts.testAdapter ? [] : ["    // once per test binary: the reserved test the catalogue export runs", "    paneweft::test_adapter!();", ""];
       const body = [
         "    // the example returns a value of the type declared in the module around this one; adjust the path if the type is declared deeper",
         `    #[paneweft::example(id = ${JSON.stringify(example)}, claims = [${JSON.stringify(claim)}])]`,
@@ -725,12 +726,12 @@ async function scaffold(call: Call, tool: "scaffold_view" | "scaffold_example"):
         "    }",
       ];
       const text = existing
-        ? [`// ${source.path}: add inside the existing \`mod ${rustSetup.examplesModule}\` (it is already behind the feature gate; the example names its type as \`super::${source.symbol}\`, so the module needs no new import).`, ...body.map((line) => line.replace(/^ {4}/, ""))].join("\n") + "\n"
-        : ["#[cfg(all(test, feature = \"paneweft\"))]", `mod ${rustSetup.examplesModule} {`, `    use super::${source.symbol};`, "", ...(facts.testAdapter ? [] : ["    // once per test binary: the reserved test the catalogue export runs", "    paneweft::test_adapter!();", ""]), ...body, "}", ""].join("\n");
+        ? [`// ${source.path}: add inside the existing \`mod ${rustSetup.examplesModule}\` (it is already behind the feature gate; the example names its type as \`super::${source.symbol}\`, so the module needs no new import).`, ...[...hook, ...body].map((line) => line.replace(/^ {4}/, ""))].join("\n") + "\n"
+        : ["#[cfg(all(test, feature = \"paneweft\"))]", `mod ${rustSetup.examplesModule} {`, `    use super::${source.symbol};`, "", ...hook, ...body, "}", ""].join("\n");
       plan.patches = [{ path: source.path, text }, ...rustSetup.cargoPatches];
       // an example is its own test: the macro makes the wrapper test `paneweft_example_<fn>`, red until the body builds the value
       plan.outputTest = { path: source.path, text: `// The example is its own test (CLAIM ${claim}): \`#[paneweft::example]\` makes the libtest wrapper \`paneweft_example_${slug(example)}\`.\n// Run it red before building the value, green after:  cargo test --features paneweft paneweft_example_${slug(example)}\n// Then collect it by its id; the collection records the checks and captures the value.\n` };
-      plan.registration = `Rust: \`#[paneweft::example]\` registers the example descriptor with linkme; nothing to import. ${facts.testAdapter ? "This crate already invokes `paneweft::test_adapter!()` (the reserved catalogue-export test, once per test binary)." : "The module invokes `paneweft::test_adapter!()` once: the reserved catalogue-export test of this test binary."} Collect the example by its id once the Cargo wiring is in: the collection exports the catalogue itself.`;
+      plan.registration = `Rust: \`#[paneweft::example]\` registers the example descriptor with linkme; nothing to import. ${facts.testAdapter ? "This test binary already invokes `paneweft::test_adapter!()` (the reserved catalogue-export test, once per test binary)." : "The module invokes `paneweft::test_adapter!()` once: the reserved catalogue-export test of this test binary (the library tests are one binary, each file of `tests/` another: a hook elsewhere does not cover this one)."} Collect the example by its id once the Cargo wiring is in: the collection exports the catalogue itself.`;
     } else {
       // S12: the example brings everything it imports. The token declaration the plan proposed (when the repository declares none) is returned
       // WITH the example, the example is registered in the manifest (not the view the plan shared), and a test file runs it.
