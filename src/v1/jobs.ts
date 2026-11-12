@@ -20,6 +20,7 @@ import type { TestRun } from "../generated/v1/TestRun.ts";
 import { buildProcess, checkCollectRequest, foldExactFilters, parseCargoLists, reconcile, selectExamples, type AdapterRecord, type ProcessSpec, type Selection } from "./adapters.ts";
 import { readStaging } from "./staging.ts";
 import { admitLowering, validateObjectGraph } from "./capture.ts";
+import { compileDiagnostics } from "./compile-diagnostics.ts";
 import { loadInventory } from "./inventory.ts";
 import { checkInventory, mergeCatalogue, type CataloguePart, type InventoryProblem } from "./catalogue.ts";
 import { qualifyDiagnosticId } from "./diagnostic-id.ts";
@@ -444,23 +445,6 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     return !(await withLease(id, async () => undefined)).held;
   }
 
-  function compileDiagnostics(log: string, typecheck: { output: string } | undefined, kind: "cargo" | "vitest"): Diagnostic[] {
-    const found: Diagnostic[] = [];
-    if (kind === "cargo") {
-      const pattern = /error(?:\[(E\d+)\])?: ([^\n]+)\n\s*--> ([^:\n]+):(\d+):(\d+)/g;
-      for (const match of log.matchAll(pattern)) {
-        found.push({ id: `diag-compile-${found.length + 1}`, category: "compiler", message: `${match[1] === undefined ? "" : `${match[1]}: `}${match[2]}`.slice(0, 2000), source: { path: match[3] as string, line: Number(match[4]), column: Number(match[5]) }, nextAction: "Fix the named field or type in the view source at the span, then run the collection again." } as Diagnostic);
-      }
-    } else if (typecheck !== undefined) {
-      for (const line of typecheck.output.split("\n")) {
-        const match = /^(.+?)\((\d+),(\d+)\): error (TS\d+): (.*)$/.exec(line);
-        if (match !== null) found.push({ id: `diag-compile-${found.length + 1}`, category: "typecheck", message: `${match[4]}: ${match[5]}`.slice(0, 2000), source: { path: match[1] as string, line: Number(match[2]), column: Number(match[3]) }, nextAction: "Fix the named property or type in the view source, then run the collection again." } as Diagnostic);
-      }
-    }
-    if (found.length === 0) found.push({ id: "diag-compile-1", category: kind === "cargo" ? "compiler" : "typecheck", message: "the instrumentation did not compile", stderrSlice: (typecheck?.output ?? log).slice(-3500), nextAction: "Read the stderr slice; fix the first error, then run the collection again." } as Diagnostic);
-    return found.slice(0, 20);
-  }
-
   /** F10, F30c: where a failed example failed, in order of trust: the call site its failed check recorded (`check!`, `check_eq!`, the first author frame of a TypeScript assertion),
    * the panic of its own test in the log, the declaration of the example. Never a location that belongs to another test. */
   async function locateFailure(log: string, invocation: TestRun["invocations"][number], testName: string | undefined, adapter: AdapterRecord): Promise<{ path: string; line: number } | undefined> {
@@ -499,7 +483,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
       const notStarted = runnerNotStarted(qexJob, log, adapter);
       if (notStarted !== undefined) return { status: "failed", snapshotIds: [], diagnostics: [notStarted] };
       if (adapter.kind === "vitest") return { status: "failed", snapshotIds: [], diagnostics: [vitestExportDiagnostic(qexJob, log)] };
-      const compile = compileDiagnostics(log, staging.typecheck, adapter.kind);
+      const compile = compileDiagnostics({ log, typecheck: staging.typecheck, kind: adapter.kind, root: normalize(join(adapter.workspaceRoot, adapter.entry)) });
       diagnostics.push(...(qexJob.exit_code !== 0 && /error(\[E\d+\])?: /.test(log) ? compile : [{ id: "diag-catalogue-1", category: "registration", message: parts.length === 0 ? "the catalogue export wrote no part: no test binary registered `paneweft::test_adapter!()` (cargo) or the manifest was not exported (vitest)" : `the catalogue export exited with status ${qexJob.exit_code}`, stderrSlice: log.slice(-3500), nextAction: "Add `paneweft::test_adapter!();` to each participating test module, build with the declared features, then refresh again." } as Diagnostic]));
       return { status: "failed", snapshotIds: [], diagnostics };
     }
@@ -609,7 +593,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
       }
       const notStarted = runnerNotStarted(qexJob, log, adapter);
       if (notStarted !== undefined) diagnostics.push(notStarted);
-      if (compile === "failed") diagnostics.push(...compileDiagnostics(log, typecheck, adapter.kind));
+      if (compile === "failed") diagnostics.push(...compileDiagnostics({ log, typecheck, kind: adapter.kind, root }));
       for (const invocation of run.invocations) {
         const outcome = invocation.native.outcome;
         if (outcome === "failed" || outcome === "error" || outcome === "blocked") {
