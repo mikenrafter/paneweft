@@ -552,6 +552,7 @@ class DirectorySession implements Session {
     }
     await this.hooks.beforeManifestRename?.({ operation });
     await rename(temporary, target);
+    await syncDirectory(this.dir);
     await this.hooks.afterManifestRename?.({ operation });
   }
 
