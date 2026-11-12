@@ -704,7 +704,7 @@ async function scaffold(call: Call, tool: "scaffold_view" | "scaffold_example"):
   const rust = kind === "cargo" && adapter !== undefined ? rustFacts(adapter, source.path) : undefined;
   const ts = kind === "vitest" && adapter !== undefined ? typeScriptFacts(adapter) : undefined;
   const plan = scaffoldView(kind, { typeId, source, question, component: (call.args.component as "shape" | "list" | undefined) ?? "shape", claim, ...(token === undefined ? {} : { token }), ...(rust === undefined ? {} : { rust }), ...(ts === undefined ? {} : { ts }) });
-  notices.push(...plan.notices);
+  if (tool === "scaffold_view") notices.push(...plan.notices);
   if (tool === "scaffold_example" && kind === "cargo" && !record.catalogue.views.some((view) => view.typeId === typeId)) notices.push(`${source.symbol} has no view in the catalogue yet: an example returns a value of a type that has views (the trait \`Inspectable\`), so scaffold_view comes first and its \`#[paneweft::views]\` impl must be in place before this example compiles`);
   if (tool === "scaffold_example") {
     const example = (call.args.example as string | undefined) ?? `${slug(source.symbol)}.new`;
@@ -724,6 +724,8 @@ async function scaffold(call: Call, tool: "scaffold_view" | "scaffold_example"):
         ? [`// ${source.path}: add inside the existing \`mod ${rustSetup.examplesModule}\` (it is already behind the feature gate and imports ${source.symbol}).`, ...body.map((line) => line.replace(/^ {4}/, ""))].join("\n") + "\n"
         : ["#[cfg(all(test, feature = \"paneweft\"))]", `mod ${rustSetup.examplesModule} {`, `    use super::${source.symbol};`, "", ...(facts.testAdapter ? [] : ["    // once per test binary: the reserved test the catalogue export runs", "    paneweft::test_adapter!();", ""]), ...body, "}", ""].join("\n");
       plan.patches = [{ path: source.path, text }, ...rustSetup.cargoPatches];
+      // an example is its own test: the macro makes the wrapper test `paneweft_example_<fn>`, red until the body builds the value
+      plan.outputTest = { path: source.path, text: `// The example is its own test (CLAIM ${claim}): \`#[paneweft::example]\` makes the libtest wrapper \`paneweft_example_${slug(example)}\`.\n// Run it red before building the value, green after:  cargo test --features paneweft paneweft_example_${slug(example)}\n// Then collect it by its id; the collection records the checks and captures the value.\n` };
       plan.registration = `Rust: \`#[paneweft::example]\` registers the example descriptor with linkme; nothing to import. ${facts.testAdapter ? "This crate already invokes `paneweft::test_adapter!()` (the reserved catalogue-export test, once per test binary)." : "The module invokes `paneweft::test_adapter!()` once: the reserved catalogue-export test of this test binary."} Collect the example by its id once the Cargo wiring is in: the collection exports the catalogue itself.`;
     } else {
       // S12: the example brings everything it imports. The token declaration the plan proposed (when the repository declares none) is returned

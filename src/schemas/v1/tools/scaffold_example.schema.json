@@ -42,6 +42,27 @@
       "maximum": 32768,
       "default": 8192,
       "description": "UTF-8 byte budget of the whole serialized reply (design section 4)."
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "symbol"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "symbol": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "description": "The path and symbol that declare the type, as a candidate, when no catalogue is stored yet or the type is not in it (a fresh repository: the first collect exports the catalogue). The compiler validates it."
     }
   }
 }

@@ -150,6 +150,16 @@ describe("[F12] the Rust scaffold applies to a crate that has no paneweft wiring
     expect(again.outputTest.text).toMatch(/inside the existing `mod paneweft_view_tests`/);
   }, 120_000);
 
+  // why: F12, found by running the README's own commands: `scaffold_example` refused `source` (UNKNOWN_PROPERTY), so on a fresh repository, where no catalogue names the type yet,
+  // the example scaffold could not be asked for at all although the view scaffold could. Both take the explicit source now.
+  // proves: CLAIM(F12-rust-applies)
+  it("scaffold_example takes an explicit source when no catalogue is stored", async () => {
+    const world = await plainWorld();
+    const reply = (await world.scaffold("scaffold_example", { type: "plain::Fresh", source: { path: "src/lib.rs", symbol: "Boat" }, example: "boat.fresh" })) as Reply;
+    expect(reply.patches[0]!.text).toContain("#[paneweft::example(id = \"boat.fresh\"");
+    expect(reply.patches[0]!.text).toContain("use super::Boat;");
+  });
+
   // why: F12. The text reply (what an agent reads) carries the setup, the test and a counts line that agrees with what was returned.
   // proves: CLAIM(F12-counts)
   it("counts the patches it returns", async () => {

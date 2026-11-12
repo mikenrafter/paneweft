@@ -354,7 +354,7 @@ describe("[S12] scaffolds can be used from the text reply", () => {
     expect(outcome.body).toContain("src/watch.rs");
     expect(outcome.body).toContain(tool === "scaffold_view" ? "#[paneweft::views(type_id = \"vigil::watch::WatchFile\")]" : "#[paneweft::example(id = ");
     expect(outcome.body).toContain("output test");
-    expect(outcome.body).toContain("assert_eq!(view[\"completeness\"][\"status\"], \"complete\"");
+    expect(outcome.body).toContain(tool === "scaffold_view" ? "assert_eq!(view[\"completeness\"][\"status\"], \"complete\"" : "cargo test --features paneweft paneweft_example_watch_new");
     expect(outcome.body).toContain("registration:");
     expect(outcome.body).toContain("test_adapter!()");
     expect(outcome.body).toContain("paneweft collect --request-id <id> --repo vg --adapter cargo --example <example-id>");
