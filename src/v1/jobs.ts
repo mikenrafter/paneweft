@@ -284,12 +284,43 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     }
   }
 
+  // ---- the sample of the sources (S14) -------------------------------------------------------------------------------------------
+
+  const beforePath = (id: string): string => join(jobDir(id), "fingerprint.before.json");
+  const unverifiedPath = (id: string): string => join(jobDir(id), "fingerprint.unverified.json");
+  const exists = async (path: string): Promise<boolean> => (await readFile(path).then(() => true, () => false));
+
+  /** Samples the sources the job starts from. Called under the submission lock, immediately before the FIRST `qex submit` and by nobody else, so
+   * the sample cannot postdate the execution. A sample that cannot be taken is recorded as such; the job is still submitted, as unverified. */
+  async function takeBeforeSample(id: string, adapter: AdapterRecord): Promise<void> {
+    if ((await exists(beforePath(id))) || (await exists(unverifiedPath(id)))) return;
+    const sample = await computeFingerprint({ root: normalize(join(adapter.workspaceRoot, adapter.entry)) });
+    if (sample.ok) await writeDurably(beforePath(id), JSON.stringify(sample.value));
+    else await writeDurably(unverifiedPath(id), JSON.stringify({ reason: `the sources could not be sampled before the job was submitted: ${sample.error.message}` }));
+  }
+
+  /** A job that is already submitted (adopted from the id file or from qex) with no sample on record can never be sampled: its inputs may have
+   * changed since it started. That is recorded once, permanently, and the job finishes as unverified. */
+  async function forgoBeforeSample(id: string): Promise<void> {
+    if ((await exists(beforePath(id))) || (await exists(unverifiedPath(id)))) return;
+    await writeDurably(unverifiedPath(id), JSON.stringify({ reason: "the job was already submitted when it was recovered and no sample of its inputs had been taken, so none can be taken now" }));
+  }
+
+  /** The recorded sample of a job, or why there is none. A recorded refusal wins over a sample file. */
+  async function beforeSample(id: string): Promise<{ sample: Fingerprint | undefined; why: string }> {
+    const refusal = await readJson<{ reason?: string }>(unverifiedPath(id));
+    if (refusal !== undefined) return { sample: undefined, why: refusal.reason ?? "no sample of the inputs was taken before the job ran" };
+    const sample = await readJson<Fingerprint>(beforePath(id));
+    return { sample, why: "no sample was taken before the export ran" };
+  }
+
   async function submitOnce(id: string, intent: Intent): Promise<Result<State>> {
     const state = await readState(id);
     if (state?.qexId) return ok(state);
     const idFile = join(jobDir(id), "qex.id");
     let qexId = (await readFile(idFile, "utf8").catch(() => "")).trim();
     let how = "the id file";
+    if (qexId.length > 0) await forgoBeforeSample(id);
     if (qexId.length === 0) {
       const listed = await deps.qex.list();
       if (!listed.ok) {
@@ -300,10 +331,12 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
       if (found !== undefined) {
         qexId = found.id;
         how = "qex list by the dedupe key";
+        await forgoBeforeSample(id);
       } else {
         const resolved = intent.resolved;
         const adapter = adapterFor(intent.params);
         if (resolved === undefined || adapter === undefined) return err("INTERNAL", `job "${id}" has no resolved process to submit`);
+        await takeBeforeSample(id, adapter);
         const submitted = await deps.qex.submit(buildQexSubmitArgv(adapter, id, resolved.process, jobDir(id), resolved.timeoutMs));
         if (!submitted.ok) return submitted;
         qexId = submitted.value.id;
@@ -468,13 +501,13 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     }
     // S14: the record holds the sources the job STARTED from, with the consistency of the sample before and the sample after; a source edited while
     // the export ran leaves a mixed sample, which is never fresh.
-    const before = await readJson<Fingerprint>(join(jobDir(id), "fingerprint.before.json"));
+    const { sample: before, why: noSample } = await beforeSample(id);
     const after = await computeFingerprint({ root, declaredExtras: before?.declaredExtras ?? [], exclusions: before?.exclusions ?? [] });
     let fingerprint: Record<string, unknown>;
     if (before !== undefined && after.ok) {
       const sample = sampleConsistency(before, after.value);
       fingerprint = { ...before, sampledConsistency: sample.status, ...(sample.status === "mixed-input" ? { sampleNote: sample.note, changedDuringExport: sample.changed } : {}) };
-    } else if (after.ok) fingerprint = { ...after.value, sampledConsistency: "unverified", unverified: "no sample was taken before the export ran" };
+    } else if (after.ok) fingerprint = { ...after.value, sampledConsistency: "unverified", unverified: noSample };
     else fingerprint = { digest: "0".repeat(64), members: [], declaredExtras: [], exclusions: [], sampledConsistency: "unverified", unverified: after.error.message };
     const record = { schemaVersion: "paneweft.catalogue-record/1", repo: adapter.repo, adapter: adapter.id, catalogue: merged.value, fingerprint, ...(inventory.value === undefined ? {} : { inventory: inventory.value }), collectedAt: now() };
     await writeDurably(join(deps.sessionDir, "catalogues", adapter.repo, `${adapter.id}.json`), JSON.stringify(record));
@@ -526,7 +559,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
       const reconciled = reconcile(adapter.kind, { runId, selected, testNames: adapter.kind === "cargo" ? names : Object.fromEntries(selected.map((example) => [example, `example:${example}`])), exit, compile, skipped: lists.skipped, filtered: lists.filtered, invocations: invocations as never, native });
       if (!reconciled.ok) throw new Error(reconciled.error.message);
       const run = reconciled.value;
-      const before = await readJson<Fingerprint>(join(jobDir(id), "fingerprint.before.json"));
+      const { sample: before } = await beforeSample(id);
       const root = normalize(join(adapter.workspaceRoot, adapter.entry));
       const after = before === undefined ? undefined : await computeFingerprint({ root, declaredExtras: before.declaredExtras, exclusions: before.exclusions });
       run.collectionId = id;
@@ -660,9 +693,8 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     }
     await crash("after-intent");
     await mkdir(stagingDir, { recursive: true });
-    const root = normalize(join(adapter.workspaceRoot, adapter.entry));
-    const fingerprint = await computeFingerprint({ root });
-    if (fingerprint.ok) await writeDurably(join(jobDir(id), "fingerprint.before.json"), JSON.stringify(fingerprint.value));
+    // the sample of the sources is taken by the submission itself, under its lock and before the first submit (S14), never here: a concurrent
+    // retry may already have submitted the job by now
     const submitted = await ensureSubmitted(id, created.value.intent);
     if (!submitted.ok) return submitted;
     return ok(view(id, created.value.intent, submitted.value, true));

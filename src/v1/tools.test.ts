@@ -50,7 +50,7 @@ async function toolWorld(options: { registerRoot?: boolean; stale?: boolean } = 
   const text = async (tool: string, args: Record<string, unknown> = {}) => executeV1Operation(context, tool, { format: "text", ...args });
   /** A call that must succeed: the assertion happens here, so a failing stub is an assertion failure and not a TypeError further down. */
   const okCall = async (tool: string, args: Record<string, unknown> = {}) => { const result = await call(tool, args); expect(result.outcome.ok, `${tool}: ${result.outcome.body.slice(0, 300)}`).toBe(true); return result; };
-  return { session, dir, root, qex, call, okCall, text, context, fingerprint };
+  return { session, dir, root, qex, call, okCall, text, context, fingerprint, adapter };
 }
 
 describe("[IV14] discovery", () => {
@@ -425,6 +425,70 @@ describe("[S12] scaffolds can be used from the text reply", () => {
     expect(module.text).toContain('import type { Backup } from "./models.ts";');
     expect(module.text).toMatch(/export const BackupToken = defineType<Backup>\(\{/);
     expect(module.text).not.toContain('from "./Backup.paneweft.ts"');
+  });
+});
+
+describe("[S14r2] the sample of the sources is taken under the submission lock, before any submit", () => {
+  const settledCatalogue = async (jobs: NonNullable<V1Context["jobs"]>, id: string) => vi.waitFor(async () => { expect(must(await jobs.status(id), "status").state).toBe("succeeded"); }, { timeout: 20_000, interval: 50 });
+
+  // why: S14 (round 2). The creator sampled the sources AFTER it created the intent, and a concurrent retry (same request id, same parameters) took the
+  // job from "unsubmitted" to submitted in between. The creator's sample then postdated the execution: a source edited after the retry submitted was
+  // in the sample, the run's end matched it, and the record read `consistent-sampled` and "fresh". Here the creator is held between its intent and its
+  // sample while a retry submits the job; the source is edited after that. Rejects an implementation that samples in the creator, outside the
+  // submission lock.
+  // proves: CLAIM(S14-freshness)
+  it("a retry that submits before the creator samples does not let the sample postdate the run", async () => {
+    const { qex, session, dir, root, adapter, fingerprint, call } = await toolWorld();
+    qex.control({ hold: true });
+    const make = (crashAt?: (point: string) => void | Promise<void>) => createJobService({ session, sessionDir: dir, qex: qex.client, adapters: [adapter], catalogueFor: async () => catalogue, ...(crashAt === undefined ? {} : { crashAt: crashAt as never }) });
+    const retry = make();
+    let retried: any;
+    const creator = make(async (point) => {
+      if (point !== "after-intent") return;
+      retried = must(await retry.refreshCatalogue({ requestId: "cat-race", repo: "vg", adapter: "cargo" }), "the retry submits the job");
+      write(root, "src/lib.rs", "// edited after the retry submitted the job\n");
+    });
+    must(await creator.refreshCatalogue({ requestId: "cat-race", repo: "vg", adapter: "cargo" }), "creator");
+    expect(retried.created, "the retry found the creator's intent").toBe(false);
+    expect(qex.calls().filter((c) => c[0] === "submit")).toHaveLength(1);
+    qex.release(retried.qexId);
+    await settledCatalogue(retry, "cat-race");
+    const record = JSON.parse(readFileSync(join(dir, "catalogues", "vg", "cargo.json"), "utf8"));
+    expect(record.fingerprint.digest, "the sample is of the sources the job was submitted with").toBe(fingerprint.digest);
+    expect(record.fingerprint.sampledConsistency).toBe("mixed-input");
+    expect((await call("list_types", { repo: "vg" })).payload.freshness.status).not.toBe("fresh");
+  });
+
+  // why: S14 (round 2). A job found already submitted with no sample on record (a predecessor died before sampling, or the file is lost) cannot be
+  // sampled after the fact: its inputs may be anything by now. It finishes as `unverified`, is never fresh (even when the sources match what was
+  // later sampled), and no later caller can give it a sample.
+  // proves: CLAIM(S14-freshness)
+  it("a job recovered without a before-sample stays unverified and never gets a late one", async () => {
+    const { qex, session, dir, adapter, call } = await toolWorld();
+    qex.control({ crashAfterAck: true });
+    const make = () => createJobService({ session, sessionDir: dir, qex: qex.client, adapters: [adapter], catalogueFor: async () => catalogue });
+    expect((await make().refreshCatalogue({ requestId: "cat-lost", repo: "vg", adapter: "cargo" })).ok).toBe(false);
+    qex.control({ crashAfterAck: false });
+    rmSync(join(dir, "jobs", "cat-lost", "fingerprint.before.json"), { force: true });
+    const recovered = make();
+    await settledCatalogue(recovered, "cat-lost");
+    // a second caller with the same request, long after: still no sample
+    expect(must(await make().refreshCatalogue({ requestId: "cat-lost", repo: "vg", adapter: "cargo" }), "again").created).toBe(false);
+    expect(existsSync(join(dir, "jobs", "cat-lost", "fingerprint.before.json"))).toBe(false);
+    const record = JSON.parse(readFileSync(join(dir, "catalogues", "vg", "cargo.json"), "utf8"));
+    expect(record.fingerprint.sampledConsistency).toBe("unverified");
+    expect((await call("list_types", { repo: "vg" })).payload.freshness.status).toBe("unverified");
+  });
+
+  // why: S14 control. The ordinary path: one caller, nothing edited. The sample is taken before the submit, recorded consistent, and the catalogue is fresh.
+  // proves: CLAIM(S14-freshness)
+  it("an undisturbed refresh is consistently sampled and fresh", async () => {
+    const { qex, context, dir, call } = await toolWorld();
+    must(await context.jobs!.refreshCatalogue({ requestId: "cat-calm", repo: "vg", adapter: "cargo" }), "refresh");
+    await settledCatalogue(context.jobs!, "cat-calm");
+    expect(JSON.parse(readFileSync(join(dir, "catalogues", "vg", "cargo.json"), "utf8")).fingerprint.sampledConsistency).toBe("consistent-sampled");
+    expect((await call("list_types", { repo: "vg" })).payload.freshness.status).toBe("fresh");
+    expect(qex.calls().filter((c) => c[0] === "submit")).toHaveLength(1);
   });
 });
 
