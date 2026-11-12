@@ -121,3 +121,182 @@ paneweft serve            # prints http://127.0.0.1:PORT/#token=...
 ```
 
 The viewer binds loopback only and every API call needs the per-run token in that URL; the URL is also written to `server.json` in the session directory (mode 0600) so `render` can print a link while a viewer runs. Stop it with Ctrl-C. If the page is blank, run `npm run build:viewer` first. The page keeps its token in memory only (it removes it from the address bar as it loads), so **reloading the page drops access**: reopen the URL printed by `serve` or `render`.
+
+## v1: views and examples that live in the code
+
+v1 captures REAL values. A repository declares typed views and runnable examples beside the code (Rust crate or TypeScript/Vitest package); `paneweft collect` runs the
+examples through `qex` (a queue wrapper that must be on `PATH`; tested with 0.33.0), stores what they built as ordinary views, and the CLI, the MCP
+tools and the viewer read them back. The agent loop is `skills/paneweft-views/SKILL.md`; normative rules are `docs/v1-red-contract.md`. This section is what the owner
+of a repository does once. All commands below take `--session DIR` (or `PANEWEFT_SESSION`); `paneweft` is the alias from "Run the CLI".
+
+### 1. Register the repository and an adapter (owner, CLI only)
+
+```sh
+paneweft repo add vigil=/path/to/repository            # the root the renderers, freshness and the inventory are read from
+paneweft adapter add --file adapter.json               # one record per (repository, runner); paneweft adapter list shows them
+```
+
+The record is `paneweft.adapter/1`, written by the owner. No tool and no agent can create or change one.
+
+```json
+{ "schemaVersion": "paneweft.adapter/1", "id": "cargo", "kind": "cargo", "grammar": "cargo-test/1", "repo": "vigil",
+  "executable": "/usr/local/cargo/bin/cargo", "workspaceRoot": "/path/to/phoe-nix/scout-modules/vigil", "entry": ".",
+  "features": ["paneweft"], "supportedVersions": ["1.97"],
+  "env": { "set": { "RUSTUP_HOME": "/usr/local/rustup", "CARGO_HOME": "/usr/local/cargo" } },
+  "limits": { "timeoutMs": 900000, "logBytes": 1048576 }, "queue": { "wrapper": "qex", "cpu": "4", "mem": "6GB", "tags": ["paneweft"] } }
+```
+
+```json
+{ "schemaVersion": "paneweft.adapter/1", "id": "vitest", "kind": "vitest", "grammar": "vitest-run/1", "repo": "containmarks",
+  "executable": "/path/to/node", "workspaceRoot": "/path/to/containmarks", "entry": ".",
+  "tsconfig": "tsconfig.paneweft.json", "vitestConfig": "vitest.config.ts",
+  "features": [], "supportedVersions": ["3.2"],
+  "limits": { "timeoutMs": 600000, "logBytes": 1048576 }, "queue": { "wrapper": "qex", "cpu": "2", "mem": "2GB", "tags": ["paneweft"] } }
+```
+
+| Field | Meaning |
+|---|---|
+| `id`, `repo` | the adapter's name (`--adapter`) and the repository it belongs to (`--repo`) |
+| `kind`, `grammar` | `cargo` + `cargo-test/1`, or `vitest` + `vitest-run/1`: the argv shape is code, selectors are data |
+| `executable` | an ABSOLUTE path to an executable file (`adapter add` checks). **For `vitest` it is `node`**: the host runs its own `scripts/collect-vitest.mjs` (typecheck, then Vitest) with it, not the `vitest` binary. For `cargo` it is `cargo`; a rustup proxy needs `RUSTUP_HOME` (and `CARGO_HOME`), see `env` |
+| `workspaceRoot`, `entry` | where the runner starts: the directory of `Cargo.toml` (cargo) or `package.json` (vitest) is `workspaceRoot/entry` |
+| `features` | cargo features passed as `--features` (include `paneweft`); `[]` for vitest |
+| `supportedVersions` | the runner versions you tested; used as the label when a runner reports none, and not checked against the installed one. `executableSha256` (optional) is recorded and not checked either |
+| `tsconfig`, `vitestConfig` | vitest only: the tsconfig the collection typechecks against, and the Vitest config it runs, both relative to the package directory, no `..`, existing files. Point `tsconfig` at one that `extends` the repository's and lists only what the instrumentation imports, so an unrelated type error (a script, a live test) cannot block every collect |
+| `env` | pins the job environment: a job gets qex's minimal environment, then the `passthrough` names (and a default list: `RUSTUP_HOME CARGO_HOME RUSTUP_TOOLCHAIN CARGO_TARGET_DIR TMPDIR LC_ALL TERM SSL_CERT_FILE SSL_CERT_DIR`) the submitting process has, then `set`, which wins. A CLI call and an MCP server started by a client with a bare environment run the same job for every name in `set`. `PANEWEFT_*` is refused. A job that qex could not start is reported as a `runner` diagnostic naming this field |
+| `limits`, `queue` | job timeout and log bytes kept; the qex resources (`--cpu`, `--mem`) and tags. `limitCeilings` (optional) caps the capture bounds a request may ask for |
+
+### 2. Instrument a Rust crate
+
+The SDK is an optional development dependency behind a `paneweft` feature. Cargo reads the manifest of every path dependency, optional ones too, so the SDK is copied INTO
+the repository (a path outside it breaks every plain `cargo build` and Nix build where the checkout is absent):
+
+```sh
+cd /path/to/crate && node /path/to/paneweft/scripts/vendor-rust-sdk.mjs vendor/paneweft     # run it again to update the copy
+```
+
+```toml
+[features]
+paneweft = ["dep:paneweft"]
+
+[dependencies.paneweft]
+path = "vendor/paneweft/paneweft"
+optional = true
+```
+
+A Nix build lists `./vendor` in its source fileset; a Cargo workspace root lists `vendor/paneweft/paneweft` and `vendor/paneweft/paneweft-macros` under `exclude`. Then, behind
+`#[cfg(feature = "paneweft")]`, a views impl and an example (compact recipe; `paneweft scaffold view|example` prints these for your type and applies cleanly):
+
+```rust
+#[cfg(feature = "paneweft")]
+#[paneweft::views(type_id = "vigil::watch::WatchFile")]
+impl WatchFile {
+    #[paneweft::view(id = "watch.status", title = "Status", component = "shape", priority = 10, question = "What state did this watch reach?")]
+    fn status_view(&self, cx: &mut paneweft::Context) -> paneweft::ViewResult {
+        let mut details = cx.details();
+        details.field("status", format!("{:?}", self.status));
+        details.field("event count", self.events.len());
+        details.finish()
+    }
+}
+
+#[cfg(all(test, feature = "paneweft"))]
+mod paneweft_examples {
+    use super::*;
+    paneweft::test_adapter!();   // once per test binary: the reserved catalogue-export test
+
+    #[paneweft::example(id = "watch.pending", claims = ["VW1"])]
+    fn watch_pending() -> WatchFile {
+        let watch = WatchFile::pending();
+        paneweft::check_eq!("VW1", watch.status, WatchStatus::Pending);
+        watch
+    }
+}
+```
+
+### 3. Instrument a TypeScript / Vitest package
+
+```sh
+npm install --save-dev @paneweft/sdk@file:/path/to/paneweft/packages/paneweft-ts      # not published; a development dependency only
+```
+
+Wire the reporter in the Vitest config the adapter names (it finalizes each example's outcome after its hooks; the entry loads in Vitest's main process, which the
+main entry cannot): `test: { reporters: ["default", "@paneweft/sdk/vitest-reporter"] }`. Then a type token, a view, an example, the explicit manifest and a test file that runs the example:
+
+```ts
+// src/mappings/containerMappings.paneweft.ts   (development only: never import it from a production entry point)
+import { defineType } from "@paneweft/sdk";
+export const Mapping = defineType<ContainerMappingRecord>({ id: "containmarks::ContainerMappingRecord", source: { path: "src/models.ts", symbol: "ContainerMappingRecord" } });
+export const mappingDetails = Mapping.view({ id: "mapping.details", title: "Container mapping", question: "Which original index and container does this mapping preserve?",
+  priority: 10, component: "shape", render: (mapping, view) => view.details().field("original index", mapping.firstSeenIndex).field("backup name", mapping.backupName).done() });
+
+// tests/mappings.examples.ts
+import { example } from "@paneweft/sdk";
+export const workMapping = example({ id: "mapping.work", type: Mapping, claims: ["CM1"], run(cx) {
+  const mapping = parseContainerMappingUrl("about:4:firefox-container-3:Work");
+  cx.check("CM1", () => expect(mapping).toEqual({ firstSeenIndex: 4, cookieStoreId: "firefox-container-3", backupName: "Work" }));
+  return mapping!;
+} });
+
+// tests/mappings.paneweft.test.ts        runs the example under Vitest
+import { exampleTest } from "@paneweft/sdk/vitest";
+exampleTest(workMapping);
+
+// paneweft.views.ts                      the manifest: modules are listed, never discovered
+import { defineManifest } from "@paneweft/sdk";
+export const manifest = defineManifest({ runners: ["vitest"], modules: [
+  { path: "src/mappings/containerMappings.paneweft.ts", types: [Mapping], views: [mappingDetails] },
+  { path: "tests/mappings.examples.ts", examples: [workMapping] },
+] });
+```
+
+The SDK's `.ts` sources run under Node and Vitest; its package ships declarations, so a strict consumer typechecks without `allowImportingTsExtensions`. An example module may
+`import { expect } from "vitest"` at the top: the catalogue export replaces `vitest` with an inert module and never runs an example body.
+
+### 4. Collect and read
+
+```sh
+paneweft collect --request-id r1 --repo vigil --adapter cargo --example watch.pending     # exports the catalogue itself, runs the example, imports the run
+paneweft collection status r1                  # the job advances by itself (a detached driver follows it); status only reports
+paneweft result --run run-r1 --view watch.status --example watch.pending
+paneweft failure run-r1:diag-inv-1             # explain a diagnostic
+paneweft serve                                 # the viewer: the question, the status strip, the rows, keyboard navigation
+```
+
+### 5. The inventory file
+
+`paneweft.inventory.json` sits at the adapter root (`workspaceRoot/entry`), is checked in, and guards against losing a view or an example:
+
+```json
+{ "schemaVersion": "paneweft.inventory/1",
+  "views": [ { "id": "watch.status", "module": "watch::paneweft_views" } ],
+  "examples": [ { "id": "watch.pending", "module": "watch::paneweft_examples", "typeId": "vigil::watch::WatchFile" } ] }
+```
+
+`module` is what the compiled catalogue names: the crate-relative module path for Rust, the repository-relative file path for TypeScript; entries are sorted by id. After a
+collect has stored the catalogue, `paneweft inventory update --repo vigil --adapter cargo` writes the file from it: it adds new ids, keeps declared ids the catalogue lacks (and says
+so; `--prune` drops them), and keeps the file's indentation and one-entry-per-line shape, so review is one added line. A `collect` is not blocked by an id the file does not list yet
+(discovery replies carry a notice naming it); `paneweft catalogue refresh` and CI are the strict check.
+
+### 6. Release builds must not contain the SDK: how to check
+
+Rust (feature off; replace `libplain.rlib` with the binary or library your release produces):
+
+```sh
+cargo build --release
+cargo tree -i paneweft          # error: package ID specification `paneweft` did not match any packages   (the SDK is not in the build graph)
+strings target/release/libplain.rlib | grep -c -i paneweft         # 0
+strings target/release/libplain.rlib | grep -c linkme              # 0
+cargo build --release --features paneweft && strings target/release/libplain.rlib | grep -c -i paneweft     # 34: the positive control
+```
+
+(A directory or crate named after paneweft puts the word into debug paths, so a nonzero count proves nothing until the control is compared.) TypeScript: build the production bundles
+and search them; the SDK is only ever reached from the manifest, the `*.paneweft.ts` modules and the tests:
+
+```sh
+npm run build && grep -li paneweft src/background.js src/preferences/options.js src/picker/picker.js     # no output: no bundle mentions it
+```
+
+### 7. Custom renderers
+
+`renderers/<id>/` of the registered root, trust by digest, `paneweft renderers digest|list|trust`, the page and the message protocol: `docs/renderers.md`.
