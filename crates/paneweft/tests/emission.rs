@@ -286,3 +286,13 @@ fn the_graph_hands_out_the_exact_emitted_text_and_its_size() {
     assert!(graph.bytes() <= 8192);
     assert!(!graph.emergency());
 }
+
+// WHY CLAIM(S25): rejects Value::scalar falling through to an unbounded display and raw redaction reasons.
+#[test]
+fn s25_bounds_display_and_reasons() {
+    let root = Spec { detail: vec![("v".into(), Value::List(vec![Value::Int(1), Value::Int(2)]))], fields: vec![("r".into(), Value::redacted(&"x".repeat(1000)))], ..Spec::default() };
+    let graph = publish(&[root], |limits| limits.string_bytes = 1);
+    assert!(graph["views"][0]["data"]["fields"][1]["example"].as_str().unwrap().len() <= 1);
+    assert_eq!(graph["objects"][0]["fields"]["r"]["reason"], "x");
+    assert!(graph["completeness"]["omitted"]["strings"]["count"].as_u64().unwrap() > 0);
+}

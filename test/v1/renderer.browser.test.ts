@@ -2,11 +2,14 @@
 // production headers (amendments S4, N3; IV12, IV13). jsdom would not prove any of the sandbox properties, so it is not used here.
 // Every assertion about "blocked" has a positive control: the counter origin provably records a request when one is allowed.
 import { createServer, type Server } from "node:http";
-import { cpSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
 import puppeteer, { type Browser, type Page } from "puppeteer-core";
-import { afterEach, assert, describe, expect, it } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { runExample } from "../../packages/paneweft-ts/src/example.ts";
+import { workMapping } from "../../fixtures/packages/containmarks-lite/tests/mappings.examples.ts";
+import { reconcile } from "../../src/v1/adapters.ts";
 import { startViewer } from "../../src/viewer/server.ts";
 import { importCollection } from "../../src/v1/import.ts";
 import { openTrustStore, rendererResponseHeaders, RENDERER_IFRAME_SANDBOX } from "../../src/v1/renderer.ts";
@@ -52,7 +55,21 @@ async function stage(): Promise<Stage> {
   must(await session.registerRepository({ id: "cm", root: repoRoot }), "register root");
   const counter = await counterOrigin();
   const input = collectionImport("containmarks-mapping");
-  const graph = input.graphs[0] as any;
+  // CLAIM(S34): the diagram is captured by the real code-owned SDK example, including its native assertion.
+  const staging = tmp("cm-capture");
+  vi.stubEnv("PANEWEFT_COLLECT", "1"); vi.stubEnv("PANEWEFT_RUN_ID", "run-2"); vi.stubEnv("PANEWEFT_STAGING_DIR", staging);
+  let captured;
+  try { captured = await runExample(workMapping); } finally { vi.unstubAllEnvs(); }
+  expect(captured.failed).toBe(false);
+  expect(captured.invocation.verified).toBe(true);
+  const id = captured.invocation.id;
+  const graph = JSON.parse(readFileSync(join(staging, "captures", `${id}.json`), "utf8"));
+  input.graphs = [graph];
+  input.run = must(reconcile("vitest", { runId: "run-2", selected: ["mapping.work"], testNames: { "mapping.work": "example:mapping.work" },
+    exit: { code: 0, signal: null, timedOut: false, cancelled: false }, compile: "ok", skipped: [], filtered: [],
+    invocations: [{ started: JSON.parse(readFileSync(join(staging, "invocations", `${id}.started.json`), "utf8")), completed: JSON.parse(readFileSync(join(staging, "invocations", `${id}.json`), "utf8")) }],
+    native: { schemaVersion: "paneweft.vitest-report/1", runId: "run-2", vitestVersion: "5.1.0", tests: [{ name: "example:mapping.work", file: "mappings.paneweft.test.ts", state: "passed", errors: [], retries: 0 }], suites: [], unhandledErrors: [] },
+  }), "real example reconciliation");
   const details = graph.views[0];
   const custom = (viewId: string, renderer: string, assetDigest: string, payload: object) => ({
     ...details, viewId, title: `Custom ${viewId}`, component: "custom", priority: 20,
@@ -60,12 +77,11 @@ async function stage(): Promise<Stage> {
     data: { renderer: { id: renderer, apiVersion: 1, payloadSchemaDigest: digests[renderer].payloadSchemaDigest, assetDigest }, payload, objects: ["o1"], fallback: { component: "shape", data: details.data } },
   });
   graph.views.push(
-    custom("mapping.card", "mapping-card", digests["mapping-card"].digest, { originalIndex: 4, containerId: "firefox-container-3", backupName: "Work" }),
     custom("mapping.hostile", "hostile", digests.hostile.digest, { counter: counter.origin }),
     custom("mapping.misbehaving", "misbehaving", digests.misbehaving.digest, {}),
     custom("mapping.untrusted", "mapping-card", "e".repeat(64), { originalIndex: 4, containerId: "firefox-container-3", backupName: "Work" }),
   );
-  graph.objects[0].views.push("mapping.card", "mapping.hostile", "mapping.misbehaving", "mapping.untrusted");
+  graph.objects[0].views.push( "mapping.hostile", "mapping.misbehaving", "mapping.untrusted");
   must(await importCollection(session, input), "import");
   const trust = openTrustStore(dir);
   for (const id of ["mapping-card", "hostile", "misbehaving"]) must(await trust.trust({ repo: "cm", id, digest: digests[id].digest }), `trust ${id}`);
@@ -76,7 +92,7 @@ async function stage(): Promise<Stage> {
   const page = await browser.newPage();
   const responses: Stage["responses"] = [];
   page.on("response", (response) => responses.push({ url: response.url(), status: response.status(), headers: response.headers(), requestHeaders: response.request().headers() }));
-  return { page, browser, server, counter, responses, dir, url: (view) => `${server.origin}/#token=${server.token}&view=inv-1.o1.${view}&snapshot=snap-run-2` };
+  return { page, browser, server, counter, responses, dir, url: (view) => `${server.origin}/#token=${server.token}&view=${graph.captureId}.o1.${view}&snapshot=snap-run-2` };
 }
 
 /** Fails the test by assertion (not by a puppeteer TimeoutError) when something does not happen. */

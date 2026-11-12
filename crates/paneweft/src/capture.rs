@@ -326,6 +326,7 @@ impl State {
     /// Charges and stores a declared field. The name is charged as the text it becomes, then the value is encoded against what is left; what
     /// does not fit is cut and counted.
     fn set_field(&mut self, object: usize, name: &str, value: Value) {
+        if name.len() as u64 > self.limits().string_bytes { self.count("fields", 1); self.count("strings", 1); return; }
         let known = self.objects[object].fields.contains_key(name);
         if known {
             self.ledger.give(self.objects[object].field_bytes.get(name).copied().unwrap_or(0));
@@ -345,7 +346,8 @@ impl State {
     }
 
     fn set_label(&mut self, object: usize, text: &str) {
-        let label = crate::value::cut_str(text, 256).0.to_string();
+        let (label, omitted) = crate::value::cut_str(text, self.limits().string_bytes.min(256));
+        let label = label.to_string();
         let bytes = bytes_of(&Json::String(label.clone()));
         let old = self.objects[object].label_bytes;
         if bytes > old && !self.ledger.take(bytes - old) {
@@ -355,6 +357,7 @@ impl State {
         if bytes < old {
             self.ledger.give(old - bytes);
         }
+        if omitted > 0 { self.count("strings", 1); }
         self.objects[object].label = Some(label);
         self.objects[object].label_bytes = bytes;
     }
@@ -442,12 +445,12 @@ impl State {
         // a domain key is at most 256 characters in the schema; a longer one is cut (and counted), not kept whole
         let (domain_key, key_cut) = match key {
             Some(key) => {
-                let (kept, omitted) = crate::value::cut_str(key, 256);
+                let (kept, omitted) = crate::value::cut_str(key, self.limits().string_bytes.min(256));
                 (Some(kept.to_string()), omitted > 0)
             }
             None => (None, false),
         };
-        let default_label = crate::value::cut_str(&domain_key.clone().unwrap_or_else(|| type_id.rsplit("::").next().unwrap_or(type_id).to_string()), 256).0.to_string();
+        let default_label = crate::value::cut_str(&domain_key.clone().unwrap_or_else(|| type_id.rsplit("::").next().unwrap_or(type_id).to_string()), self.limits().string_bytes.min(256)).0.to_string();
         let child_edge = parent.as_ref().map(|(_, name)| json!({"name": name, "kind": "child", "target": id}));
         // the record of the object, its entry in the root list and the edge that reaches it are charged before the object exists: no room, no object
         let record = bytes_of(&json!({"id": id, "typeId": type_id, "domainKey": domain_key, "label": default_label, "fields": {}, "edges": [], "views": [], "contentHash": content_hash_placeholder()})) + u64::from(!self.objects.is_empty());
@@ -548,7 +551,9 @@ impl State {
         record.insert("evidence".into(), json!({"provenance": "observed", "runId": self.options.run_id}));
         match view.body {
             ViewBody::Unsupported(reason) => {
-                let reason = crate::value::cut_str(&reason, 500).0.to_string();
+                let (kept, cut) = crate::value::cut_str(&reason, self.limits().string_bytes.min(500));
+                let reason = kept.to_string();
+                if cut > 0 { counted.push(("strings".into(), 1)); }
                 let mut completeness = json!({"status": "unsupported", "reason": reason});
                 if let Some(mode) = consistency {
                     completeness["consistency"] = json!(mode);
@@ -558,7 +563,7 @@ impl State {
                 record.insert("pages".into(), json!([]));
             }
             ViewBody::Built(built) => {
-                if built.component != meta.component {
+                if built.component != meta.component && meta.component != "custom" {
                     let message = format!("view {} declares component {:?} but built a {:?}", meta.id, meta.component, built.component);
                     self.ledger.give(paid);
                     self.add_diagnostic("output-schema", &message, Some(meta.id), None, None);
@@ -582,6 +587,8 @@ impl State {
                     self.add_diagnostic("limit", &message, Some(meta.id), None, None);
                 }
                 record.insert("completeness".into(), Json::Object(completeness));
+                record.insert("component".into(), json!(built.component));
+                if built.component == "custom" { record.insert("renderer".into(), built.data["renderer"].clone()); }
                 record.insert("data".into(), built.data);
                 let mut page_refs = Vec::new();
                 for (offset, page) in built.pages.iter().enumerate() {
@@ -620,7 +627,7 @@ impl State {
     fn object_json(&self, index: usize) -> Json {
         let object = &self.objects[index];
         let label = object.label.clone().unwrap_or_else(|| object.domain_key.clone().unwrap_or_else(|| object.type_id.rsplit("::").next().unwrap_or(object.type_id).to_string()));
-        let label = crate::value::cut_str(&label, 256).0.to_string();
+        let label = crate::value::cut_str(&label, self.limits().string_bytes.min(256)).0.to_string();
         let fields = Json::Object(object.fields.clone());
         let hash_input = json!({"domainKey": object.domain_key, "fields": fields, "label": label, "typeId": object.type_id});
         json!({
@@ -732,6 +739,40 @@ impl<'a> Context<'a> {
         let (object, view, page_rows) = (self.state.objects[self.object].id.clone(), self.view.unwrap_or("").to_string(), self.state.limits().page_rows);
         let charge = self.charge();
         TableBuilder::new(self.state.limits(), self.budget(), charge, Box::new(move |index| page_frame(&object, &view, index, page_rows)))
+    }
+
+    /// CLAIM(S34): custom payloads use the bounded value encoder and require a standard fallback [tests/custom.rs].
+    pub fn custom<P: Into<Value>>(&mut self, renderer: &crate::Renderer<P>, payload: P, fallback: View, objects: &[ObjectRef]) -> ViewResult {
+        let mut built = match fallback.body {
+            ViewBody::Unsupported(reason) => return Ok(View::unsupported(&reason)),
+            ViewBody::Built(built) => built,
+        };
+        if !["shape", "list"].contains(&built.component) || !built.pages.is_empty() {
+            return Err(ViewError::new("output-schema", "custom views require a standard fallback without stored pages"));
+        }
+        let metadata = &renderer.metadata;
+        let hex = |name: &str| metadata[name].as_str().is_some_and(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
+        if !hex("assetDigest") || !hex("payloadSchemaDigest") || metadata["id"].as_str().is_none_or(|s| s.is_empty() || s.len() > 64 || !s.as_bytes()[0].is_ascii_lowercase() || !s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')) || metadata["apiVersion"].as_u64().unwrap_or(0) == 0 {
+            return Err(ViewError::new("output-schema", "invalid renderer identity or digest"));
+        }
+        let charge = self.charge();
+        let limits = self.state.limits();
+        let ledger = Ledger::new(charge.spare(), charge.spare(), 0);
+        let mut stats = crate::value::EncodeStats::default();
+        let payload = payload.into().encode_with(&limits, &mut stats, &ledger, 0);
+        if !payload.is_object() { return Err(ViewError::new("output-schema", "a custom renderer payload must be an object")); }
+        let ids: Vec<&str> = objects.iter().filter_map(|reference| match reference { ObjectRef::Captured(id) => Some(id.as_str()), _ => None }).collect();
+        let fallback_bytes = bytes_of(&built.data);
+        let data = json!({"renderer": metadata, "payload": payload, "objects": ids, "fallback": {"component": built.component, "data": built.data.clone()}});
+        if !charge.take(bytes_of(&data).saturating_sub(fallback_bytes) + bytes_of(metadata)) {
+            *built.omitted.entry("values".into()).or_default() += 1;
+            return Ok(View { body: ViewBody::Built(built) });
+        }
+        if stats.strings > 0 { *built.omitted.entry("strings".into()).or_default() += stats.strings; }
+        if stats.values > 0 { *built.omitted.entry("values".into()).or_default() += stats.values; }
+        built.component = "custom";
+        built.data = data;
+        Ok(View { body: ViewBody::Built(built) })
     }
 
     /// Publishes `value` as a NEW observation and returns a reference. Beyond a bound it returns `ObjectRef::NotCaptured`, not an error.

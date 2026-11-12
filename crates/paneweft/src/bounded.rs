@@ -142,6 +142,7 @@ impl Charge {
         true
     }
 
+    pub(crate) fn spare(&self) -> u64 { self.ledger.spare() }
     pub(crate) fn bytes(&self) -> u64 { self.bytes.get() }
 }
 

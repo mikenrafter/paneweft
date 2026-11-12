@@ -40,7 +40,7 @@ describe("[IV1] a plain record with an explicit type token", () => {
       ],
     });
     expect(graph.objects[0].typeId).toBe("containmarks::ContainerMappingRecord");
-    expect(graph.objects[0].views).toEqual(["mapping.details"]);
+    expect(graph.objects[0].views).toEqual(["mapping.details", "mapping.card"]);
   });
 
   // why: IV21 mutation control: swapping two mapping fields must change the output (the test above would fail); this pins the

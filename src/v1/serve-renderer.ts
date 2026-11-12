@@ -1,6 +1,5 @@
 // What the viewer server needs to host repo-owned renderers (S4, N3): the state of a custom view (trusted? present? compatible?), the
 // short-lived capability tokens of its frame, and the three allowlisted assets plus a generated classic-script document.
-import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import type { Session, ViewKey } from "../core/session.ts";
@@ -53,7 +52,7 @@ export function createRendererServing(options: { session: Session; sessionDirect
       const root = await rendererRoot(overlay.repo);
       const digested = root === undefined ? undefined : await digestRenderer(root, renderer.id);
       if (digested === undefined || !digested.ok || digested.value.digest !== renderer.assetDigest) return refuse("missing-asset", `the renderer files of "${renderer.id}" are missing, or changed since they were trusted (expected digest ${renderer.assetDigest.slice(0, 12)}...)`);
-      const definition = await readJsonFile<{ payloadSchema?: unknown }>(join(root as string, renderer.id, "renderer.json"));
+      const definition = JSON.parse(digested.value.buffers["renderer.json"]!.toString("utf8")) as { payloadSchema?: unknown };
       const schemaDigest = overlay.renderer.payloadSchemaDigest;
       const problems = definition?.payloadSchema === undefined ? ["renderer.json has no payloadSchema"] : validateRendererPayload({ payloadSchemaDigest: schemaDigest }, overlay.payload, { [schemaDigest]: definition.payloadSchema }).map((issue) => `${issue.pointer}: ${issue.constraint}`);
       if (problems.length > 0) return refuse("failed", `the payload does not satisfy the renderer's registered schema: ${problems.slice(0, 3).join("; ")}`);
@@ -73,7 +72,7 @@ export function createRendererServing(options: { session: Session; sessionDirect
         const current = await digestRenderer(root, entry.id);
         if (!current.ok || current.value.digest !== digest) continue;
         try {
-          return { status: 200, type: TYPES[file] as string, body: await readFile(join(root, entry.id, file)) };
+          return { status: 200, type: TYPES[file] as string, body: current.value.buffers[file] as Buffer };
         } catch {
           return gone;
         }

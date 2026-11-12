@@ -24,6 +24,7 @@ describe("[IV3] manifest catalogue", () => {
     const catalogue = result.catalogue as any;
     expect(catalogue.types).toEqual([{ typeId: "containmarks::ContainerMappingRecord", source: { path: "src/models.ts", symbol: "ContainerMappingRecord" } }]);
     expect(catalogue.views).toEqual([
+      { id: "mapping.card", typeId: "containmarks::ContainerMappingRecord", title: "Mapping card", question: "Which original index and container does this mapping preserve?", component: "custom", priority: 20, module: "src/mappings/containerMappings.paneweft.ts", source: { path: "src/mappings/containerMappings.paneweft.ts", line: lineOf("src/mappings/containerMappings.paneweft.ts", "export const mappingCard = Mapping.view(") } },
       { id: "mapping.details", typeId: "containmarks::ContainerMappingRecord", title: "Container mapping", question: "Which original index and container does this mapping preserve?", component: "shape", priority: 10, module: "src/mappings/containerMappings.paneweft.ts", source: { path: "src/mappings/containerMappings.paneweft.ts", line: lineOf("src/mappings/containerMappings.paneweft.ts", "export const mappingDetails = Mapping.view(") } },
     ]);
     expect(catalogue.examples.map((e: any) => e.id)).toEqual(["mapping.dead-end.naive-split", "mapping.renamed", "mapping.work", "mapping.zero-check"]);

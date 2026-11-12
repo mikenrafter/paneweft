@@ -5,18 +5,20 @@
 // not-captured reference and a named omission, never an error and never silence.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { Charge, Ledger, emit, emitString, serializeGraph } from "./bounded.ts";
-import { Budget, DetailsBuilder, TableBuilder, canonicalJson, sha256Hex, type ViewResult } from "./builders.ts";
+import { Budget, DetailsBuilder, TableBuilder, canonicalJson, sha256Hex, type ViewResult, type StandardViewResult } from "./builders.ts";
 import { callerLine } from "./callsite.ts";
 import { applyLimitOverrides, defaultLimits } from "./limits.ts";
-import { ViewError, type Component, type DiagnosticRecord, type Json, type Limits, type ObjectRef } from "./types.ts";
+import { ViewError, type Component, type DiagnosticRecord, type Json, type Limits, type ObjectRef, type Renderer } from "./types.ts";
 import { cutString, encodeValue, newStats, type CapturedValue } from "./values.ts";
 
 /** The symbol a class implements to be inspectable without a token. */
 export const paneweftViews: unique symbol = Symbol.for("paneweft.views");
 
 export interface ViewBuilders {
+  self(): ObjectRef;
   details(): DetailsBuilder;
   table(): TableBuilder;
+  custom<Payload extends Json>(renderer: Renderer<Payload>, payload: NoInfer<Payload>, fallback: StandardViewResult, objects?: readonly ObjectRef[]): ViewResult;
   /** Publishes `value` (once per traversal) and returns a reference; beyond a bound it returns a not-captured reference, not an error. */
   reference(value: unknown, token?: TypeToken<any>, options?: { name?: string; key?: string }): ObjectRef;
   field(name: string, value: CapturedValue): void;
@@ -151,6 +153,7 @@ class ObjectContext implements ViewBuilders {
   constructor(private readonly capture: Capture, readonly index: number) {}
   /** What the view being computed has charged; set for the length of one view. */
   charge: Charge | undefined;
+  self(): ObjectRef { return { object: this.capture.objectAt(this.index).id }; }
   details(): DetailsBuilder {
     return new DetailsBuilder(this.capture.limits, new Budget(this.capture.nested, this.capture.limits.viewBudgetMs), this.chargeOfView());
   }
@@ -158,6 +161,23 @@ class ObjectContext implements ViewBuilders {
     const object = this.capture.objectAt(this.index).id;
     const view = this.currentView ?? "";
     return new TableBuilder(this.capture.limits, new Budget(this.capture.nested, this.capture.limits.viewBudgetMs), this.chargeOfView(), (page) => this.capture.pageFrame(object, view, page));
+  }
+  custom<Payload extends Json>(renderer: Renderer<Payload>, payload: NoInfer<Payload>, fallback: StandardViewResult, objects: readonly ObjectRef[] = []): ViewResult {
+    if (fallback.kind === "unsupported") return fallback;
+    if (fallback.component !== "shape" && fallback.component !== "list" || (fallback.pages?.length ?? 0) > 0) throw new ViewError("output-schema", "custom views require a standard fallback without stored pages");
+    const metadata = { id: renderer.id, apiVersion: renderer.apiVersion, payloadSchemaDigest: renderer.payloadSchemaDigest, assetDigest: renderer.assetDigest };
+    if (!/^[a-z][a-z0-9-]{0,63}$/.test(metadata.id) || !Number.isSafeInteger(metadata.apiVersion) || metadata.apiVersion < 1 || ![metadata.payloadSchemaDigest, metadata.assetDigest].every((digest) => /^[0-9a-f]{64}$/.test(digest))) throw new ViewError("output-schema", "invalid renderer identity or digest");
+    const stats = newStats();
+    const charge = this.chargeOfView();
+    const ledger = new Ledger(charge.spare(), charge.spare());
+    const bounded = encodeValue(payload as CapturedValue, this.capture.limits, stats, 0, ledger);
+    if (bounded === null || typeof bounded !== "object" || Array.isArray(bounded)) throw new ViewError("output-schema", "a custom renderer payload must be an object");
+    const data: Json = { renderer: metadata, payload: bounded, objects: objects.flatMap((ref) => "object" in ref ? [ref.object] : []), fallback: { component: fallback.component, data: fallback.data } };
+    if (!charge.take(emit(data).bytes - emit(fallback.data).bytes + emit(metadata).bytes)) return { ...fallback, omitted: { ...fallback.omitted, values: (fallback.omitted?.values ?? 0) + 1 } };
+    const omitted = { ...fallback.omitted };
+    if (stats.strings > 0) omitted.strings = (omitted.strings ?? 0) + stats.strings;
+    if (stats.values > 0) omitted.values = (omitted.values ?? 0) + stats.values;
+    return { kind: "built", component: "custom", data, omitted };
   }
   private chargeOfView(): Charge {
     if (this.charge === undefined) throw new ViewError("output-schema", "a builder can only be created while a view is being computed");
@@ -263,6 +283,7 @@ export class Capture {
   /** Charges and stores a declared field. The name is charged as the text it becomes, then the value is encoded against what is left; what
    * does not fit is cut and counted. */
   setField(index: number, name: string, value: CapturedValue): void {
+    if (Buffer.byteLength(name) > this.limits.stringBytes) { this.count("fields", 1); this.count("strings", 1); return; }
     const object = this.objectAt(index);
     const known = Object.hasOwn(object.fields, name);
     if (known) this.ledger.give(object.fieldBytes.get(name) as number);
@@ -286,7 +307,7 @@ export class Capture {
 
   setLabel(index: number, text: string): void {
     const object = this.objectAt(index);
-    const label = cutString(text, 256)[0];
+    const [label, omitted] = cutString(text, Math.min(256, this.limits.stringBytes));
     const bytes = emit(label).bytes;
     const delta = bytes - object.labelBytes;
     if (delta > 0 && !this.ledger.take(delta)) {
@@ -294,6 +315,7 @@ export class Capture {
       return;
     }
     if (delta < 0) this.ledger.give(-delta);
+    if (omitted > 0) this.count("strings", 1);
     object.label = label;
     object.labelBytes = bytes;
   }
@@ -354,8 +376,8 @@ export class Capture {
     const typeId = selection.type.id;
     // the record of the object, its entry in the root list and the edge that reaches it are charged before the object exists: no room, no object.
     // A domain key is at most 256 characters in the schema; a longer one is cut (and counted), not kept whole.
-    const [domainKey, keyCut] = key === undefined ? [null, 0] : cutString(key, 256);
-    const label = cutString(domainKey ?? typeId.split("::").pop() ?? typeId, 256)[0];
+    const [domainKey, keyCut] = key === undefined ? [null, 0] : cutString(key, Math.min(256, this.limits.stringBytes));
+    const label = cutString(domainKey ?? typeId.split("::").pop() ?? typeId, Math.min(256, this.limits.stringBytes))[0];
     const childEdge: Json | undefined = parent === undefined ? undefined : { name: parent.name, kind: "child", target: id };
     const record = emit({ id, typeId, domainKey, label, fields: {}, edges: [], views: [], contentHash: CONTENT_HASH_PLACEHOLDER }).bytes + (this.objects.length > 0 ? 1 : 0);
     const listed = parent === undefined ? emit(id).bytes + (this.rootIds.length > 0 ? 1 : 0) : 0;
@@ -453,16 +475,19 @@ export class Capture {
     const pages: Json[] = [];
     const counted: Array<[OmissionName, number]> = [];
     if (result.kind === "unsupported") {
-      const reason = cutString(result.reason, 500)[0];
+      const [reason, cut] = cutString(result.reason, Math.min(500, this.limits.stringBytes));
+      if (cut > 0) counted.push(["strings", 1]);
       record.completeness = { status: "unsupported", reason, ...(bestEffort ? { consistency: "best-effort" } : {}) };
       record.unsupportedReason = reason;
       record.pages = [];
     } else {
-      if (result.component !== definition.component) {
+      if (result.component !== definition.component && definition.component !== "custom") {
         this.ledger.give(paid);
         this.addDiagnostic("output-schema", `view ${definition.id} declares component ${JSON.stringify(definition.component)} but built a ${JSON.stringify(result.component)}`, { viewId: definition.id });
         return;
       }
+      record.component = result.component;
+      if (result.component === "custom") record.renderer = (result.data as { renderer: Json }).renderer;
       const omitted = result.omitted ?? {};
       const names = Object.keys(omitted) as Array<"rows" | "strings">;
       const completeness: Record<string, Json> = names.length === 0 ? { status: "complete" } : { status: "partial", reason: names.includes("rows") ? "row-limit" : "string-limit", omitted: Object.fromEntries(names.map((name) => [name, { known: true, count: omitted[name] as number }])) };
@@ -494,7 +519,7 @@ export class Capture {
 
   private objectJson(index: number): Json {
     const object = this.objectAt(index);
-    const label = cutString(object.label ?? object.domainKey ?? object.typeId.split("::").pop() ?? object.typeId, 256)[0];
+    const label = cutString(object.label ?? object.domainKey ?? object.typeId.split("::").pop() ?? object.typeId, Math.min(256, this.limits.stringBytes))[0];
     const hashInput = { domainKey: object.domainKey, fields: object.fields, label, typeId: object.typeId };
     return { id: object.id, typeId: object.typeId, domainKey: object.domainKey, label, fields: object.fields, edges: object.edges, views: object.views, contentHash: sha256Hex(canonicalJson(hashInput)) };
   }

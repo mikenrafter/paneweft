@@ -96,6 +96,7 @@ export class Ledger {
 export class Charge {
   bytes = 0;
   constructor(private readonly ledger: Ledger) {}
+  spare(): number { return this.ledger.spare(); }
   take(bytes: number): boolean {
     if (!this.ledger.take(bytes)) return false;
     this.bytes += bytes;

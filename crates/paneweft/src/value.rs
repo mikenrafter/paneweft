@@ -51,7 +51,13 @@ fn marker(ledger: &Ledger, stats: &mut EncodeStats, separator: u64) -> Json {
 }
 
 /// Emits `leaf` if it fits, otherwise the marker.
-fn leaf(json: Json, ledger: &Ledger, stats: &mut EncodeStats) -> Json {
+fn leaf(mut json: Json, string_limit: u64, ledger: &Ledger, stats: &mut EncodeStats) -> Json {
+    if json["$paneweft"] != "not-captured" {
+        if let Some(reason) = json.get("reason").and_then(Json::as_str) {
+            let reason = bounded_text(reason, string_limit.min(256), stats);
+            json["reason"] = Json::String(reason);
+        }
+    }
     if ledger.take(bytes_of(&json)) {
         return json;
     }
@@ -83,13 +89,18 @@ impl Value {
     /// holds at least the marker reserve on entry.
     pub(crate) fn encode_with(&self, limits: &crate::Limits, stats: &mut EncodeStats, ledger: &Ledger, depth: u32) -> Json {
         if depth > MAX_NESTING {
-            return leaf(json!({"$paneweft": "unsupported", "reason": "nesting"}), ledger, stats);
+            return leaf(json!({"$paneweft": "unsupported", "reason": "nesting"}), limits.string_bytes, ledger, stats);
         }
         match self {
-            Value::Null => leaf(Json::Null, ledger, stats),
-            Value::Bool(flag) => leaf(Json::Bool(*flag), ledger, stats),
-            Value::Int(number) => leaf(encode_int(*number), ledger, stats),
-            Value::Float(number) => leaf(encode_float(*number), ledger, stats),
+            Value::Null => leaf(Json::Null, limits.string_bytes, ledger, stats),
+            Value::Bool(flag) => leaf(Json::Bool(*flag), limits.string_bytes, ledger, stats),
+            Value::Int(number) => {
+                let encoded = encode_int(*number);
+                if encoded.get("decimal").and_then(Json::as_str).is_some_and(|s| s.len() as u64 > limits.string_bytes) {
+                    stats.strings += 1; stats.values += 1; marker(ledger, stats, 0)
+                } else { leaf(encoded, limits.string_bytes, ledger, stats) }
+            },
+            Value::Float(number) => leaf(encode_float(*number), limits.string_bytes, ledger, stats),
             Value::Str(text) => encode_str(text, limits.string_bytes, stats, ledger),
             Value::Bytes(data) => encode_bytes(data, limits.string_bytes, stats, ledger),
             Value::List(items) => {
@@ -126,6 +137,7 @@ impl Value {
                 let mut stopped = false;
                 let mut tagged = false;
                 for (key, value) in entries {
+                    if key.len() as u64 > limits.string_bytes { stats.strings += 1; break; }
                     let before = ledger.used();
                     let separator = u64::from(!pairs.is_empty());
                     // the first `$paneweft` key turns the map into a map tag, which costs more for every entry kept so far
@@ -183,31 +195,35 @@ impl Value {
                     Json::Object(map)
                 }
             }
-            Value::Absent => leaf(json!({"$paneweft": "absent"}), ledger, stats),
-            Value::Redacted(None) => leaf(json!({"$paneweft": "redacted"}), ledger, stats),
-            Value::Redacted(Some(reason)) => leaf(json!({"$paneweft": "redacted", "reason": reason}), ledger, stats),
-            Value::Unsupported(reason) => leaf(json!({"$paneweft": "unsupported", "reason": reason}), ledger, stats),
+            Value::Absent => leaf(json!({"$paneweft": "absent"}), limits.string_bytes, ledger, stats),
+            Value::Redacted(None) => leaf(json!({"$paneweft": "redacted"}), limits.string_bytes, ledger, stats),
+            Value::Redacted(Some(reason)) => leaf(json!({"$paneweft": "redacted", "reason": bounded_text(reason, limits.string_bytes.min(256), stats)}), limits.string_bytes, ledger, stats),
+            Value::Unsupported(reason) => leaf(json!({"$paneweft": "unsupported", "reason": bounded_text(reason, limits.string_bytes.min(256), stats)}), limits.string_bytes, ledger, stats),
         }
     }
 
     /// The display form used for shape examples and list cells.
     pub fn display(&self) -> String {
+        bounded_text(&self.display_prefix(16 * 1024), 16 * 1024, &mut EncodeStats::default())
+    }
+    fn display_prefix(&self, limit: u64) -> String {
         match self {
             Value::Null => "null".to_string(),
             Value::Bool(flag) => flag.to_string(),
             Value::Int(number) => number.to_string(),
             Value::Float(number) => display_float(*number),
-            Value::Str(text) => text.clone(),
+            Value::Str(text) => cut_str(text, limit).0.to_string(),
             Value::Bytes(data) => format!("<{} bytes>", data.len()),
             Value::List(_) | Value::Map(_) => {
                 // a display cell never needs more text than one string may hold, so a huge container is cut here too
-                let ledger = Ledger::new(16 * 1024, 16 * 1024, 0);
-                serde_json::to_string(&self.encode_with(&crate::Limits::default(), &mut EncodeStats::default(), &ledger, 0)).unwrap_or_default()
+                let ledger = Ledger::new(limit + 128, limit + 128, 0);
+                let limits = crate::Limits { string_bytes: limit, ..crate::Limits::default() };
+                serde_json::to_string(&self.encode_with(&limits, &mut EncodeStats::default(), &ledger, 0)).unwrap_or_default()
             }
             Value::Absent => "<absent>".to_string(),
             Value::Redacted(None) => "<redacted>".to_string(),
-            Value::Redacted(Some(reason)) => format!("<redacted: {reason}>"),
-            Value::Unsupported(reason) => format!("<unsupported: {reason}>"),
+            Value::Redacted(Some(reason)) => format!("<redacted: {}>", cut_str(reason, limit).0),
+            Value::Unsupported(reason) => format!("<unsupported: {}>", cut_str(reason, limit).0),
         }
     }
 
@@ -226,7 +242,7 @@ impl Value {
                 }
                 Json::String(kept.to_string())
             }
-            other => Json::String(other.display()),
+            other => Json::String(bounded_text(&other.display_prefix(limits.string_bytes), limits.string_bytes, stats)),
         }
     }
 
@@ -339,7 +355,7 @@ fn encode_bytes(data: &[u8], limit: u64, stats: &mut EncodeStats, ledger: &Ledge
         }
         tag
     };
-    let mut count = data.len().min(limit as usize);
+    let mut count = data.len().min((3 * (limit / 4)) as usize);
     if bytes_of(&tag(count)) > ledger.spare() {
         // base64 takes 4 bytes per 3 and nothing in it is escaped, so the room gives the count; the size of the text confirms it
         count = count.min(3 * (ledger.spare().saturating_sub(bytes_of(&tag(0))) / 4) as usize);
@@ -347,7 +363,8 @@ fn encode_bytes(data: &[u8], limit: u64, stats: &mut EncodeStats, ledger: &Ledge
             count = count.saturating_sub(3);
         }
     }
-    leaf(tag(count), ledger, stats)
+    if count < data.len() { stats.strings += 1; }
+    leaf(tag(count), limit, ledger, stats)
 }
 
 /// Standard base64 with padding (RFC 4648), written out to keep the SDK free of an encoding dependency.
@@ -377,6 +394,13 @@ impl From<&str> for Value { fn from(v: &str) -> Value { Value::Str(v.to_string()
 impl From<String> for Value { fn from(v: String) -> Value { Value::Str(v) } }
 impl<T: Into<Value>> From<Option<T>> for Value {
     fn from(v: Option<T>) -> Value { match v { Some(inner) => inner.into(), None => Value::Null } }
+}
+
+// CLAIM(S25): scalar display and reason tags share the same pre-serialization cut [tests/emission.rs].
+fn bounded_text(text: &str, limit: u64, stats: &mut EncodeStats) -> String {
+    let (kept, omitted) = cut_str(text, limit);
+    if omitted > 0 { stats.strings += 1; }
+    kept.to_string()
 }
 
 #[cfg(test)]

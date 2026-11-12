@@ -251,3 +251,24 @@ describe("[D1] the host measures the document it was given", () => {
     expect(error.errors.map((e) => [e.code, e.pointer])).toContainEqual(["LIMIT_EXCEEDED", `/limits/${name}`]);
   });
 });
+
+// WHY CLAIM(S26): adversarial captures must not raise or evade resolved job bounds. Rejects sizeIssues using self-declared limits only.
+describe("[S26] admission enforces resolved limits", () => {
+  it("refuses every generated capture exceeding a resolved bound", async () => {
+    const fc = await import("fast-check");
+    fc.assert(fc.property(fc.integer({ min: 1, max: 100 }), fc.constantFrom("strings", "rows", "pages", "roots", "depth", "bytes", "declared"), (extra, kind) => {
+      const graph = fixture();
+      const effective = { ...graph.limits };
+      if (kind === "strings") { effective.stringBytes = 2; graph.objects[0].label = "x".repeat(extra + 2); graph.objects[0].contentHash = objectContentHash(graph.objects[0]); }
+      if (kind === "rows") effective.viewRows = 1;
+      if (kind === "pages") effective.pageRows = 1;
+      if (kind === "roots") graph.roots = [];
+      if (kind === "depth") effective.depth = 0;
+      if (kind === "bytes") effective.rootBytes = 1;
+      if (kind === "declared") graph.limits.collectionBytes = 1_000_000_000;
+      if (kind !== "declared") graph.limits = { ...effective };
+      const result = validateObjectGraph(graph, { expectedRunId: "run-1", effective });
+      expect(result.ok, `${kind}, extra=${extra}`).toBe(false);
+    }), { seed: 26027, numRuns: 100 });
+  });
+});

@@ -134,3 +134,28 @@ describe("[IV20] atomic import", () => {
     expect(must(await openV1Reader(session).runs(), "runs")).toEqual([]);
   });
 });
+
+// WHY CLAIM(S27): import used to canonicalize before rejecting large/deep captures, overflowing the stack.
+it("[S27] refuses excessive nesting before recursive canonicalization", async () => {
+  const { session } = await open();
+  const input = collectionImport("vigil-redelivered");
+  let value: unknown = 0;
+  for (let n = 0; n < 20000; n += 1) value = [value];
+  (input.graphs[0] as any).objects[0].fields.deep = value;
+  const result = await importCollection(session, input);
+  expect(result.ok).toBe(false);
+  if (!result.ok) expect(result.error.errors.some((e) => e.code === "LIMIT_EXCEEDED")).toBe(true);
+});
+
+// WHY CLAIM(S27): multiple individually bounded graphs cannot consume an unbounded aggregate import budget.
+it("[S27] refuses aggregate graph bytes without relying on caller byte counts", async () => {
+  const { session } = await open();
+  const input = collectionImport("vigil-redelivered");
+  const graph = input.graphs[0] as any;
+  const cap = Buffer.byteLength(JSON.stringify(graph)) + 100;
+  graph.limits.collectionBytes = cap;
+  input.graphs.push({ ...structuredClone(graph), captureId: "another-capture" });
+  const result = await importCollection(session, { ...input, effective: { collectionBytes: cap } });
+  expect(result.ok).toBe(false);
+  if (!result.ok) expect(result.error.message).toContain("aggregate captures");
+});

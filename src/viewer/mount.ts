@@ -150,13 +150,13 @@ export async function mountViewer(container: HTMLElement, options: MountOptions)
     win.history.pushState({ paneweft: state }, "");
   }
   async function prepare(action: InspectorAction): Promise<{ code: string; message: string } | null> {
-    if (action.type === "open") {
+    if (action.type === "open" || action.type === "openFromPane") {
       await ensureEntity(action.entity, action.snapshotId);
       const ranked = rankings.get(keyOfEntity(action.entity, action.snapshotId));
       const found = entities.get(keyOfEntity(action.entity, action.snapshotId));
       if (found !== undefined && !found.ok) return { code: found.error.code, message: found.error.message };
       if (ranked !== undefined && !ranked.ok) return { code: ranked.error.code, message: ranked.error.message };
-      if (action.viewDefinitionId !== undefined) await ensureView(action.entity, action.snapshotId, action.viewDefinitionId);
+      if (action.type === "open" && action.viewDefinitionId !== undefined) await ensureView(action.entity, action.snapshotId, action.viewDefinitionId);
     } else if (action.type === "select") {
       const pane = state.trail[action.paneIndex];
       if (pane !== undefined) {
@@ -291,11 +291,10 @@ export async function mountViewer(container: HTMLElement, options: MountOptions)
         const custom = view.custom;
         panelChildren.push(renderRendererHost({
           doc, custom, viewId: view.envelope.id, snapshotId: pane.snapshotId, locale, fallback: [renderComponent(context)].flatMap((node) => (node === null ? [] : [node])),
-          // the frame can only ask to open an object its view permits; opening is the existing item selection of the fallback
+          // CLAIM(S36): a permitted object opens directly, bound to this snapshot, independent of fallback rows [custom-navigation.dom.test.ts].
           openObject: (objectId) => {
             const target = custom.frame?.objects[objectId];
-            const item = target === undefined ? undefined : viewItems(view.envelope).find((candidate) => { const ref = entityRefOf(candidate); return ref !== undefined && ref.id === target.id && ref.kind === target.kind; });
-            if (item !== undefined) void enqueue(() => dispatch({ type: "select", paneIndex: index, itemId: item.id }));
+            if (target !== undefined) void enqueue(() => dispatch({ type: "openFromPane", paneIndex: index, entity: target, snapshotId: pane.snapshotId }));
           },
         }));
       } else panelChildren.push(renderComponent(context));

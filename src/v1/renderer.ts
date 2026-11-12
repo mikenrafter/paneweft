@@ -30,9 +30,10 @@ const sha256 = (data: string | Buffer): string => createHash("sha256").update(da
 const SAFE_NAME = /^[a-z][a-z0-9-]{0,63}$/;
 
 /** sha256 over the allowlisted files of `<root>/<dir>`, in a fixed order with their names. Never runs npm lifecycle scripts. */
-export async function digestRenderer(root: string, dir: string): Promise<Result<{ digest: string; files: string[] }>> {
+export async function digestRenderer(root: string, dir: string): Promise<Result<{ digest: string; files: string[]; buffers: Record<string, Buffer> }>> {
   if (!SAFE_NAME.test(dir)) return err("INVALID_PATH", `"${dir}" is not a renderer directory name (lowercase letters, digits and dashes)`);
   const lines: string[] = [];
+  const buffers: Record<string, Buffer> = Object.create(null);
   for (const file of RENDERER_FILES) {
     let bytes: Buffer;
     try {
@@ -40,9 +41,10 @@ export async function digestRenderer(root: string, dir: string): Promise<Result<
     } catch {
       return err("NOT_FOUND", `the renderer "${dir}" has no ${file}; a renderer is exactly ${RENDERER_FILES.join(", ")}`);
     }
+    buffers[file] = bytes;
     lines.push(`${file}\0${sha256(bytes)}\n`);
   }
-  return ok({ digest: sha256(lines.join("")), files: [...RENDERER_FILES] });
+  return ok({ digest: sha256(lines.join("")), files: [...RENDERER_FILES], buffers });
 }
 
 export interface TrustEntry {

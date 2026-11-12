@@ -16,7 +16,7 @@ export interface Limits {
 
 export type ObjectRef = { object: string } | { notCaptured: { reason: string } };
 export type Bounded = { accepted: true } | { accepted: false; omittedSoFar: number };
-export type Component = "shape" | "list";
+export type Component = "shape" | "list" | "custom";
 export type Direction = "asc" | "desc";
 
 /** Diagnostics are data: a programming error or schema violation is never a successful empty view. */
@@ -35,4 +35,16 @@ export class ViewError extends Error {
     super(message);
     this.name = "ViewError";
   }
+}
+
+/** The payload type is checked at every custom() call. Digests bind the renderer and its payload schema. */
+export interface Renderer<Payload extends Json> {
+  readonly id: string;
+  readonly apiVersion: number;
+  readonly payloadSchemaDigest: string;
+  readonly assetDigest: string;
+  readonly payloadType?: (payload: Payload) => Payload;
+}
+export function defineRenderer<Payload extends Json>(renderer: Omit<Renderer<Payload>, "payloadType">): Renderer<Payload> {
+  return renderer;
 }

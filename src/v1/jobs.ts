@@ -1,9 +1,12 @@
+import { mkdirDurably as mkdir, writeDurably, syncDirectory } from "./durable.ts";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
 // Collection jobs: two-phase submission, durable lifecycle, recovery and cancellation through qex (S2, S3, N1, N2; IV17).
 // Job id == request id. Layout under the session: jobs/<id>/{intent.json, qex.id, state.json, staging/<runId>/, quarantine/, .write.lock}.
 //
 // qex is the supervisor that outlives MCP clients: a job record is the only memory this service needs, so a later instance (another
 // MCP session, another process) can status, finish or cancel a job from the files alone.
-import { mkdir, open, readFile, readdir, rename, rm, unlink, writeFile } from "node:fs/promises";
+import { readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join, normalize } from "node:path";
 import { canonicalJson } from "../core/canonical.ts";
 import { WriteLockError, withWriteLock } from "../core/write-lock.ts";
@@ -15,12 +18,13 @@ import type { Inventory } from "../generated/v1/Inventory.ts";
 import { validateAgainstV1 } from "./schemas.ts";
 import type { TestRun } from "../generated/v1/TestRun.ts";
 import { buildProcess, foldExactFilters, parseCargoLists, reconcile, selectExamples, type AdapterRecord, type ProcessSpec, type Selection } from "./adapters.ts";
+import { StagingBudget } from "./bounded-read.ts";
 import { validateObjectGraph } from "./capture.ts";
 import { checkInventory, mergeCatalogue, type CataloguePart, type InventoryProblem } from "./catalogue.ts";
 import { qualifyDiagnosticId } from "./diagnostic-id.ts";
 import { compareFingerprints, computeFingerprint, sampleConsistency, type Fingerprint } from "./fingerprint.ts";
 import { importCollection } from "./import.ts";
-import { resolveRequestedLimits, type LimitsReport } from "./limits.ts";
+import { SDK_LIMITS, resolveRequestedLimits, type LimitsReport } from "./limits.ts";
 import { QEX_TERMINAL_STATES, type QexClient, type QexJob } from "./qex.ts";
 import { snapshotOfRun } from "./read.ts";
 
@@ -88,9 +92,14 @@ export interface JobService {
   cancel(jobId: string): Promise<Result<CancelResult>>;
 }
 
+/** CLAIM(S38): independent sessions never share a qex dedupe identity; the intent persists it for recovery [jobs.test.ts]. */
+export function jobDedupeKey(sessionId: string, requestId: string): string {
+  return `paneweft:${sessionId}:${requestId}`;
+}
+
 /** The exact `qex submit` argument vector (no shell). Pure. */
-export function buildQexSubmitArgv(adapter: AdapterRecord, requestId: string, process: ProcessSpec, jobDirectory: string, timeoutMs: number): string[] {
-  const argv = ["submit", "--dedupe-key", `paneweft:${requestId}`, "--dedupe-window", "24h", "--id-file", join(jobDirectory, "qex.id"), "--cwd", process.cwd, "--name", `paneweft-${requestId}`, "--cpu", adapter.queue.cpu, "--mem", adapter.queue.mem];
+export function buildQexSubmitArgv(adapter: AdapterRecord, requestId: string, process: ProcessSpec, jobDirectory: string, timeoutMs: number, dedupeKey: string): string[] {
+  const argv = ["submit", "--dedupe-key", dedupeKey, "--dedupe-window", "24h", "--id-file", join(jobDirectory, "qex.id"), "--cwd", process.cwd, "--name", `paneweft-${requestId}`, "--cpu", adapter.queue.cpu, "--mem", adapter.queue.mem];
   for (const tag of adapter.queue.tags ?? []) argv.push("--tag", tag);
   argv.push("--timeout", `${Math.max(1, Math.ceil(timeoutMs / 1000))}s`);
   for (const key of Object.keys(process.env).sort()) argv.push("--env", `${key}=${process.env[key]}`);
@@ -100,18 +109,6 @@ export function buildQexSubmitArgv(adapter: AdapterRecord, requestId: string, pr
 
 // ---- files -------------------------------------------------------------------------------------------------------------------------
 
-async function writeDurably(path: string, text: string): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  const temporary = `${path}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
-  const handle = await open(temporary, "w");
-  try {
-    await handle.writeFile(text);
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  await rename(temporary, path);
-}
 
 async function readJson<T>(path: string): Promise<T | undefined> {
   try {
@@ -123,6 +120,7 @@ async function readJson<T>(path: string): Promise<T | undefined> {
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+const localLeases = new Set<string>();
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 interface Params { repo: string; adapter: string; examples: string[]; views?: string[]; limits?: Record<string, number>; mode?: "run" | "catalogue" }
@@ -140,6 +138,7 @@ interface State {
   state: JobStateName;
   qexId: string | null;
   runId: string | null;
+  observedStop?: QexJob;
   history: Array<{ state: string; at: string; evidence?: string }>;
   indeterminate?: { evidence: string[] };
   terminal?: { collectionStatus: NonNullable<JobView["collectionStatus"]>; snapshotIds: string[]; diagnosticIds: string[]; counts?: Record<string, number> };
@@ -150,15 +149,6 @@ function normalizeParams(request: { repo: string; adapter: string; examples: str
   const sorted = (list: string[]): string[] => [...new Set(list)].sort();
   return { repo: request.repo, adapter: request.adapter, examples: sorted(request.examples), ...(request.views === undefined || request.views.length === 0 ? {} : { views: sorted(request.views) }), ...(request.limits === undefined || Object.keys(request.limits).length === 0 ? {} : { limits: request.limits }), ...(mode === "catalogue" ? { mode } : {}) };
 }
-
-const alive = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (cause) {
-    return (cause as NodeJS.ErrnoException).code === "EPERM";
-  }
-};
 
 /** Where a failed example lives: the panic location in the log ("panicked at tests/seeded.rs:12:5") when the log has one, else the declaration. */
 function panicLocation(log: string, declared: { source: { path: string; line: number } } | undefined): { path: string; line: number } | undefined {
@@ -243,6 +233,19 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
 
   const adapterFor = (params: Params): AdapterRecord | undefined => deps.adapters.find((candidate) => candidate.id === params.adapter && candidate.repo === params.repo);
 
+  async function sessionNamespace(): Promise<string> {
+    const file = join(deps.sessionDir, "collection-session.json");
+    const existing = await readJson<{ id: string }>(file);
+    if (existing !== undefined) return existing.id;
+    return withWriteLock(deps.sessionDir, { waitMs: 15_000 }, async () => {
+      const raced = await readJson<{ id: string }>(file);
+      if (raced !== undefined) return raced.id;
+      const id = randomUUID();
+      await writeDurably(file, JSON.stringify({ id }));
+      return id;
+    });
+  }
+
   // ---- phase 1: the intent (one creator at a time, published whole) ----------------------------------------------------------------
 
   /** The intent is created under the job directory's write lock (a kernel flock: the lock of a dead process is gone with it, so a live
@@ -257,7 +260,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
           if (canonicalJson(existing.params) !== canonicalJson(params)) return err("CONFLICT", `the request id "${id}" already names a collection with different parameters; use a new request id for a deliberate rerun`, { details: { requestId: id } });
           return ok({ intent: existing, created: false });
         }
-        const intent: Intent = { schemaVersion: "paneweft.job-intent/1", requestId: id, dedupeKey: `paneweft:${id}`, params, createdAt: now(), ...(resolved === undefined ? {} : { resolved }) };
+        const intent: Intent = { schemaVersion: "paneweft.job-intent/1", requestId: id, dedupeKey: jobDedupeKey(await sessionNamespace(), id), params, createdAt: now(), ...(resolved === undefined ? {} : { resolved }) };
         await writeDurably(join(jobDir(id), "intent.json"), JSON.stringify(intent));
         return ok({ intent, created: true });
       });
@@ -337,7 +340,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
         const adapter = adapterFor(intent.params);
         if (resolved === undefined || adapter === undefined) return err("INTERNAL", `job "${id}" has no resolved process to submit`);
         await takeBeforeSample(id, adapter);
-        const submitted = await deps.qex.submit(buildQexSubmitArgv(adapter, id, resolved.process, jobDir(id), resolved.timeoutMs));
+        const submitted = await deps.qex.submit(buildQexSubmitArgv(adapter, id, resolved.process, jobDir(id), resolved.timeoutMs, intent.dedupeKey));
         if (!submitted.ok) return submitted;
         qexId = submitted.value.id;
         how = "qex submit";
@@ -353,58 +356,35 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
 
   // ---- finishing: reconcile, import, terminal state ------------------------------------------------------------------------------
 
-  /** Ids whose lease THIS service instance holds (re-entrant: the waiter that holds it also performs the import). */
-  const held = new Set<string>();
-
-  /** Creates the lease file unless a LIVE other process holds it; a lease of a dead process is stolen. */
-  async function takeLease(id: string): Promise<boolean> {
-    const path = join(jobDir(id), "import.lease");
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      try {
-        const handle = await open(path, "wx");
-        await handle.writeFile(JSON.stringify({ pid: process.pid, at: now() }));
-        await handle.close();
-        return true;
-      } catch (cause) {
-        if ((cause as NodeJS.ErrnoException).code !== "EEXIST") throw cause;
-      }
-      const holder = await readJson<{ pid: number }>(path);
-      if (holder !== undefined && typeof holder.pid === "number" && alive(holder.pid)) return false;
-      if (holder === undefined) {
-        // created but not yet written by its owner: give it a moment rather than stealing a lease that is being taken
-        await sleep(10);
-        if ((await readJson<{ pid: number }>(path)) === undefined && attempt === 2) await unlink(path).catch(() => undefined);
-        continue;
-      }
-      await unlink(path).catch(() => undefined);
-    }
-    return false;
-  }
-
-  async function leaseIsLive(id: string): Promise<boolean> {
-    const holder = await readJson<{ pid: number }>(join(jobDir(id), "import.lease"));
-    return holder !== undefined && typeof holder.pid === "number" && alive(holder.pid);
-  }
-
-  /** Runs `body` as the follower of the job: the lease is held for the whole body, so no other instance advances or imports meanwhile. */
+  // CLAIM(S31): only this async operation may reenter; unrelated calls, including those on the same service, must acquire kernel flock.
+  // The lock inode is permanent. No PID files or stale removers can unlink a successor [jobs.test.ts].
+  const leaseOwners = new AsyncLocalStorage<ReadonlySet<string>>();
+  const held = { has: (id: string): boolean => leaseOwners.getStore()?.has(id) === true };
   async function withLease<T>(id: string, body: () => Promise<T>): Promise<{ held: true; value: T } | { held: false }> {
     if (held.has(id)) return { held: true, value: await body() };
-    if (!(await takeLease(id))) return { held: false };
-    held.add(id);
+    const directory = join(jobDir(id), "import-lock");
+    if (localLeases.has(directory)) return { held: false };
+    localLeases.add(directory);
     try {
-      return { held: true, value: await body() };
-    } finally {
-      held.delete(id);
-      await unlink(join(jobDir(id), "import.lease")).catch(() => undefined);
-    }
+      await mkdir(directory, { recursive: true });
+      return await withWriteLock(directory, { waitMs: 1 }, () => leaseOwners.run(new Set([...(leaseOwners.getStore() ?? []), id]), async () => ({ held: true as const, value: await body() })));
+    } catch (cause) {
+      if (cause instanceof WriteLockError && cause.kind === "contended") return { held: false };
+      throw cause;
+    } finally { localLeases.delete(directory); }
+  }
+  async function leaseIsLive(id: string): Promise<boolean> {
+    return !(await withLease(id, async () => undefined)).held;
   }
 
-  async function readStaging(stagingDir: string): Promise<{ invocations: Array<{ started: Record<string, unknown> | null; completed: Record<string, unknown> | null }>; captures: Map<string, { document: unknown; file: string; bytes: number }>; reporter: unknown; typecheck: { exitCode: number; output: string } | undefined; parts: Array<{ name: string; document: Record<string, unknown> }> }> {
+  async function readStaging(stagingDir: string, collectionBytes = SDK_LIMITS.collectionBytes): Promise<{ invocations: Array<{ started: Record<string, unknown> | null; completed: Record<string, unknown> | null }>; captures: Map<string, { document: unknown; file: string; bytes: number }>; reporter: unknown; typecheck: { exitCode: number; output: string } | undefined; parts: Array<{ name: string; document: Record<string, unknown> }> }> {
+    const budget = new StagingBudget(collectionBytes);
+    const readArtifact = async <T>(path: string): Promise<T | undefined> => budget.json<T>(path).catch(() => undefined);
     const list = async (sub: string): Promise<string[]> => (await readdir(join(stagingDir, sub)).catch(() => [])).sort();
     const started = new Map<string, Record<string, unknown>>();
     const completed = new Map<string, Record<string, unknown>>();
     for (const name of await list("invocations")) {
-      const document = await readJson<Record<string, unknown>>(join(stagingDir, "invocations", name));
+      const document = await readArtifact<Record<string, unknown>>(join(stagingDir, "invocations", name));
       if (document === undefined || typeof document.id !== "string") continue;
       if (name.endsWith(".started.json")) started.set(document.id, document);
       else completed.set(document.id, document);
@@ -416,16 +396,23 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     const captures = new Map<string, { document: unknown; file: string; bytes: number }>();
     for (const name of await list("captures")) {
       // the size of a capture is the size of the file the worker wrote, which is the text its SDK counted
-      const text = await readFile(join(stagingDir, "captures", name), "utf8").catch(() => undefined);
-      const document = text === undefined ? undefined : (() => { try { return JSON.parse(text) as unknown; } catch { return undefined; } })();
-      if (text !== undefined && document !== undefined) captures.set(name.replace(/\.json$/, ""), { document, file: join(stagingDir, "captures", name), bytes: Buffer.byteLength(text, "utf8") });
+      const file = join(stagingDir, "captures", name);
+      let bytes = 0;
+      let document: unknown;
+      try {
+        // The bounded reader checks the opened file and refuses growth; no full read or parse can precede its cap.
+        const read = await budget.jsonWithBytes<unknown>(file);
+        document = read.document;
+        bytes = read.bytes;
+      } catch { bytes = collectionBytes + 1; }
+      captures.set(name.replace(/\.json$/, ""), { document, file, bytes });
     }
     const parts: Array<{ name: string; document: Record<string, unknown> }> = [];
     for (const name of await list("catalogue")) {
-      const document = await readJson<Record<string, unknown>>(join(stagingDir, "catalogue", name));
+      const document = await readArtifact<Record<string, unknown>>(join(stagingDir, "catalogue", name));
       if (document !== undefined) parts.push({ name: name.replace(/\.json$/, ""), document });
     }
-    return { invocations: ids.map((id) => ({ started: started.get(id) ?? null, completed: completed.get(id) ?? null })), captures, reporter: await readJson<unknown>(join(stagingDir, "reporter.json")), typecheck: await readJson<{ exitCode: number; output: string }>(join(stagingDir, "typecheck.json")), parts };
+    return { invocations: ids.map((id) => ({ started: started.get(id) ?? null, completed: completed.get(id) ?? null })), captures, reporter: await readArtifact<unknown>(join(stagingDir, "reporter.json")), typecheck: await readArtifact<{ exitCode: number; output: string }>(join(stagingDir, "typecheck.json")), parts };
   }
 
   function compileDiagnostics(log: string, typecheck: { output: string } | undefined, kind: "cargo" | "vitest"): Diagnostic[] {
@@ -462,7 +449,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
 
   async function finalizeCatalogue(id: string, intent: Intent, adapter: AdapterRecord, qexJob: QexJob, log: string): Promise<{ status: NonNullable<JobView["collectionStatus"]>; snapshotIds: string[]; diagnostics: Diagnostic[] }> {
     const resolved = intent.resolved as NonNullable<Intent["resolved"]>;
-    const staging = await readStaging(resolved.stagingDir);
+    const staging = await readStaging(resolved.stagingDir, resolved.limits?.effective.collectionBytes);
     const diagnostics: Diagnostic[] = [];
     const name = await packageName(adapter);
     const parts: CataloguePart[] = [];
@@ -522,18 +509,21 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     const finalizedPath = join(jobDir(id), "finalized.json");
     let finalized = await readJson<{ run: TestRun; graphs: unknown[]; graphBytes?: number[]; diagnostics: Diagnostic[] }>(finalizedPath);
     if (finalized === undefined) {
-      const staging = await readStaging(resolved.stagingDir);
+      const staging = await readStaging(resolved.stagingDir, resolved.limits?.effective.collectionBytes);
       const diagnostics: Diagnostic[] = [];
       const quarantine = async (name: string, from: string, why: Diagnostic): Promise<void> => {
         await mkdir(join(jobDir(id), "quarantine", "captures"), { recursive: true });
-        await rename(from, join(jobDir(id), "quarantine", "captures", `${name}.json`)).catch(() => undefined);
+        const destination = join(jobDir(id), "quarantine", "captures", `${name}.json`);
+        await rename(from, destination);
+        await syncDirectory(dirname(from));
+        await syncDirectory(dirname(destination));
         diagnostics.push(why);
       };
       const graphs: unknown[] = [];
       const graphBytes: number[] = [];
       const rejected = new Map<string, string>();
       for (const [captureId, { document, file, bytes }] of staging.captures) {
-        const checked = validateObjectGraph(document, { expectedRunId: runId, byteLength: bytes, ...(adapter.limitCeilings === undefined ? {} : { ceilings: adapter.limitCeilings }) });
+        const checked = validateObjectGraph(document, { expectedRunId: runId, byteLength: bytes, ...(resolved.limits === undefined ? {} : { effective: resolved.limits.effective }), ...(adapter.limitCeilings === undefined ? {} : { ceilings: adapter.limitCeilings }) });
         if (checked.ok) {
           graphs.push(document);
           graphBytes.push(bytes);
@@ -588,7 +578,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
       finalized = { run, graphs, graphBytes, diagnostics };
       await writeDurably(finalizedPath, JSON.stringify(finalized));
     }
-    const imported = await importCollection(deps.session, { repo: adapter.repo, runId, jobId: id, origin: "host_collected", run: finalized.run, graphs: finalized.graphs, ...(finalized.graphBytes === undefined ? {} : { graphBytes: finalized.graphBytes }), ...(adapter.limitCeilings === undefined ? {} : { ceilings: adapter.limitCeilings }) }, { crashAt: (point) => crash(`import:${point}` as CrashPoint) });
+    const imported = await importCollection(deps.session, { repo: adapter.repo, runId, jobId: id, origin: "host_collected", run: finalized.run, graphs: finalized.graphs, ...(resolved.limits === undefined ? {} : { effective: resolved.limits.effective }), ...(finalized.graphBytes === undefined ? {} : { graphBytes: finalized.graphBytes }), ...(adapter.limitCeilings === undefined ? {} : { ceilings: adapter.limitCeilings }) }, { crashAt: (point) => crash(`import:${point}` as CrashPoint) });
     if (!imported.ok) throw new Error(`import of ${runId} failed: ${imported.error.message}`);
     await crash("import:before-terminal-state");
     const counts = finalized.run.collection.counts as unknown as Record<string, number>;
@@ -600,8 +590,10 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     const cancelRequested = (await readJson<{ requested?: boolean }>(join(jobDir(id), "cancel.json")))?.requested === true;
     const neverRan = qexJob.state === "cancelled" || qexJob.state === "skipped";
     const leased = await withLease(id, async () => {
+      const terminal = await readState(id);
+      if (terminal !== undefined && TERMINAL_JOB_STATES.includes(terminal.state)) return;
       // the lease first: whoever sees `importing` on disk can also see who holds it, so a second instance never imports concurrently
-      await writeState(id, { state: "importing" }, `qex job ${qexJob.id} is ${qexJob.state}`);
+      await writeState(id, { state: "importing", observedStop: qexJob }, `qex job ${qexJob.id} is ${qexJob.state}`);
       let log = await readFile(join(jobDir(id), "job.log"), "utf8").catch(() => undefined);
       if (log === undefined) {
         const fetched = neverRan ? ok("") : await deps.qex.logs(qexJob.id);
@@ -622,23 +614,21 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
   }
 
   /** One step of the lifecycle: recover, observe qex, import when it stopped. Idempotent; safe to call from any instance. */
-  async function advance(id: string, known?: QexJob): Promise<Result<{ intent: Intent; state: State | undefined }>> {
+  async function advanceOwned(id: string, known?: QexJob): Promise<Result<{ intent: Intent; state: State | undefined }>> {
     const intent = await readIntent(id);
     if (intent === undefined) return err("NOT_FOUND", `no collection job "${id}" in this session`);
     const adapter = adapterFor(intent.params);
     let state = await readState(id);
     if (state !== undefined && TERMINAL_JOB_STATES.includes(state.state)) return ok({ intent, state });
-    if (!held.has(id) && (await leaseIsLive(id))) return ok({ intent, state }); // another live instance follows this job: observe, do not interfere
     if (adapter === undefined) return err("NOT_FOUND", `the adapter "${intent.params.adapter}" of job "${id}" is not registered any more`, { errors: [{ code: "CONSTRAINT", pointer: "/adapter", constraint: "a registered adapter", hint: "Register it again with: paneweft adapter add (owner action)" }] });
     const submitted = await ensureSubmitted(id, intent);
     if (!submitted.ok) return submitted;
     state = submitted.value;
-    if (state.state === "indeterminate" || state.qexId === null) return ok({ intent, state });
+    if (state.qexId === null) return ok({ intent, state });
     const queried = known !== undefined && known.id === state.qexId ? ok(known) : await deps.qex.status(state.qexId);
     if (!queried.ok) {
-      if (state.state === "importing") {
-        const stopped: QexJob = { id: state.qexId, state: "failed", exit_code: null, signal: null, dedupe_key: intent.dedupeKey };
-        await finish(id, intent, adapter, stopped);
+      if (state.observedStop !== undefined) {
+        await finish(id, intent, adapter, state.observedStop);
         return ok({ intent, state: await readState(id) });
       }
       return ok({ intent, state: await writeState(id, { state: "indeterminate", indeterminate: { evidence: [`qex status ${state.qexId} failed: ${queried.error.message}`] } }) });
@@ -651,6 +641,13 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     const mapped: JobStateName = job.state === "queued" ? "queued" : "running";
     if (state.state !== mapped) state = await writeState(id, { state: mapped, indeterminate: undefined }, `qex job ${job.id} is ${job.state}`);
     return ok({ intent, state });
+  }
+
+  async function advance(id: string, known?: QexJob): Promise<Result<{ intent: Intent; state: State | undefined }>> {
+    const lease = await withLease(id, () => advanceOwned(id, known));
+    if (lease.held) return lease.value;
+    const intent = await readIntent(id);
+    return intent === undefined ? err("NOT_FOUND", `no collection job "${id}" in this session`) : ok({ intent, state: await readState(id) });
   }
 
   // ---- requests -------------------------------------------------------------------------------------------------------------------
@@ -716,19 +713,8 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
       let stopped: QexJob | undefined;
       // A status that waits FOLLOWS the job: it holds the lease for the whole wait, is woken by qex the moment the job stops, and performs
       // the import itself. Other instances that look meanwhile observe the persisted state and never race it.
-      const following = wait > 0 && !held.has(id) && (await readIntent(id)) !== undefined && (await takeLease(id));
-      if (following) held.add(id);
-      try {
+      const followed = await withLease(id, async () => {
       for (;;) {
-        if (wait > 0 && !held.has(id) && (await leaseIsLive(id))) {
-          // somebody else follows this job: read what they persist
-          const intent = await readIntent(id);
-          const state = await readState(id);
-          if (intent === undefined) return err("NOT_FOUND", `no collection job "${id}" in this session`);
-          if ((state !== undefined && TERMINAL_JOB_STATES.includes(state.state)) || Date.now() >= deadline) return ok(view(id, intent, state, false));
-          await sleep(100);
-          continue;
-        }
         const advanced = await advance(id, stopped);
         stopped = undefined;
         if (!advanced.ok) return advanced;
@@ -758,12 +744,10 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
         }
         await sleep(100);
       }
-      } finally {
-        if (following) {
-          held.delete(id);
-          await unlink(join(jobDir(id), "import.lease")).catch(() => undefined);
-        }
-      }
+      });
+      if (followed.held) return followed.value;
+      const intent = await readIntent(id);
+      return intent === undefined ? err("NOT_FOUND", `no collection job "${id}" in this session`) : ok(view(id, intent, await readState(id), false));
     },
 
     async cancel(id) {
@@ -772,10 +756,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
       if (intent === undefined) return err("NOT_FOUND", `no collection job "${id}" in this session`);
       let state = await readState(id);
       if (state !== undefined && TERMINAL_JOB_STATES.includes(state.state)) return ok({ outcome: "already-terminal", state: state.state, qexActions: [], ...(state.terminal === undefined ? {} : { collectionStatus: state.terminal.collectionStatus }) });
-      if (state?.state === "importing") {
-        const lease = await readJson<{ pid: number }>(join(jobDir(id), "import.lease"));
-        if (lease !== undefined && alive(lease.pid)) return ok({ outcome: "cancel-too-late", state: "importing", qexActions: [] });
-      }
+      if (state?.state === "importing" && await leaseIsLive(id)) return ok({ outcome: "cancel-too-late", state: "importing", qexActions: [] });
       const adapter = adapterFor(intent.params);
       if (adapter === undefined) return err("NOT_FOUND", `the adapter of job "${id}" is not registered any more`);
       const submitted = await ensureSubmitted(id, intent);

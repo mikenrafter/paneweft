@@ -29,6 +29,7 @@ export interface InspectorState extends InspectorFrame { past: InspectorFrame[] 
 
 export type InspectorAction =
   | { type: "open"; entity: EntityRef; snapshotId: string; viewDefinitionId?: string }
+  | { type: "openFromPane"; paneIndex: number; entity: EntityRef; snapshotId: string }
   | { type: "select"; paneIndex: number; itemId: string }
   | { type: "switchView"; paneIndex: number; viewDefinitionId: string }
   | { type: "pin"; paneIndex: number }
@@ -76,6 +77,14 @@ export function reduceInspector(state: InspectorState, action: InspectorAction, 
         : world.initialView(action.entity, action.snapshotId);
       if (view === undefined) return refuse(state, "UNKNOWN_VIEW", `no view applies to entity ${action.entity.id} in snapshot ${action.snapshotId}`);
       return commit(state, { trail: [freshPane(action.entity, action.snapshotId, view)], retained: keepPinned(state.retained, state.trail) });
+    }
+    case "openFromPane": {
+      const pane = state.trail[action.paneIndex];
+      if (pane === undefined || pane.snapshotId !== action.snapshotId) return refuse(state, "NO_SUCH_PANE", "the source pane no longer holds the renderer's bound snapshot");
+      const view = world.initialView(action.entity, action.snapshotId);
+      if (view === undefined) return refuse(state, "UNKNOWN_VIEW", `no view applies to entity ${action.entity.id}`);
+      const kept = state.trail.slice(0, action.paneIndex + 1);
+      return commit(state, { trail: [...kept, freshPane(action.entity, action.snapshotId, view)], retained: keepPinned(state.retained, state.trail.slice(action.paneIndex + 1)) });
     }
     case "select": {
       const pane = state.trail[action.paneIndex];

@@ -1,3 +1,4 @@
+import { mkdirDurably as mkdir, writeDurably } from "./durable.ts";
 // Atomic, idempotent import of one collection into a session (spec section 8; amendment S3; IV20).
 //
 // Order: validate EVERYTHING (run, graphs, cross references) outside any lock; then, under the v1 import lock, the conflict check, the v0
@@ -5,8 +6,8 @@
 // snapshot exists; then one v0 manifest swap (`importBundle`) that publishes snapshot and definitions together: the commit point. A
 // crash before the swap leaves nothing readable and the registry untouched; a crash after it is a completed import that a retry
 // recognises by its receipt. Identifiers from the payload are path components only through `pathComponent` (S1).
-import { mkdir, open, readFile, rename } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { readFile, rename } from "node:fs/promises";
+import { join } from "node:path";
 import { canonicalJson, compareCodeUnits } from "../core/canonical.ts";
 import { sha256Hex } from "../core/digest.ts";
 import { WriteLockError, withWriteLock } from "../core/write-lock.ts";
@@ -15,8 +16,8 @@ import type { Session, ViewKey } from "../core/session.ts";
 import type { Entity, EntityRef, Envelope, ViewDefinition } from "../core/wire.ts";
 import type { ObjectGraph } from "../generated/v1/ObjectGraph.ts";
 import type { TestRun } from "../generated/v1/TestRun.ts";
-import { entityOfObject, lowerViewRecord, validateObjectGraph } from "./capture.ts";
-import type { LimitName } from "./limits.ts";
+import { entityOfObject, lowerViewRecord, preflightObjectGraph, validateObjectGraph } from "./capture.ts";
+import { resolveRequestedLimits, type LimitName } from "./limits.ts";
 import { pageIdOf } from "./page-rows.ts";
 import { captureFile, committedImport, customFile, pageFile, pageRefsFile, runDirectory, snapshotOfRun, v1Directory, type ImportRecord, type Origin } from "./read.ts";
 import { validateAgainstV1 } from "./schemas.ts";
@@ -36,6 +37,7 @@ export interface CollectionImport {
   ceilings?: Partial<Record<LimitName, number>>;
   /** The size in bytes of each graph as it was written, in the order of `graphs`, when the caller read them from files. */
   graphBytes?: number[];
+  effective?: Partial<Record<LimitName, number>>;
 }
 
 export interface ImportReceipt {
@@ -50,18 +52,6 @@ export interface ImportReceipt {
 
 export type ImportCrashPoint = "before-write" | "after-objects" | "after-manifest";
 
-async function writeDurably(path: string, text: string): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  const temporary = `${path}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
-  const handle = await open(temporary, "w");
-  try {
-    await handle.writeFile(text);
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  await rename(temporary, path);
-}
 
 const issue = (code: ValidationIssue["code"], pointer: string, constraint: string, hint: string): ValidationIssue => ({ code, pointer, constraint, hint });
 
@@ -100,6 +90,17 @@ async function withV1Lock<T>(session: Session, body: () => Promise<Result<T>>): 
 export async function importCollection(session: Session, input: CollectionImport, options: { crashAt?: (point: ImportCrashPoint) => void | Promise<void> } = {}): Promise<Result<ImportReceipt>> {
   const run = validateRun(input);
   if (!run.ok) return run;
+  const limits = resolveRequestedLimits(input.effective, input.ceilings);
+  if (!limits.ok) return limits;
+  const total = input.graphBytes?.reduce((n, size) => n + size, 0);
+  if (total !== undefined && total > limits.value.report.effective.collectionBytes) return err("VALIDATION_FAILED", "aggregate captures exceed resolved collectionBytes");
+  let aggregateBytes = 0;
+  for (const [index, document] of input.graphs.entries()) {
+    const preflight = preflightObjectGraph(document, { expectedRunId: input.runId, ...(input.effective === undefined ? {} : { effective: input.effective }), ...(input.ceilings === undefined ? {} : { ceilings: input.ceilings }) });
+    if (!preflight.ok) return preflight;
+    aggregateBytes += input.graphBytes?.[index] ?? preflight.value;
+    if (aggregateBytes > limits.value.report.effective.collectionBytes) return err("VALIDATION_FAILED", "aggregate captures exceed resolved collectionBytes");
+  }
   const digest = sha256Hex(canonicalJson({ repo: input.repo, run: input.run, graphs: input.graphs }));
   // A committed import answers without any lock (the answer cannot change: a committed run id is never rewritten); it is checked again
   // under the lock, which is the check that decides.
@@ -133,7 +134,7 @@ function prepare(input: CollectionImport, run: TestRun): Result<Prepared> {
   const graphs: ObjectGraph[] = [];
   const faults: ValidationIssue[] = [];
   for (const [index, document] of input.graphs.entries()) {
-    const checked = validateObjectGraph(document, { expectedRunId: input.runId, ...(input.ceilings === undefined ? {} : { ceilings: input.ceilings }), ...(input.graphBytes?.[index] === undefined ? {} : { byteLength: input.graphBytes[index] as number }) });
+    const checked = validateObjectGraph(document, { expectedRunId: input.runId, ...(input.effective === undefined ? {} : { effective: input.effective }), ...(input.ceilings === undefined ? {} : { ceilings: input.ceilings }), ...(input.graphBytes?.[index] === undefined ? {} : { byteLength: input.graphBytes[index] as number }) });
     if (checked.ok) graphs.push(checked.value);
     else faults.push(...checked.error.errors.map((fault) => ({ ...fault, pointer: `/graphs/${index}${fault.pointer}` })));
   }

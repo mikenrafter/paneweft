@@ -346,3 +346,14 @@ fn compare_cells(left: &Json, right: &Json) -> std::cmp::Ordering {
         _ => rank(left).cmp(&rank(right)),
     }
 }
+
+/// A renderer bound to one payload type. A standard fallback is mandatory at Context::custom.
+pub struct Renderer<Payload> {
+    pub(crate) metadata: Json,
+    payload: std::marker::PhantomData<fn(Payload)>,
+}
+impl<Payload> Renderer<Payload> {
+    pub fn new(id: &str, api_version: u32, payload_schema_digest: &str, asset_digest: &str) -> Self {
+        Self { metadata: json!({"id": id, "apiVersion": api_version, "payloadSchemaDigest": payload_schema_digest, "assetDigest": asset_digest}), payload: std::marker::PhantomData }
+    }
+}

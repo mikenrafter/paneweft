@@ -22,7 +22,7 @@ mod bounded;
 pub mod trail;
 pub mod value;
 
-pub use builders::{Ascending, Bounded, DetailsBuilder, Descending, Direction, Row, TableBuilder, View};
+pub use builders::{Ascending, Bounded, DetailsBuilder, Descending, Direction, Renderer, Row, TableBuilder, View};
 pub use capture::{
     inspect, with_capture, Capture, CaptureOptions, Context, InspectOutcome, Inspectable, ObjectGraph, ObjectRef, ViewEntry, ViewError,
     ViewMeta, ViewResult, ViewSetResult,

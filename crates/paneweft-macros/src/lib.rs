@@ -94,8 +94,8 @@ fn read_view(method: &syn::ImplItemFn) -> syn::Result<Option<ViewSpec>> {
         args.string(name)?.ok_or_else(|| syn::Error::new(attribute.span(), format!("`#[paneweft::view]` requires `{name} = \"...\"`")))
     };
     let component = field("component")?;
-    if !["shape", "list", "tree", "graph", "source", "notebook", "example"].contains(&component.as_str()) {
-        return Err(syn::Error::new(attribute.span(), format!("`component = \"{component}\"` is not a built-in component; use shape, list, tree, graph, source, notebook or example")));
+    if !["shape", "list", "tree", "graph", "source", "notebook", "example", "custom"].contains(&component.as_str()) {
+        return Err(syn::Error::new(attribute.span(), format!("`component = \"{component}\"` is not a built-in component; use shape, list, tree, graph, source, notebook, example or custom")));
     }
     let priority = match args.get("priority") {
         Some(expr) => quote!((#expr) as i32),

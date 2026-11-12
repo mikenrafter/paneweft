@@ -32,7 +32,7 @@ describe("[N1] two-phase submission", () => {
     must(await service().collect(request("job-a")), "collect");
     const submit = qex.calls().find((c) => c[0] === "submit")!;
     const jobDir = join(dir, "jobs", "job-a");
-    expect(submit.slice(0, submit.indexOf("--"))).toEqual(["submit", "--dedupe-key", "paneweft:job-a", "--dedupe-window", "24h", "--id-file", join(jobDir, "qex.id"), "--cwd", adapter.workspaceRoot, "--name", "paneweft-job-a", "--cpu", "1", "--mem", "1GB", "--tag", "paneweft", "--timeout", "60s", "--env", "CARGO_TERM_COLOR=never", "--env", "PANEWEFT_ATTEMPT=1", "--env", "PANEWEFT_COLLECT=1", "--env", "PANEWEFT_RUN_ID=run-job-a", "--env", `PANEWEFT_STAGING_DIR=${join(jobDir, "staging", "run-job-a")}`]);
+    expect(submit.slice(0, submit.indexOf("--"))).toEqual(["submit", "--dedupe-key", `paneweft:${JSON.parse(readFileSync(join(dir, "collection-session.json"), "utf8")).id}:job-a`, "--dedupe-window", "24h", "--id-file", join(jobDir, "qex.id"), "--cwd", adapter.workspaceRoot, "--name", "paneweft-job-a", "--cpu", "1", "--mem", "1GB", "--tag", "paneweft", "--timeout", "60s", "--env", "CARGO_TERM_COLOR=never", "--env", "PANEWEFT_ATTEMPT=1", "--env", "PANEWEFT_COLLECT=1", "--env", "PANEWEFT_RUN_ID=run-job-a", "--env", `PANEWEFT_STAGING_DIR=${join(jobDir, "staging", "run-job-a")}`]);
     expect(submit[submit.indexOf("--") + 1]).toBe(adapter.executable);
     expect(submit.slice(submit.indexOf("--") + 2).slice(0, 2)).toEqual(["test", "--manifest-path"]);
   });
@@ -41,8 +41,8 @@ describe("[N1] two-phase submission", () => {
   // proves: CLAIM(N1-two-phase)
   it("buildQexSubmitArgv is the pure source of that vector", () => {
     const adapter = fakeCargoAdapter();
-    const argv = buildQexSubmitArgv(adapter, "job-a", { executable: adapter.executable, argv: ["test"], cwd: adapter.workspaceRoot, env: { PANEWEFT_RUN_ID: "run-job-a" } }, "/s/jobs/job-a", 60_000);
-    expect(argv.slice(0, 6)).toEqual(["submit", "--dedupe-key", "paneweft:job-a", "--dedupe-window", "24h", "--id-file"]);
+    const argv = buildQexSubmitArgv(adapter, "job-a", { executable: adapter.executable, argv: ["test"], cwd: adapter.workspaceRoot, env: { PANEWEFT_RUN_ID: "run-job-a" } }, "/s/jobs/job-a", 60_000, "paneweft:test-session:job-a");
+    expect(argv.slice(0, 6)).toEqual(["submit", "--dedupe-key", "paneweft:test-session:job-a", "--dedupe-window", "24h", "--id-file"]);
     expect(argv.slice(-2)).toEqual([adapter.executable, "test"]);
   });
 
@@ -52,7 +52,7 @@ describe("[N1] two-phase submission", () => {
     const { qex, dir, service } = await world({ crashAt: (point) => { if (point === "after-intent") throw new Error("crash"); } });
     await expect(service().collect(request("job-b"))).rejects.toThrow("crash");
     const intent = JSON.parse(readFileSync(join(dir, "jobs", "job-b", "intent.json"), "utf8"));
-    expect(intent).toMatchObject({ schemaVersion: "paneweft.job-intent/1", requestId: "job-b", dedupeKey: "paneweft:job-b", params: { repo: "vg", adapter: "cargo", examples: ["watch.pending"] } });
+    expect(intent).toMatchObject({ schemaVersion: "paneweft.job-intent/1", requestId: "job-b", dedupeKey: `paneweft:${JSON.parse(readFileSync(join(dir, "collection-session.json"), "utf8")).id}:job-b`, params: { repo: "vg", adapter: "cargo", examples: ["watch.pending"] } });
     expect(qex.calls().filter((c) => c[0] === "submit")).toEqual([]);
   });
 
@@ -574,4 +574,53 @@ describe("[D1] the host holds a capture to the operator's ceilings", () => {
     expect(existsSync(join(dir, "jobs", "job-d1", "quarantine", "captures", "inv-1.json")), "the oversized capture sits in quarantine").toBe(true);
     expect(must(await openV1Reader(session).run("run-job-d1"), "the run is still recorded").run.invocations[0]!.capture.outcome).toBe("failed");
   });
+});
+
+// WHY CLAIM(S31): rejects service-wide held.has(id) letting an unrelated status operation advance a live importer.
+it("[S31] concurrent calls on one service cannot reenter the owner's import lease", async () => {
+  let enter!: () => void;
+  const entered = new Promise<void>((resolve) => { enter = resolve; });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const w = await world({ crashAt: async (point) => { if (point === "import:before-write") { enter(); await gate; } } });
+  const svc = w.service();
+  must(await svc.collect(request("s31")), "collect");
+  const owner = svc.status("s31", { waitSeconds: 30 });
+  await entered;
+  const spy = vi.spyOn(w.qex.client, "status").mockRejectedValue(new Error("unrelated operation entered qex while owner held import lease"));
+  try {
+    const observer = must(await svc.status("s31"), "observer");
+    expect(observer.state).toBe("importing");
+    expect(spy).not.toHaveBeenCalled();
+  } finally { spy.mockRestore(); release(); await owner; }
+});
+// WHY CLAIM(S32): rejects advance's permanent early return for an indeterminate state with a known qex id.
+it("[S32] observes a known qex id again after one transient status failure without resubmission", async () => {
+  const w = await world();
+  w.qex.control({ hold: true });
+  const svc = w.service();
+  const collected = must(await svc.collect(request("s32")), "collect");
+  const spy = vi.spyOn(w.qex.client, "status").mockResolvedValueOnce({ ok: false, error: { schemaVersion: "paneweft.error/1", code: "RUNNER_FAILED", message: "temporary disconnect", retryable: true, errors: [] } });
+  expect(must(await svc.status("s32"), "first status").state).toBe("indeterminate");
+  const recovered = must(await svc.status("s32"), "second status");
+  expect(recovered.state).toBe("queued");
+  expect(recovered.qexId).toBe(collected.qexId);
+  expect(spy).toHaveBeenCalledTimes(2);
+  expect(w.qex.calls().filter((c) => c[0] === "submit")).toHaveLength(1);
+  spy.mockRestore();
+  await svc.cancel("s32");
+});
+// WHY CLAIM(S38): rejects global paneweft:<request-id> adoption across independent sessions, including recovery by list.
+it("[S38] scopes submission and recovery identities to the session", async () => {
+  const a = await open(); const b = await open(); const qex = fake(); const adapter = fakeCargoAdapter();
+  qex.control({ hold: true });
+  const make = (env: typeof a, crashAt?: (p: CrashPoint) => void) => createJobService({ session: env.session, sessionDir: env.dir, qex: qex.client, adapters: [adapter], catalogueFor: async () => catalogue, ...(crashAt === undefined ? {} : { crashAt }) });
+  const first = must(await make(a).collect(request("r1")), "first session");
+  await expect(make(b, (p) => { if (p === "after-intent") throw new Error("restart"); }).collect(request("r1"))).rejects.toThrow("restart");
+  const second = must(await make(b).status("r1"), "recover second session");
+  expect(second.qexId).not.toBe(first.qexId);
+  expect(qex.jobs()).toHaveLength(2);
+  const keys = [a, b].map((env) => JSON.parse(readFileSync(join(env.dir, "jobs/r1/intent.json"), "utf8")).dedupeKey);
+  expect(keys[0]).not.toBe(keys[1]);
+  await make(a).cancel("r1"); await make(b).cancel("r1");
 });

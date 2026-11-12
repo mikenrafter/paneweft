@@ -27,7 +27,9 @@ export interface UnsupportedView {
   readonly kind: "unsupported";
   readonly reason: string;
 }
-export type ViewResult = BuiltView | UnsupportedView;
+export interface CustomBuiltView extends Omit<BuiltView, "component"> { readonly component: "custom"; }
+export type StandardViewResult = BuiltView | UnsupportedView;
+export type ViewResult = StandardViewResult | CustomBuiltView;
 
 export interface RowSpec {
   id: string;
@@ -54,15 +56,8 @@ function validId(kind: string, text: string): void {
   if (text.length === 0 || exceedsCodePoints(text, 120)) throw new ViewError("output-schema", `${kind} ${JSON.stringify(text)} must be 1 to 120 characters`);
 }
 
-/** Canonical JSON: keys sorted at every level (code-unit order), the text a page id and a content hash cover. */
-export function canonicalJson(value: unknown): string {
-  const sort = (item: unknown): unknown => {
-    if (Array.isArray(item)) return item.map(sort);
-    if (item !== null && typeof item === "object") return Object.fromEntries(Object.keys(item).sort().map((key) => [key, sort((item as Record<string, unknown>)[key])]));
-    return item;
-  };
-  return JSON.stringify(sort(value));
-}
+import { canonicalJson } from "./canonical.ts";
+export { canonicalJson };
 
 export const sha256Hex = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex");
 
@@ -88,7 +83,7 @@ export class DetailsBuilder {
     return this;
   }
 
-  done(): ViewResult {
+  done(): StandardViewResult {
     const stats: EncodeStats = newStats();
     const seen = new Set<string>();
     const leaves: Json[] = [];
@@ -170,7 +165,7 @@ export class TableBuilder {
     return { accepted: true };
   }
 
-  done(): ViewResult {
+  done(): StandardViewResult {
     if (this.columns.length === 0) throw new ViewError("output-schema", "a table needs at least one column: call textColumn, numberColumn or booleanColumn");
     const keys = new Set<string>();
     for (const column of this.columns) {

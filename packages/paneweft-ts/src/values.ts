@@ -91,6 +91,7 @@ export function encodeValue(value: CapturedValue, limits: Limits, stats: EncodeS
   };
   /** Emits `leaf` if it fits, otherwise the marker. */
   const leaf = (json: Json): Json => {
+    if (json !== null && typeof json === "object" && !Array.isArray(json) && typeof json.reason === "string" && json.$paneweft !== "not-captured") json = { ...json, reason: boundedText(json.reason, limits, stats, 256) };
     if (ledger.take(emit(json).bytes)) return json;
     stats.values += 1;
     return marker();
@@ -112,6 +113,9 @@ export function encodeValue(value: CapturedValue, limits: Limits, stats: EncodeS
       if (Number.isInteger(value) && !Number.isSafeInteger(value)) return leaf({ $paneweft: "unsupported", reason: "lossy-number" });
       return leaf(value);
     case "bigint":
+      if ((value < BigInt(Number.MIN_SAFE_INTEGER) || value > BigInt(Number.MAX_SAFE_INTEGER)) && (value < 0n ? -value : value) >= 10n ** BigInt(limits.stringBytes - Number(value < 0n))) {
+        stats.strings += 1; stats.values += 1; return marker();
+      }
       return leaf(value >= BigInt(Number.MIN_SAFE_INTEGER) && value <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(value) : { $paneweft: "bigint", decimal: value.toString() });
     case "symbol":
       return leaf(value === absent ? { $paneweft: "absent" } : { $paneweft: "unsupported", reason: "symbol" });
@@ -121,10 +125,10 @@ export function encodeValue(value: CapturedValue, limits: Limits, stats: EncodeS
       break;
   }
   if (value === null) return leaf(null);
-  if (value instanceof Redacted) return leaf(value.reason === undefined ? { $paneweft: "redacted" } : { $paneweft: "redacted", reason: value.reason });
-  if (value instanceof Unsupported) return leaf({ $paneweft: "unsupported", reason: value.reason });
-  if (value instanceof Uint8Array) return encodeBytes(value, limits, ledger, leaf);
-  if (value instanceof Date) return leaf(Number.isNaN(value.getTime()) ? { $paneweft: "unsupported", reason: "invalid-date" } : value.toISOString());
+  if (value instanceof Redacted) return leaf(value.reason === undefined ? { $paneweft: "redacted" } : { $paneweft: "redacted", reason: boundedText(value.reason, limits, stats, 256) });
+  if (value instanceof Unsupported) return leaf({ $paneweft: "unsupported", reason: boundedText(value.reason, limits, stats, 256) });
+  if (value instanceof Uint8Array) return encodeBytes(value, limits, stats, ledger, leaf);
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? leaf({ $paneweft: "unsupported", reason: "invalid-date" }) : encodeString(value.toISOString(), limits, stats, ledger, marker);
   if (!Array.isArray(value) && !(value instanceof Map) && !isRecordLike(value)) return leaf({ $paneweft: "unsupported", reason: "object" });
   // a container pays for its two brackets before anything else
   if (!ledger.take(2)) {
@@ -158,6 +162,7 @@ export function encodeValue(value: CapturedValue, limits: Limits, stats: EncodeS
   let tagged = false;
   /** Charges `,"name":` (and what the map tag adds) if it fits; a name that does not fit ends the container (S2). */
   const admitKey = (name: string): boolean => {
+    if (Buffer.byteLength(name) > limits.stringBytes) { stats.strings += 1; return false; }
     const separator = pairs.length > 0 ? 1 : 0;
     // the first `$paneweft` key turns the object into a map tag, which costs more for every entry kept so far
     const becomesTagged = !tagged && name === "$paneweft";
@@ -262,23 +267,31 @@ function encodeString(value: string, limits: Limits, stats: EncodeStats, ledger:
   return tag;
 }
 
-function encodeBytes(value: Uint8Array, limits: Limits, ledger: Ledger, leaf: (json: Json) => Json): Json {
+function encodeBytes(value: Uint8Array, limits: Limits, stats: EncodeStats, ledger: Ledger, leaf: (json: Json) => Json): Json {
   const tag = (count: number): Json => {
     const out: { [key: string]: Json } = { $paneweft: "bytes", base64: Buffer.from(value.subarray(0, count)).toString("base64"), length: value.length };
     if (count < value.length) out.truncated = true;
     return out;
   };
-  let count = Math.min(value.length, limits.stringBytes);
+  let count = Math.min(value.length, 3 * Math.floor(limits.stringBytes / 4));
   if (emit(tag(count)).bytes > ledger.spare()) {
     // base64 takes 4 bytes per 3 and nothing in it is escaped, so the room gives the count; the size of the text confirms it
     count = Math.min(count, Math.max(0, 3 * Math.floor((ledger.spare() - emit(tag(0)).bytes) / 4)));
     while (count > 0 && emit(tag(count)).bytes > ledger.spare()) count -= 3;
   }
+  if (count < value.length) stats.strings += 1;
   return leaf(tag(Math.max(0, count)));
 }
 
 /** The display form used in shape examples and list cells. */
-export function displayValue(value: CapturedValue): string {
+export function displayValue(value: CapturedValue, limits?: Limits, stats = newStats()): string {
+  const effective = limits ?? { depth: 4, objects: 1, references: 0, rootBytes: 16 * 1024, stringBytes: 16 * 1024, pageRows: 1, collectionBytes: 16 * 1024, roots: 1, viewRows: 1, viewBudgetMs: 1 };
+  let safe = value;
+  if (value instanceof Redacted && value.reason !== undefined) safe = new Redacted(boundedText(value.reason, effective, stats, 256));
+  else if (value instanceof Unsupported) safe = new Unsupported(boundedText(value.reason, effective, stats, 256));
+  return boundedText(displayUnbounded(safe, effective), effective, stats);
+}
+function displayUnbounded(value: CapturedValue, effective: Limits): string {
   if (value === null) return "null";
   if (value === undefined || value === absent) return "<absent>";
   if (typeof value === "string") return value;
@@ -295,8 +308,7 @@ export function displayValue(value: CapturedValue): string {
   if (value instanceof Redacted) return value.reason === undefined ? "<redacted>" : `<redacted: ${value.reason}>`;
   if (value instanceof Unsupported) return `<unsupported: ${value.reason}>`;
   // a display cell never needs more text than one string may hold, so a huge container is cut here too
-  const limits: Limits = { depth: 4, objects: 1, references: 0, rootBytes: 1, stringBytes: 16 * 1024, pageRows: 1, collectionBytes: 1, roots: 1, viewRows: 1, viewBudgetMs: 1 };
-  return JSON.stringify(encodeValue(value, limits, newStats(), 0, new Ledger(16 * 1024, 16 * 1024, 0)));
+  return emit(encodeValue(value, effective, newStats(), 0, new Ledger(effective.stringBytes + 128, effective.stringBytes + 128, 0))).text;
 }
 
 /** The shape `type` of a leaf. */
@@ -323,10 +335,12 @@ export function scalarOf(value: CapturedValue, limits: Limits, stats: EncodeStat
   if (typeof value === "boolean") return value;
   if (typeof value === "number" && Number.isFinite(value) && !Object.is(value, -0) && !(Number.isInteger(value) && !Number.isSafeInteger(value))) return value;
   if (typeof value === "bigint" && value >= BigInt(Number.MIN_SAFE_INTEGER) && value <= BigInt(Number.MAX_SAFE_INTEGER)) return Number(value);
-  if (typeof value === "string") {
-    const [kept, omitted] = cutString(value, limits.stringBytes);
-    if (omitted > 0) stats.strings += 1;
-    return kept;
-  }
-  return displayValue(value);
+  return displayValue(value, limits, stats);
+}
+
+/** CLAIM(S25): every free text scalar is cut before serialization; callers charge its emitted fragment [emission.test.ts]. */
+export function boundedText(text: string, limits: Pick<Limits, "stringBytes">, stats: EncodeStats, schemaCap = Infinity): string {
+  const [kept, omitted] = cutString(text, Math.min(limits.stringBytes, schemaCap));
+  if (omitted > 0) stats.strings += 1;
+  return kept;
 }

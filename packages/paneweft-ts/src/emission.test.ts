@@ -5,6 +5,7 @@
 // included). `collectionBytes` bounds that document; `rootBytes` bounds the objects, views and stored pages of one root.
 import { describe, expect, it } from "vitest";
 import { Capture, defineType, type CapturedValue, type Limits, type TypeToken, redacted, Unsupported } from "./index.ts";
+import { validateObjectGraph } from "../../../src/v1/capture.ts";
 import { specLimits } from "../test/support.ts";
 
 const bytes = (json: unknown): number => Buffer.byteLength(JSON.stringify(json), "utf8");
@@ -235,4 +236,29 @@ describe("[D1] the emitted size is bounded by one serializer", () => {
     expect(graph.bytes).toBe(Buffer.byteLength(graph.text, "utf8"));
     expect(graph.bytes).toBeLessThanOrEqual(8192);
   });
+});
+
+// WHY CLAIM(S25): rejects scalarOf's unbounded display fallback and raw reason tags on 3597bfa.
+describe("[S25] display and reason output shares string bounds", () => {
+  it.each([["list", [1, 2, 3]], ["redacted", redacted("x".repeat(1000))], ["unsupported", new Unsupported("x".repeat(1000))]])("bounds %s display and reports the omission", (_name, value) => {
+    const graph = publish([{ ...empty(), detail: [["v", value as CapturedValue]] }], { stringBytes: 1 });
+    const view = graph.views[0];
+    expect(Buffer.byteLength(view.data.fields[1].example)).toBeLessThanOrEqual(1);
+    expect(view.completeness.omitted.strings.count).toBeGreaterThan(0);
+  });
+  it("bounds reason tags before emission using both stringBytes and the schema cap", () => {
+    const graph = publish([{ ...empty(), fields: [["r", redacted("x".repeat(1000))], ["u", new Unsupported("x".repeat(1000))]] }], { stringBytes: 3 });
+    expect(graph.objects[0].fields.r.reason).toBe("xxx");
+    expect(graph.objects[0].fields.u.reason).toBe("xxx");
+    // Two reason tags and the unsupported rows view reason each lose text.
+    expect(graph.completeness.omitted.strings.count).toBe(3);
+  });
+});
+
+// WHY CLAIM(S25/S26): SDK cuts and host bounds must agree at tiny limits, including tag strings, names, marker keys and display fallbacks.
+it.each([1, 3, 256])("[S25/S26] admits bounded SDK tags and names under stringBytes=%i", (stringBytes) => {
+  const root = { ...empty(), fields: [["too-long-a-name".repeat(100), 1], ["r", redacted("x".repeat(1000))], ["u", new Unsupported("x".repeat(1000))], ["b", new Uint8Array(1000)], ["i", 9007199254740993n], ["m", { longkey: "long string" }]] as Array<[string, CapturedValue]>, detail: [["v", redacted("x".repeat(1000))]] as Array<[string, CapturedValue]> };
+  const graph = publish([root], { stringBytes });
+  const result = validateObjectGraph(graph, { expectedRunId: graph.runId, effective: graph.limits });
+  expect(result.ok, JSON.stringify(result)).toBe(true);
 });
