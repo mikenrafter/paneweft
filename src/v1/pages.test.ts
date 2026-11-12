@@ -1,13 +1,14 @@
 // Fix round 1, S11: the rows of a captured list beyond the first page are reachable from the agent tool (through its cursor) and from the
 // viewer's data source. The graph is made by the TypeScript SDK itself, with a table of 250 rows and 100 rows per stored page.
-import { readdirSync, rmSync } from "node:fs";
+import { readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { Capture, defineType } from "../../packages/paneweft-ts/src/index.ts";
-import { collectionImport, useV1Sessions } from "../../test/helpers/v1-world.ts";
+import { canonical, collectionImport, sha256, useV1Sessions } from "../../test/helpers/v1-world.ts";
 import { must } from "../../test/helpers/must.ts";
 import { createSessionSource } from "../viewer/session-source.ts";
 import { importCollection } from "./import.ts";
+import { captureFile, pageFile } from "./read.ts";
 import { executeV1Operation } from "./tools.ts";
 
 const open = useV1Sessions();
@@ -81,5 +82,54 @@ describe("[S11] stored pages are reachable", () => {
     expect(model.envelope.completeness.status).toBe("partial");
     expect(JSON.stringify(model.envelope.completeness)).toContain("could not be read");
     expect((model.envelope.data as { rows: unknown[] }).rows.length).toBeLessThan(250);
+  });
+});
+
+describe("[S22] an invalid stored page is an explicit error, never a throw", () => {
+  /** Replaces the first stored page of the 250-row table with `rows`, correctly hashed and referenced: what admission used to let through. */
+  async function corrupt(rows: unknown[], mutate: (page: any) => void = () => {}) {
+    const { session, dir } = await open();
+    must(await importCollection(session, bigCollection(250)), "import");
+    const file = captureFile(session, "run-1", "inv-1");
+    const graph = JSON.parse(readFileSync(file, "utf8"));
+    const view = graph.views.find((candidate: any) => candidate.viewId === "watch.events");
+    const old = view.pages[0];
+    const page: any = { pageId: `sha256:${sha256(canonical(rows))}`, viewId: "watch.events", objectId: view.objectId, index: old.index, rows };
+    mutate(page);
+    view.pages[0] = { index: old.index, pageId: page.pageId, rowCount: rows.length };
+    writeFileSync(file, JSON.stringify(graph));
+    writeFileSync(pageFile(session, page.pageId), JSON.stringify(page));
+    return { session, dir, pageId: page.pageId as string };
+  }
+  const read = async (session: any, dir: string) => executeV1Operation({ session, sessionDir: dir, jobs: null }, "view_result", { run: "run-1", view: "watch.events", format: "json", maxBytes: 8192 });
+
+  // why: S22. A page holding `{}` made view_result throw a TypeError at `Object.entries(row.cells)`; the viewer's data source threw the same. Both answer with
+  // an error that names the page. Rejects a reader that trusts the page it reads.
+  // proves: CLAIM(S22-page-rows)
+  it.each([
+    ["an empty object", [{}]],
+    ["a row whose cells are not an object", [{ id: "x", cells: 7, provenance: "observed", evidence: ["run"] }]],
+    ["a row for an undeclared column", [{ id: "x", cells: { nope: 1 }, provenance: "observed", evidence: ["run"] }]],
+    ["a row id the first page already holds", [{ id: "event-0000", cells: { event: "e", tick: 0 }, provenance: "observed", evidence: ["run"] }]],
+  ])("view_result and the viewer refuse a stored page holding %s", async (_name, rows) => {
+    const { session, dir, pageId } = await corrupt(rows);
+    const outcome = await read(session, dir);
+    expect(outcome.ok, "an invalid page is not served").toBe(false);
+    expect(JSON.parse(outcome.body)).toMatchObject({ code: "STORAGE_CORRUPT" });
+    expect(outcome.body).toContain(pageId);
+    const entry = (await session.listViewIndex("snap-run-1")).find((candidate) => candidate.viewDefinitionId === "watch.events")!;
+    const model = await createSessionSource(session).getView({ viewId: entry.viewId, snapshotId: "snap-run-1" });
+    expect(model.ok).toBe(false);
+  });
+
+  // why: S22. A page whose rows no longer hash to its id (the file was edited, or truncated and rewritten) is the same error: stored pages are content addressed.
+  // proves: CLAIM(S22-page-rows)
+  it("refuses a stored page whose rows do not hash to its id", async () => {
+    const { session, dir, pageId } = await corrupt([{ id: "x", cells: { event: "e", tick: 1 }, provenance: "observed", evidence: ["run"] }], (page) => { page.pageId = `sha256:${"0".repeat(64)}`; });
+    // the file is stored under the id the view lists; its own pageId says something else
+    writeFileSync(pageFile(session, pageId), JSON.stringify({ pageId, viewId: "watch.events", objectId: "o1", index: 1, rows: [{ id: "y", cells: {}, provenance: "observed", evidence: ["run"] }] }));
+    const outcome = await read(session, dir);
+    expect(outcome.ok).toBe(false);
+    expect(JSON.parse(outcome.body)).toMatchObject({ code: "STORAGE_CORRUPT" });
   });
 });

@@ -9,6 +9,7 @@ import { err, ok, type Result } from "../core/errors.ts";
 import type { Session, ViewKey } from "../core/session.ts";
 import type { EntityRef } from "../core/wire.ts";
 import type { ObjectGraph, ObjectRecord, PageRecord } from "../generated/v1/ObjectGraph.ts";
+import { checkPageRecord } from "./page-rows.ts";
 import type { TestRun } from "../generated/v1/TestRun.ts";
 import { entityKindOf } from "./capture.ts";
 
@@ -133,7 +134,9 @@ export function openV1Reader(session: Session): V1Reader {
     async page(pageId) {
       if (!/^sha256:[0-9a-f]{64}$/.test(pageId)) return err("INVALID_ARGUMENT", `"${pageId}" is not a page id (sha256:<64 hex>)`);
       const page = await readJsonFile<PageRecord>(pageFile(session, pageId));
-      return page === undefined ? notFound(`page "${pageId}"`) : ok(page);
+      if (page === undefined) return notFound(`page "${pageId}"`);
+      const reasons = checkPageRecord(page, { pageId });
+      return reasons.length === 0 ? ok(page) : err("STORAGE_CORRUPT", `the stored page "${pageId}" is not valid: ${reasons.join("; ")}`);
     },
     async run(runId) {
       const record = await committedImport(session, runId);

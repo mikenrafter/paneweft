@@ -680,11 +680,15 @@ async function viewResult(call: Call): Promise<OperationOutcome> {
   const loaded = await session.getView({ viewId: entry.viewId, snapshotId });
   if (!loaded.ok) return fromError(call.format, loaded.error);
   // the stored envelope holds the first page of a list; the rows of its stored pages are read back so that the continuation reaches all of them
-  const envelope: Envelope = await withStoredPages(session, loaded.value.envelope);
+  const paged = await withStoredPages(session, loaded.value.envelope);
+  if (!paged.ok) return fromError(call.format, paged.error);
+  const envelope: Envelope = paged.value;
   const data = envelope.data as Json;
   const items: Item[] = [];
   if (envelope.component === "list") {
     for (const row of data.rows as Json[]) {
+      // a stored first page is checked by the host when it is imported, a stored page when it is read; a row that is neither is storage damage
+      if (typeof row !== "object" || row === null || typeof row.cells !== "object" || row.cells === null) return failure(call.format, "STORAGE_CORRUPT", `the stored view "${entry.viewId}" of run "${runId}" holds a row that is not a row with cells`, { details: { runId, storedViewId: entry.viewId } });
       const cells = row.cells as Record<string, unknown>;
       items.push({ json: { id: row.id, cells, entity: row.entity ?? null, provenance: row.provenance }, text: `${row.id}: ${Object.entries(cells).map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(" | ")}${row.entity === undefined ? "" : ` -> ${row.entity.kind}:${row.entity.id}`}; ${row.provenance}` });
     }

@@ -8,6 +8,7 @@ import { sha256Hex } from "../core/digest.ts";
 import { err, ok, type Result, type ValidationIssue } from "../core/errors.ts";
 import type { Entity, EntityRef, Envelope, ViewDefinition } from "../core/wire.ts";
 import type { ObjectGraph, ObjectRecord, ViewRecord } from "../generated/v1/ObjectGraph.ts";
+import { checkListRows, rowIds } from "./page-rows.ts";
 import { validateAgainstV1 } from "./schemas.ts";
 
 export interface LowerContext {
@@ -88,6 +89,7 @@ export function validateObjectGraph(document: unknown, context: { expectedRunId:
     });
   });
   const pageIds = new Set(graph.pages.map((page) => page.pageId));
+  const claimedPages = new Set<number>();
   const seenViews = new Set<string>();
   const checkRows = (rows: unknown[], base: string): void => {
     rows.forEach((row, rowIndex) => {
@@ -105,9 +107,30 @@ export function validateObjectGraph(document: unknown, context: { expectedRunId:
       checkRows(rows, `/views/${index}/data/rows`);
       if (rows.length > graph.limits.viewRows) issues.push(issue("LIMIT_EXCEEDED", `/views/${index}/data/rows`, `at most ${graph.limits.viewRows} rows per view (the capture's own limit)`, "Recollect with fewer rows or a larger declared limit."));
     }
-    view.pages.forEach((page, pageIndex) => {
-      if (!pageIds.has(page.pageId)) issues.push(issue("DANGLING_REFERENCE", `/views/${index}/pages/${pageIndex}/pageId`, "a view page names a stored page of this capture", `No stored page "${page.pageId}" is in the capture.`));
+    // S22: the stored pages of a view are checked as rows of THAT view: the record must be the view's own (view, object, index, count), its rows
+    // must be valid list rows with declared columns, and ids are unique over the first page and every stored page
+    const seen = new Set<string>(view.component === "list" ? rowIds((view.data as { rows?: unknown } | undefined)?.rows) : []);
+    [...view.pages.entries()].sort(([, a], [, b]) => a.index - b.index).forEach(([pageIndex, reference]) => {
+      const pointer = `/views/${index}/pages/${pageIndex}`;
+      if (!pageIds.has(reference.pageId)) {
+        issues.push(issue("DANGLING_REFERENCE", `${pointer}/pageId`, "a view page names a stored page of this capture", `No stored page "${reference.pageId}" is in the capture.`));
+        return;
+      }
+      const at = graph.pages.findIndex((page) => page.pageId === reference.pageId && page.viewId === view.viewId && page.objectId === view.objectId);
+      const record = graph.pages[at];
+      if (record === undefined) {
+        issues.push(issue("CONSTRAINT", `${pointer}/pageId`, "a view page names a stored page of this view", `The stored page "${reference.pageId}" belongs to another view or object.`));
+        return;
+      }
+      claimedPages.add(at);
+      if (record.index !== reference.index) issues.push(issue("CONSTRAINT", `${pointer}/index`, `the stored page says it is page ${record.index}`, "The view and its stored page disagree about the page number."));
+      if (record.rows.length !== reference.rowCount) issues.push(issue("CONSTRAINT", `${pointer}/rowCount`, `the stored page holds ${record.rows.length} rows`, "The view's count of a stored page is the number of rows the page holds."));
+      if (view.component !== "list") issues.push(issue("CONSTRAINT", `${pointer}/pageId`, "only a list has stored pages", `The view "${view.viewId}" is a ${view.component}.`));
+      else issues.push(...checkListRows((view.data ?? {}) as { columns?: unknown; order?: unknown }, record.rows, `/pages/${at}/rows`, seen));
     });
+  });
+  graph.pages.forEach((page, index) => {
+    if (!claimedPages.has(index)) issues.push(issue("CONSTRAINT", `/pages/${index}/pageId`, "a stored page is listed by the view and object it names", `No view "${page.viewId}" of object "${page.objectId}" lists this page with its index.`));
   });
   graph.pages.forEach((page, index) => {
     const expected = `sha256:${sha256Hex(canonicalJson(page.rows))}`;

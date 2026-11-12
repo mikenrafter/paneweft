@@ -24,7 +24,9 @@ export function createSessionSource(session: Session): ViewerSource {
     if (!read.ok) return read;
     const { recorded } = read.value;
     // a v1 list keeps its rows beyond the first page in stored pages; the viewer shows them all (S11)
-    const envelope = await withStoredPages(session, read.value.envelope);
+    const paged = await withStoredPages(session, read.value.envelope);
+    if (!paged.ok) return paged;
+    const envelope = paged.value;
     const { contentHash } = read.value.stored;
     const freshness = await checkFreshness(envelope.freshness, await session.repositories());
     if (recorded !== undefined) {

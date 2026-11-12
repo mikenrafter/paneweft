@@ -51,7 +51,7 @@ describe("[IV9] object graph admission", () => {
   // proves: CLAIM(IV10)
   it("refuses a page whose id is not the hash of its rows", () => {
     const graph = fixture();
-    const rows = [graph.views[1].data.rows[0]];
+    const rows = [{ ...graph.views[1].data.rows[0], id: "event-9" }]; // a fresh occurrence id: a stored row may not repeat one of the first page (S22)
     graph.pages = [{ pageId: `sha256:${sha256(canonical(rows))}`, viewId: "watch.events", objectId: "o1", index: 1, rows }];
     graph.views[1].pages = [{ index: 1, pageId: graph.pages[0].pageId, rowCount: 1 }];
     must(validateObjectGraph(structuredClone(graph), { expectedRunId: "run-1" }), "positive control: a correct page id");
@@ -68,6 +68,70 @@ describe("[IV9] object graph admission", () => {
     graph.limits.objects = 3;
     const error = mustFail(validateObjectGraph(graph, { expectedRunId: "run-1" }), "over limit");
     expect(error.errors.map((e) => e.code)).toContain("LIMIT_EXCEEDED");
+  });
+});
+
+describe("[S22] stored page rows are validated at admission", () => {
+  const row = (id: string, cells: Record<string, unknown> = { event: "e-9", tick: 9, redelivered: false }) => ({ id, cells, provenance: "observed", evidence: ["run"] });
+  /** The fixture graph with the given pages stored for its list view, each correctly hashed and referenced by the view. */
+  const withPages = (...pages: Array<unknown[]>) => {
+    const graph = fixture();
+    graph.pages = pages.map((rows, offset) => ({ pageId: `sha256:${sha256(canonical(rows))}`, viewId: "watch.events", objectId: "o1", index: offset + 1, rows }));
+    graph.views[1].pages = graph.pages.map((page: any) => ({ index: page.index, pageId: page.pageId, rowCount: page.rows.length }));
+    return graph;
+  };
+  const refusal = (graph: unknown) => mustFail(validateObjectGraph(graph, { expectedRunId: "run-1" }), "refused").errors.map((fault) => [fault.code, fault.pointer]);
+
+  // why: control. A correctly hashed page of valid rows with fresh ids and declared columns is admitted.
+  // proves: CLAIM(S22-page-rows)
+  it("admits a page of valid rows", () => {
+    must(validateObjectGraph(withPages([row("event-100"), row("event-101")]), { expectedRunId: "run-1" }), "admit");
+  });
+
+  // why: S22. The page schema let any object through as a row, so a correctly hashed page holding `{}` was admitted, stored, and made view_result throw
+  // at `Object.entries(row.cells)`. Every stored row is checked against the list-row schema of the view it belongs to. Rejects an admission that checks the page
+  // hash and the row targets only.
+  // proves: CLAIM(S22-page-rows)
+  it.each([
+    ["an empty object", {}],
+    ["a row with no cells", { id: "event-100", provenance: "observed", evidence: ["run"] }],
+    ["a row whose cells are not an object", { id: "event-100", cells: 7, provenance: "observed", evidence: ["run"] }],
+    ["a row with a member the list schema does not know", { ...row("event-100"), surprise: true }],
+    ["a scalar", 7],
+  ])("refuses a stored page holding %s", (_name, bad) => {
+    expect(refusal(withPages([row("event-099"), bad])).map(([, pointer]) => pointer).some((pointer) => pointer?.startsWith("/pages/0/rows/1"))).toBe(true);
+  });
+
+  // why: S22. A cell for a column the view does not declare is a row the viewer cannot place; the first page is held to this rule by the host, the
+  // stored pages were not.
+  // proves: CLAIM(S22-page-rows)
+  it("refuses a stored row whose cell names a column the view does not declare", () => {
+    expect(refusal(withPages([row("event-100", { event: "e", bogus: 1 })]))).toContainEqual(["CONSTRAINT", "/pages/0/rows/0/cells/bogus"]);
+  });
+
+  // why: S22. Row ids are occurrence ids and unique over the whole view: within a page, against the first page, and between two pages.
+  // proves: CLAIM(S22-page-rows)
+  it.each([
+    ["within a page", withPages([row("dup"), row("dup")]), "/pages/0/rows/1/id"],
+    ["against the first page", withPages([row("event-0")]), "/pages/0/rows/0/id"],
+    ["between two pages", withPages([row("dup")], [row("other"), row("dup")]), "/pages/1/rows/1/id"],
+  ])("refuses a row id repeated %s", (_name, graph, pointer) => {
+    expect(refusal(graph)).toContainEqual(["DUPLICATE_ID", pointer]);
+  });
+
+  // why: S22. A page belongs to the view that lists it: one that names another view or object, one the view's record counts wrongly, and one no view
+  // lists cannot be read back as the view's rows.
+  // proves: CLAIM(S22-page-rows)
+  it("refuses a page that names another view, is counted wrongly, or is listed by no view", () => {
+    const other = withPages([row("event-100")]);
+    other.pages[0].viewId = "watch.status";
+    expect(refusal(other).map(([, pointer]) => pointer)).toContain("/views/1/pages/0/pageId");
+    const counted = withPages([row("event-100")]);
+    counted.views[1].pages[0].rowCount = 5;
+    expect(refusal(counted).map(([, pointer]) => pointer)).toContain("/views/1/pages/0/rowCount");
+    const orphan = withPages([row("event-100")]);
+    orphan.views[1].pages = [];
+    expect(refusal(orphan).map(([, pointer]) => pointer)).toContain("/pages/0/pageId");
   });
 });
 
