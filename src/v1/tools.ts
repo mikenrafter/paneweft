@@ -460,7 +460,7 @@ function rustViewTest(args: { symbol: string; viewId: string; name: string; ques
     "    // WHY: the view must answer the question with independently expected values; it fails until the view is implemented.",
     `    // CLAIM: ${args.claim}`,
     `    /// TODO: return a \`${args.symbol}\` built with its real constructor; invent no fields.`,
-    `    fn sample_${args.name}() -> Option<${args.symbol}> {`,
+    `    fn sample_${args.name}() -> Option<${args.existing ? "super::" : ""}${args.symbol}> {`,
     "        None",
     "    }",
     "",
@@ -481,7 +481,7 @@ function rustViewTest(args: { symbol: string; viewId: string; name: string; ques
     "        // TODO: assert independently expected values, e.g. assert_eq!(view[\"data\"][\"fields\"][1][\"example\"], 3);",
     "    }",
   ];
-  if (args.existing) return [`// ${args.path}: add inside the existing \`mod ${args.module}\` (it is already behind the feature gate), after its \`use\` lines.`, ...body.map((line) => line.replace(/^ {4}/, ""))].join("\n") + "\n";
+  if (args.existing) return [`// ${args.path}: add inside the existing \`mod ${args.module}\` (it is already behind the feature gate; the test names its type as \`super::${args.symbol}\`, so the module needs no new import).`, ...body.map((line) => line.replace(/^ {4}/, ""))].join("\n") + "\n";
   return ["#[cfg(all(test, feature = \"paneweft\"))]", `mod ${args.module} {`, `    use super::${args.symbol};`, "", ...body, "}", ""].join("\n");
 }
 
@@ -719,13 +719,13 @@ async function scaffold(call: Call, tool: "scaffold_view" | "scaffold_example"):
       const body = [
         "    // the example returns a value of the type declared in the module around this one; adjust the path if the type is declared deeper",
         `    #[paneweft::example(id = ${JSON.stringify(example)}, claims = [${JSON.stringify(claim)}])]`,
-        `    fn ${slug(example)}() -> ${source.symbol} {`,
+        `    fn ${slug(example)}() -> ${existing ? "super::" : ""}${source.symbol} {`,
         "        // TODO: build the value with the real constructor and record checks with paneweft::check_eq!(\"CLAIM\", actual, expected); do not invent fields.",
         `        unimplemented!("TODO: construct ${source.symbol}")`,
         "    }",
       ];
       const text = existing
-        ? [`// ${source.path}: add inside the existing \`mod ${rustSetup.examplesModule}\` (it is already behind the feature gate and imports ${source.symbol}).`, ...body.map((line) => line.replace(/^ {4}/, ""))].join("\n") + "\n"
+        ? [`// ${source.path}: add inside the existing \`mod ${rustSetup.examplesModule}\` (it is already behind the feature gate; the example names its type as \`super::${source.symbol}\`, so the module needs no new import).`, ...body.map((line) => line.replace(/^ {4}/, ""))].join("\n") + "\n"
         : ["#[cfg(all(test, feature = \"paneweft\"))]", `mod ${rustSetup.examplesModule} {`, `    use super::${source.symbol};`, "", ...(facts.testAdapter ? [] : ["    // once per test binary: the reserved test the catalogue export runs", "    paneweft::test_adapter!();", ""]), ...body, "}", ""].join("\n");
       plan.patches = [{ path: source.path, text }, ...rustSetup.cargoPatches];
       // an example is its own test: the macro makes the wrapper test `paneweft_example_<fn>`, red until the body builds the value

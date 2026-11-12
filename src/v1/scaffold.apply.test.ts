@@ -3,7 +3,7 @@
 // `matched=0 returned=0` on a reply that returns a patch). Here the reply is APPLIED to a copy of a repository that has none of the wiring, the
 // commands it names are RUN, and the output test is run red with real cargo and a real Vitest, then made green by implementing the view.
 import { spawnSync } from "node:child_process";
-import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { FIXTURES, REPO_ROOT, fakeCargoAdapter, loadFixture, useV1Sessions } from "../../test/helpers/v1-world.ts";
@@ -20,6 +20,18 @@ const containmarks = loadFixture<any>("v1/catalogues/containmarks.catalogue.json
 const record = (repo: string, adapter: string, catalogue: unknown) => JSON.stringify({ schemaVersion: "paneweft.catalogue-record/1", repo, adapter, catalogue, fingerprint: { digest: "0".repeat(64), members: [], declaredExtras: [], exclusions: [] }, collectedAt: "2026-11-11T12:00:00Z" });
 
 interface Reply { patches: Array<{ path: string; text: string }>; outputTest: { path: string; text: string }; registration: string; setup: Array<{ step: string; command?: string }> }
+
+/** `source` with `text` inserted before the closing brace of its `mod name { ... }` (braces counted; the generated code has none in strings or comments). */
+function insideModule(source: string, name: string, text: string): string {
+  const start = source.indexOf(`mod ${name} {`);
+  expect(start, `the file declares mod ${name}`).toBeGreaterThanOrEqual(0);
+  let depth = 0;
+  for (let index = source.indexOf("{", start); index < source.length; index += 1) {
+    if (source[index] === "{") depth += 1;
+    if (source[index] === "}" && --depth === 0) return `${source.slice(0, index)}\n${text}${source.slice(index)}`;
+  }
+  throw new Error(`mod ${name} is not closed`);
+}
 
 describe("[F12] identifiers and titles are cut at word boundaries", () => {
   // why: F12. The field test's scaffold for ContainMarks produced the id `containermappingrecord.which_original_index_and_container_does_` and the title
@@ -65,7 +77,10 @@ describe("[F12] the Rust scaffold applies to a crate that has no paneweft wiring
       }
       for (const file of [...reply.patches, ...(options.skipOutputTest === true ? [] : [reply.outputTest])]) {
         mkdirSync(dirname(join(root, file.path)), { recursive: true });
-        appendFileSync(join(root, file.path), `\n${file.text}`);
+        // a reply that says "add inside the existing `mod X`" is applied as it says: inside that module (appending it after the module's closing brace would hide the very error under test)
+        const into = /add inside the existing `mod (\w+)`/.exec(file.text.split("\n")[0] ?? "")?.[1];
+        if (into === undefined) appendFileSync(join(root, file.path), `\n${file.text}`);
+        else writeFileSync(join(root, file.path), insideModule(readFileSync(join(root, file.path), "utf8"), into, file.text));
       }
       // the reply's step: the first build fetches the SDK (from the mirror here); every later cargo run in this test is offline
       const fetched = spawnSync("cargo", ["fetch"], { cwd: root, encoding: "utf8", env: cargoEnv });
@@ -213,6 +228,76 @@ describe("[F12] the Rust scaffold applies to a crate that has no paneweft wiring
     expect(body).toContain(`rev = "${SDK_GIT_REV}"`);
     expect(body).not.toContain("vendor-rust-sdk");
   });
+});
+
+describe("[S2] repeated Rust scaffolds apply to a crate that already has the module", () => {
+  // Same world as above, with a second type in the file: the field reproduction used sibling structs Boat and Dock in src/lib.rs.
+  async function twoTypes() {
+    const { session, dir } = await open();
+    const root = join(tmp("two"), "boat");
+    cpSync(join(FIXTURES, "crates/plain"), root, { recursive: true });
+    cpSync(join(REPO_ROOT, "Cargo.lock"), join(root, "Cargo.lock"));
+    appendFileSync(join(root, "src/lib.rs"), "\npub struct Dock {\n    pub name: String,\n}\n\nimpl Dock {\n    pub fn new(name: &str) -> Dock {\n        Dock { name: name.to_string() }\n    }\n}\n");
+    const withBoat = structuredClone(watchfile);
+    withBoat.types.push({ typeId: "plain::Boat", source: { path: "src/lib.rs", symbol: "Boat" } });
+    mkdirSync(join(dir, "catalogues", "vg"), { recursive: true });
+    writeFileSync(join(dir, "catalogues", "vg", "cargo.json"), record("vg", "cargo", withBoat));
+    writeFileSync(join(dir, "adapters.json"), JSON.stringify({ adapters: [fakeCargoAdapter({ workspaceRoot: root })] }));
+    const context: V1Context = { session, sessionDir: dir, jobs: null };
+    const scaffold = async (tool: string, args: Record<string, unknown>) => {
+      const outcome = await executeV1Operation(context, tool, { format: "json", repo: "vg", maxBytes: 32768, ...args });
+      expect(outcome.ok, outcome.body.slice(0, 300)).toBe(true);
+      return JSON.parse(outcome.body).details as Reply;
+    };
+    const dock = { type: "plain::Dock", source: { path: "src/lib.rs", symbol: "Dock" } };
+    const boat = { type: "plain::Boat", source: { path: "src/lib.rs", symbol: "Boat" } };
+    const env = { ...process.env, ...sdkGitEnv(), CARGO_TARGET_DIR: join(REPO_ROOT, "target", "scaffold-two"), CARGO_TERM_COLOR: "never" };
+    const cargo = (extra: Record<string, string>, ...args: string[]) => {
+      const result = spawnSync("cargo", [...args, "--features", "paneweft", "--offline"], { cwd: root, encoding: "utf8", env: { ...env, ...extra } });
+      return { status: result.status, output: `${result.stdout}${result.stderr}` };
+    };
+    const apply = (reply: Reply, options: { skipOutputTest?: boolean } = {}): void => {
+      for (const file of [...reply.patches, ...(options.skipOutputTest === true ? [] : [reply.outputTest])]) {
+        mkdirSync(dirname(join(root, file.path)), { recursive: true });
+        const into = /add inside the existing `mod (\w+)`/.exec(file.text.split("\n")[0] ?? "")?.[1];
+        if (into === undefined) appendFileSync(join(root, file.path), `\n${file.text}`);
+        else writeFileSync(join(root, file.path), insideModule(readFileSync(join(root, file.path), "utf8"), into, file.text));
+      }
+      const fetched = spawnSync("cargo", ["fetch"], { cwd: root, encoding: "utf8", env });
+      expect(fetched.status, fetched.stderr).toBe(0);
+    };
+    return { scaffold, apply, cargo, dock, boat, root, messages: (output: string) => output.split("\n").filter((line) => !/^\s*(Compiling|Checking|Fresh|Running|Finished)/.test(line)).join("\n").slice(0, 2500) };
+  }
+
+  // why: S2 (review field r1). A second view scaffold into the existing `paneweft_view_tests` module returned a test body that names the NEW type, and the module imports only the
+  // first one: `cargo test --no-run` failed E0412 for Dock. Applied as the reply says (inside the existing module), it must compile; a second view of the SAME type must too.
+  // proves: CLAIM(S2-view-imports)
+  it("a second view scaffold, for another type or for the same one, compiles inside the existing test module", async () => {
+    const world = await twoTypes();
+    world.apply(await world.scaffold("scaffold_view", { ...world.boat, question: "Which crew does this boat carry?" }));
+    const dock = await world.scaffold("scaffold_view", { ...world.dock, question: "Which dock is this?" });
+    expect(dock.outputTest.text).toMatch(/inside the existing `mod paneweft_view_tests`/);
+    world.apply(dock);
+    const again = await world.scaffold("scaffold_view", { ...world.boat, question: "What is the boat called?" });
+    world.apply({ ...again, patches: [] }); // a type has ONE views impl: the reply says to extend the existing one, so only its test is applied here
+    const built = world.cargo({}, "test", "--no-run");
+    expect(built.status, `the repeated scaffolds must compile as given:\n${world.messages(built.output)}`).toBe(0);
+  }, 600_000);
+
+  // why: S2. The example scaffold had the same failure: the second example, for another type, went into the existing `paneweft_examples` module, whose comment said it already
+  // imports the type, and it imports only the first one.
+  // proves: CLAIM(S2-example-imports)
+  it("a second example scaffold for another type compiles inside the existing examples module", async () => {
+    const world = await twoTypes();
+    world.apply(await world.scaffold("scaffold_view", { ...world.boat, question: "Which crew does this boat carry?" }), { skipOutputTest: true });
+    world.apply(await world.scaffold("scaffold_view", { ...world.dock, question: "Which dock is this?" }), { skipOutputTest: true });
+    world.apply(await world.scaffold("scaffold_example", { ...world.boat, example: "boat.new" }), { skipOutputTest: true });
+    const dock = await world.scaffold("scaffold_example", { ...world.dock, example: "dock.new" });
+    expect(dock.patches[0]!.text).toMatch(/inside the existing `mod paneweft_examples`/);
+    world.apply(dock, { skipOutputTest: true });
+    const built = world.cargo({}, "test", "--no-run");
+    expect(built.status, `the repeated example scaffolds must compile as given:\n${world.messages(built.output)}`).toBe(0);
+  }, 600_000);
 });
 
 describe("[F12] the TypeScript scaffold brings the manifest, the reporter wiring and the SDK install", () => {
