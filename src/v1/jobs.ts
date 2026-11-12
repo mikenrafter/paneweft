@@ -578,6 +578,8 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
   async function finish(id: string, intent: Intent, adapter: AdapterRecord, qexJob: QexJob): Promise<void> {
     const cancelRequested = (await readJson<{ requested?: boolean }>(join(jobDir(id), "cancel.json")))?.requested === true;
     const neverRan = qexJob.state === "cancelled" || qexJob.state === "skipped";
+    // CLAIM(T3-cancel-too-late): a run is `cancelled` only when a cancel was requested AND qex stopped the job for it (killed), or the job never ran
+    // (above). A job that completed, failed or timed out on its own keeps its real outcome, whatever was asked after it stopped.
     const leased = await withLease(id, async () => {
       const terminal = await readState(id);
       if (terminal !== undefined && TERMINAL_JOB_STATES.includes(terminal.state)) return;
@@ -594,7 +596,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
       else {
         // CLAIM(T1-terminal): a finish that fails (the import above all) ends the job `failed` with a diagnostic; it never leaves the job `importing`.
         try {
-          outcome = intent.params.mode === "catalogue" ? await finalizeCatalogue(id, intent, adapter, qexJob, log) : await finalizeRun(id, intent, adapter, qexJob, log, cancelRequested || qexJob.state === "killed" && cancelRequested);
+          outcome = intent.params.mode === "catalogue" ? await finalizeCatalogue(id, intent, adapter, qexJob, log) : await finalizeRun(id, intent, adapter, qexJob, log, cancelRequested && qexJob.state === "killed");
         } catch (cause) {
           if (typeof cause === "object" && cause !== null && injected.has(cause)) throw cause;
           outcome = await failedFinish(id, intent, cause);

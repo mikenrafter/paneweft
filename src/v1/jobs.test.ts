@@ -11,7 +11,7 @@ import { FIXTURES, fakeCargoAdapter, loadFixture, useFakeQex, useV1Sessions } fr
 import { must, mustFail } from "../../test/helpers/must.ts";
 import { Capture, defineType } from "../../packages/paneweft-ts/src/index.ts";
 import { specLimits } from "../../packages/paneweft-ts/test/support.ts";
-import { err } from "../core/errors.ts";
+import { err, ok } from "../core/errors.ts";
 import type { QexClient } from "./qex.ts";
 import { buildQexSubmitArgv, createJobService, type CrashPoint, type JobService } from "./jobs.ts";
 import { openV1Reader } from "./read.ts";
@@ -858,3 +858,33 @@ describe("[T2] cancel never writes job state outside the lease", () => {
   });
 });
 
+describe("[T3] cancelled means the cancel stopped the job", () => {
+  // WHY CLAIM(T3-cancel-too-late): `cancelRequested || killed && cancelRequested` is `cancelRequested`: a job that completed between cancel's status check and
+  // `qex cancel` was labelled cancelled, and cancel said cancelled. Rejects labelling by the request alone.
+  it("a job that finished before qex cancel keeps its outcome and cancel replies cancel-too-late", async () => {
+    const { session, dir, qex, adapter } = await world();
+    let stale = false;
+    const client: QexClient = { ...qex.client, status: async (id) => {
+      const real = await qex.client.status(id);
+      if (stale && real.ok) { stale = false; return ok({ ...real.value, state: "running" as const, exit_code: null }); }
+      return real;
+    } };
+    const service = createJobService({ session, sessionDir: dir, qex: client, adapters: [adapter], catalogueFor: async () => catalogue, cancelWaitMs: 3000 });
+    must(await service.collect(request("t3")), "collect");
+    await vi.waitFor(() => expect(qex.jobs()[0]?.state).toBe("completed"), { timeout: 15_000, interval: 25 });
+    stale = true;
+    const result = must(await service.cancel("t3"), "cancel");
+    expect(result).toMatchObject({ outcome: "cancel-too-late", state: "succeeded", collectionStatus: "succeeded" });
+    expect(must(await service.status("t3"), "status")).toMatchObject({ state: "succeeded", collectionStatus: "succeeded" });
+    expect(must(await openV1Reader(session).run("run-t3"), "run").run.collection.status).toBe("succeeded");
+  });
+
+  // WHY CLAIM(T3-cancel-too-late): the counterpart: a job the cancel did stop is still cancelled (kill of a running job), so the fix is not "never cancelled".
+  it("a running job that qex killed because of the cancel is cancelled", async () => {
+    const { dir, qex, service } = await world();
+    qex.scenario({ mode: "heartbeat", heartbeatFile: join(dir, "hb3"), readyFile: join(dir, "ready3") });
+    must(await service().collect(request("t3b")), "collect");
+    await vi.waitFor(() => expect(existsSync(join(dir, "ready3"))).toBe(true), { timeout: 15_000, interval: 25 });
+    expect(must(await service().cancel("t3b"), "cancel")).toMatchObject({ outcome: "cancelled", state: "cancelled", collectionStatus: "cancelled" });
+  });
+});
