@@ -399,7 +399,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     }
   }
 
-  async function readStaging(stagingDir: string): Promise<{ invocations: Array<{ started: Record<string, unknown> | null; completed: Record<string, unknown> | null }>; captures: Map<string, { document: unknown; file: string }>; reporter: unknown; typecheck: { exitCode: number; output: string } | undefined; parts: Array<{ name: string; document: Record<string, unknown> }> }> {
+  async function readStaging(stagingDir: string): Promise<{ invocations: Array<{ started: Record<string, unknown> | null; completed: Record<string, unknown> | null }>; captures: Map<string, { document: unknown; file: string; bytes: number }>; reporter: unknown; typecheck: { exitCode: number; output: string } | undefined; parts: Array<{ name: string; document: Record<string, unknown> }> }> {
     const list = async (sub: string): Promise<string[]> => (await readdir(join(stagingDir, sub)).catch(() => [])).sort();
     const started = new Map<string, Record<string, unknown>>();
     const completed = new Map<string, Record<string, unknown>>();
@@ -413,10 +413,12 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     const timeOf = (id: string): string => String((started.get(id) ?? completed.get(id))?.startedAt ?? "");
     const natural = (a: string, b: string): number => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0);
     ids.sort((a, b) => (timeOf(a) < timeOf(b) ? -1 : timeOf(a) > timeOf(b) ? 1 : natural(a, b)));
-    const captures = new Map<string, { document: unknown; file: string }>();
+    const captures = new Map<string, { document: unknown; file: string; bytes: number }>();
     for (const name of await list("captures")) {
-      const document = await readJson<unknown>(join(stagingDir, "captures", name));
-      if (document !== undefined) captures.set(name.replace(/\.json$/, ""), { document, file: join(stagingDir, "captures", name) });
+      // the size of a capture is the size of the file the worker wrote, which is the text its SDK counted
+      const text = await readFile(join(stagingDir, "captures", name), "utf8").catch(() => undefined);
+      const document = text === undefined ? undefined : (() => { try { return JSON.parse(text) as unknown; } catch { return undefined; } })();
+      if (text !== undefined && document !== undefined) captures.set(name.replace(/\.json$/, ""), { document, file: join(stagingDir, "captures", name), bytes: Buffer.byteLength(text, "utf8") });
     }
     const parts: Array<{ name: string; document: Record<string, unknown> }> = [];
     for (const name of await list("catalogue")) {
@@ -518,7 +520,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     const resolved = intent.resolved as NonNullable<Intent["resolved"]>;
     const runId = resolved.runId;
     const finalizedPath = join(jobDir(id), "finalized.json");
-    let finalized = await readJson<{ run: TestRun; graphs: unknown[]; diagnostics: Diagnostic[] }>(finalizedPath);
+    let finalized = await readJson<{ run: TestRun; graphs: unknown[]; graphBytes?: number[]; diagnostics: Diagnostic[] }>(finalizedPath);
     if (finalized === undefined) {
       const staging = await readStaging(resolved.stagingDir);
       const diagnostics: Diagnostic[] = [];
@@ -528,11 +530,13 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
         diagnostics.push(why);
       };
       const graphs: unknown[] = [];
+      const graphBytes: number[] = [];
       const rejected = new Map<string, string>();
-      for (const [captureId, { document, file }] of staging.captures) {
-        const checked = validateObjectGraph(document, { expectedRunId: runId });
+      for (const [captureId, { document, file, bytes }] of staging.captures) {
+        const checked = validateObjectGraph(document, { expectedRunId: runId, byteLength: bytes, ...(adapter.limitCeilings === undefined ? {} : { ceilings: adapter.limitCeilings }) });
         if (checked.ok) {
           graphs.push(document);
+          graphBytes.push(bytes);
           continue;
         }
         const foreign = checked.error.errors.some((fault) => fault.pointer === "/runId");
@@ -581,10 +585,10 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
       for (const entry of graphs) for (const diagnostic of ((entry as { diagnostics?: Diagnostic[] }).diagnostics ?? [])) diagnostics.push(diagnostic);
       await writeDurably(join(jobDir(id), "job.log"), log.slice(-adapter.limits.logBytes));
       await writeDurably(join(jobDir(id), "diagnostics.json"), JSON.stringify(diagnostics));
-      finalized = { run, graphs, diagnostics };
+      finalized = { run, graphs, graphBytes, diagnostics };
       await writeDurably(finalizedPath, JSON.stringify(finalized));
     }
-    const imported = await importCollection(deps.session, { repo: adapter.repo, runId, jobId: id, origin: "host_collected", run: finalized.run, graphs: finalized.graphs }, { crashAt: (point) => crash(`import:${point}` as CrashPoint) });
+    const imported = await importCollection(deps.session, { repo: adapter.repo, runId, jobId: id, origin: "host_collected", run: finalized.run, graphs: finalized.graphs, ...(finalized.graphBytes === undefined ? {} : { graphBytes: finalized.graphBytes }), ...(adapter.limitCeilings === undefined ? {} : { ceilings: adapter.limitCeilings }) }, { crashAt: (point) => crash(`import:${point}` as CrashPoint) });
     if (!imported.ok) throw new Error(`import of ${runId} failed: ${imported.error.message}`);
     await crash("import:before-terminal-state");
     const counts = finalized.run.collection.counts as unknown as Record<string, number>;

@@ -6,7 +6,7 @@
 use crate::builders::{Budget, DetailsBuilder, TableBuilder, View, ViewBody};
 use crate::json::{canonical, sha256_hex};
 use crate::limits::Limits;
-use crate::meter::{json_bytes, json_string_bytes, Meter, RESERVE};
+use crate::bounded::{bytes_of, emit, emit_string, page_frame, serialize_graph, Charge, Ledger};
 use crate::value::{EncodeStats, Value};
 use serde_json::{json, Map, Value as Json};
 use std::cell::{Cell, RefCell};
@@ -157,10 +157,18 @@ impl Default for CaptureOptions {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ObjectGraph {
     json: Json,
+    text: String,
+    emergency: bool,
 }
 
 impl ObjectGraph {
     pub fn to_json(&self) -> Json { self.json.clone() }
+    /// The document as it is written: the text the bounded serializer counted is the text that goes to the file.
+    pub fn text(&self) -> &str { &self.text }
+    /// The size of the document in bytes.
+    pub fn bytes(&self) -> u64 { self.text.len() as u64 }
+    /// True when the final measure found the document over its bound and the empty marked graph was written instead. Never expected.
+    pub fn emergency(&self) -> bool { self.emergency }
 }
 
 struct ObjectRec {
@@ -172,8 +180,10 @@ struct ObjectRec {
     edges: Vec<Json>,
     views: Vec<String>,
     depth: u32,
-    /// The label text the byte budget was charged for.
-    charged_label: String,
+    /// The bytes of the label the ledger was charged for.
+    label_bytes: u64,
+    /// The bytes each declared field was charged: its name, the colon and its encoded value.
+    field_bytes: HashMap<String, u64>,
 }
 
 /// Why a bound refused a reference, as the wire reason and the name under which the omission is counted.
@@ -223,17 +233,25 @@ pub(crate) struct State {
     path: Vec<usize>,
     references: u64,
     omitted: BTreeMap<String, u64>,
-    /// Bytes of JSON text charged to the current root and to the whole collection WHILE the graph is built (S2): object records, field
-    /// values, edges, view records and their data, stored page bodies and diagnostics. Nothing is measured after the fact.
-    meter: Rc<Meter>,
+    /// The bytes every part of the document is charged to as it is built (S2): object records, field values, edges, view records and their
+    /// data, stored page bodies and diagnostics, each by the size of the text it becomes. It starts with the document's own frame.
+    ledger: Rc<Ledger>,
+    sealed: bool,
     faulted: bool,
-    /// What `Context::enter_view` already paid for the frame of each open view record, by object and invocation (S23).
-    reservations: HashMap<Reservation, u64>,
+    /// What `Context::enter_view` already paid for the frame of each open view record, and what the view itself charged, by object and
+    /// invocation (S23).
+    reservations: HashMap<Reservation, (u64, Rc<Charge>)>,
     /// The next invocation number of a view.
     next_invocation: u64,
     /// Time spent publishing children, so a parent view's budget measures only its own computation.
     nested_ns: Rc<Cell<u128>>,
 }
+
+/// Every name under which a capture counts what it left out.
+const OMISSION_NAMES: [&str; 13] = ["collectionBytes", "depth", "diagnostics", "fields", "labels", "objects", "references", "rootBytes", "roots", "rows", "strings", "values", "views"];
+
+/// The hash an object record carries is 64 hex digits; its place is paid for before the fields that it covers exist.
+fn content_hash_placeholder() -> String { "0".repeat(64) }
 
 fn next_action(category: &str) -> &'static str {
     match category {
@@ -252,6 +270,8 @@ const DIAGNOSTIC_CATEGORIES: [&str; 10] = ["compiler", "typecheck", "assertion",
 impl State {
     fn new(options: CaptureOptions) -> State {
         let limits = options.limits;
+        let widest: Map<String, Json> = OMISSION_NAMES.iter().map(|name| ((*name).to_string(), json!({"known": true, "count": u64::MAX}))).collect();
+        let frame = bytes_of(&document(&options, &[], &[], &[], &[], &[], json!({"status": "partial", "omitted": widest})));
         State {
             options,
             objects: Vec::new(),
@@ -263,7 +283,8 @@ impl State {
             path: Vec::new(),
             references: 0,
             omitted: BTreeMap::new(),
-            meter: Rc::new(Meter::new(limits.root_bytes, limits.collection_bytes)),
+            ledger: Rc::new(Ledger::new(limits.root_bytes, limits.collection_bytes, frame)),
+            sealed: frame > limits.collection_bytes,
             faulted: false,
             reservations: HashMap::new(),
             next_invocation: 0,
@@ -294,29 +315,30 @@ impl State {
         }
         // a diagnostic is charged like everything else; when even it does not fit it is counted, and a fault still fails the capture
         let entry = Json::Object(entry);
-        let cost = json_bytes(&entry) + 1;
-        if cost > self.meter.room() {
-            self.count("diagnostics", 1);
-        } else {
-            self.meter.spend(cost);
+        if self.ledger.take(bytes_of(&entry) + u64::from(!self.diagnostics.is_empty())) {
             self.diagnostics.push(entry);
+        } else {
+            self.count("diagnostics", 1);
         }
         id
     }
 
-    /// Charges and stores a declared field. The value is encoded against the byte budget; what does not fit is cut and counted.
+    /// Charges and stores a declared field. The name is charged as the text it becomes, then the value is encoded against what is left; what
+    /// does not fit is cut and counted.
     fn set_field(&mut self, object: usize, name: &str, value: Value) {
         let known = self.objects[object].fields.contains_key(name);
-        let name_bytes = if known { Some(0) } else { json_string_bytes(name, self.meter.room().saturating_sub(RESERVE + 2)) };
-        let Some(name_bytes) = name_bytes else {
+        if known {
+            self.ledger.give(self.objects[object].field_bytes.get(name).copied().unwrap_or(0));
+        }
+        let separator = u64::from(!known && !self.objects[object].field_bytes.is_empty());
+        let Some(key) = emit_string(name, self.ledger.spare().saturating_sub(separator + 1)).filter(|key| self.ledger.take(separator + key.bytes + 1)) else {
             self.count("fields", 1);
             return;
         };
-        if !known {
-            self.meter.spend(name_bytes + 2);
-        }
+        let before = self.ledger.used();
         let mut stats = EncodeStats::default();
-        let encoded = value.encode_with(&self.limits(), &mut stats, Some(&self.meter), 0);
+        let encoded = value.encode_with(&self.limits(), &mut stats, &self.ledger, 0);
+        self.objects[object].field_bytes.insert(name.to_string(), key.bytes + 1 + (self.ledger.used() - before));
         self.count("strings", stats.strings);
         self.count("values", stats.values);
         self.objects[object].fields.insert(name.to_string(), encoded);
@@ -324,37 +346,34 @@ impl State {
 
     fn set_label(&mut self, object: usize, text: &str) {
         let label = crate::value::cut_str(text, 256).0.to_string();
-        let delta = json_bytes(&Json::String(label.clone())) as i64 - json_bytes(&Json::String(self.objects[object].charged_label.clone())) as i64;
-        if delta > 0 && delta as u64 > self.meter.room().saturating_sub(RESERVE) {
+        let bytes = bytes_of(&Json::String(label.clone()));
+        let old = self.objects[object].label_bytes;
+        if bytes > old && !self.ledger.take(bytes - old) {
             self.count("labels", 1);
             return;
         }
-        if delta >= 0 {
-            self.meter.spend(delta as u64);
-        } else {
-            self.meter.refund((-delta) as u64);
+        if bytes < old {
+            self.ledger.give(old - bytes);
         }
-        self.objects[object].label = Some(label.clone());
-        self.objects[object].charged_label = label;
+        self.objects[object].label = Some(label);
+        self.objects[object].label_bytes = bytes;
     }
 
     /// Records an edge if the budget has room for it; reports whether it did.
     fn add_edge(&mut self, object: usize, edge: Json) -> bool {
-        let cost = json_bytes(&edge) + 1;
-        if cost > self.meter.room().saturating_sub(RESERVE) {
+        if !self.ledger.take(bytes_of(&edge) + u64::from(!self.objects[object].edges.is_empty())) {
             return false;
         }
-        self.meter.spend(cost);
         self.objects[object].edges.push(edge);
         true
     }
 
-    /// The byte bound that refuses a new object whose record and edge need `need` bytes, if any.
-    fn byte_refusal(&self, need: u64, is_root: bool) -> Option<Bound> {
-        if need <= self.meter.room().saturating_sub(RESERVE) {
+    /// The byte bound that refuses `bytes` more, if any.
+    fn byte_refusal(&self, bytes: u64, is_root: bool) -> Option<Bound> {
+        if bytes <= self.ledger.spare() {
             return None;
         }
-        Some(if !is_root && self.meter.root_is_closer() { Bound::RootBytes } else { Bound::CollectionBytes })
+        Some(if !is_root && self.ledger.reason() == crate::bounded::CutReason::RootBytes { Bound::RootBytes } else { Bound::CollectionBytes })
     }
 
     fn count(&mut self, name: &str, amount: u64) {
@@ -402,7 +421,7 @@ impl State {
                 }
                 let kind = if self.path.contains(&index) { "cycle" } else { "alias" };
                 if !self.add_edge(*owner, json!({"name": name, "kind": kind, "target": id})) {
-                    let bound = if self.meter.root_is_closer() { Bound::RootBytes } else { Bound::CollectionBytes };
+                    let bound = self.byte_refusal(u64::MAX, false).unwrap_or(Bound::CollectionBytes);
                     return self.refuse(&parent, bound);
                 }
                 self.references += 1;
@@ -414,7 +433,7 @@ impl State {
             return self.refuse(&parent, bound);
         }
         if parent.is_none() {
-            self.meter.reset_root(); // a root starts a fresh root budget
+            self.ledger.start_root(); // a root starts a fresh root budget
         }
         let index = self.objects.len();
         let id = format!("o{}", index + 1);
@@ -430,16 +449,22 @@ impl State {
         };
         let default_label = crate::value::cut_str(&domain_key.clone().unwrap_or_else(|| type_id.rsplit("::").next().unwrap_or(type_id).to_string()), 256).0.to_string();
         let child_edge = parent.as_ref().map(|(_, name)| json!({"name": name, "kind": "child", "target": id}));
-        let edge_cost = child_edge.as_ref().map_or(0, |edge| json_bytes(edge) + 1);
-        let skeleton = 170 + json_bytes(&json!(id)) + json_bytes(&json!(type_id)) + json_bytes(&json!(domain_key)) + json_bytes(&json!(default_label)) + edge_cost;
-        if let Some(bound) = self.byte_refusal(skeleton, parent.is_none()) {
+        // the record of the object, its entry in the root list and the edge that reaches it are charged before the object exists: no room, no object
+        let record = bytes_of(&json!({"id": id, "typeId": type_id, "domainKey": domain_key, "label": default_label, "fields": {}, "edges": [], "views": [], "contentHash": content_hash_placeholder()})) + u64::from(!self.objects.is_empty());
+        let listed = if parent.is_none() { bytes_of(&json!(id)) + u64::from(!self.roots.is_empty()) } else { 0 };
+        let edge = match (&child_edge, &parent) {
+            (Some(edge), Some((owner, _))) => bytes_of(edge) + u64::from(!self.objects[*owner].edges.is_empty()),
+            _ => 0,
+        };
+        if let Some(bound) = self.byte_refusal(record + listed + edge, parent.is_none()) {
             return self.refuse(&parent, bound);
         }
-        self.meter.spend(skeleton - edge_cost);
+        self.ledger.take(record + listed);
         if key_cut {
             self.count("strings", 1);
         }
-        self.objects.push(ObjectRec { id: id.clone(), type_id, domain_key, label: None, fields: Map::new(), edges: Vec::new(), views: Vec::new(), depth: parent_depth.map_or(0, |d| d + 1), charged_label: default_label });
+        let label_bytes = bytes_of(&json!(default_label));
+        self.objects.push(ObjectRec { id: id.clone(), type_id, domain_key, label: None, fields: Map::new(), edges: Vec::new(), views: Vec::new(), depth: parent_depth.map_or(0, |d| d + 1), label_bytes, field_bytes: HashMap::new() });
         if let Some(token) = token {
             self.by_token.insert(token.to_string(), index);
         }
@@ -457,11 +482,15 @@ impl State {
         self.path.push(index);
         let started = Instant::now();
         let outcome = {
-            let mut cx = Context { state: self, object: index, view: None, view_best_effort: false, any_best_effort: false };
-            catch_unwind(AssertUnwindSafe(|| {
+            let mut cx = Context { state: self, object: index, charge: None, loose: Vec::new(), view: None, view_best_effort: false, any_best_effort: false };
+            let outcome = catch_unwind(AssertUnwindSafe(|| {
                 let set = value.views(&mut cx);
                 (set, cx.any_best_effort)
-            }))
+            }));
+            for charge in std::mem::take(&mut cx.loose) {
+                cx.state.ledger.give(charge.bytes());
+            }
+            outcome
         };
         self.path.pop();
         self.nested_ns.set(self.nested_ns.get() + started.elapsed().as_nanos());
@@ -475,8 +504,8 @@ impl State {
                 // the set that held the open invocations is gone: their reservations are returned, or they stay spent for the whole capture
                 let lost: Vec<Reservation> = self.reservations.keys().filter(|key| key.object == index).copied().collect();
                 for key in lost {
-                    if let Some(bytes) = self.reservations.remove(&key) {
-                        self.meter.refund(bytes);
+                    if let Some((prepaid, charge)) = self.reservations.remove(&key) {
+                        self.ledger.give(prepaid + charge.bytes());
                     }
                 }
                 let message = format!("views() of {} panicked: {}", self.objects[index].type_id, panic_message(payload.as_ref()));
@@ -486,26 +515,29 @@ impl State {
         ObjectRef::Captured(id)
     }
 
+    /// Settles a view against the text it becomes: the record, its stored pages and its entries in the lists that name them are measured by the
+    /// serializer, and the difference to what was charged while the view was built is charged or given back. A view that no longer fits is dropped.
     fn record_view(&mut self, index: usize, entry: ViewEntry, object_best_effort: bool) {
         let ViewEntry { meta, result, best_effort, reservation } = entry;
         let object_id = self.objects[index].id.clone();
         // only THIS invocation's reservation is settled: a child that ran the same view (or was refused) holds, or gives back, its own
-        let prepaid = reservation.and_then(|key| self.reservations.remove(&key)).unwrap_or(0);
+        let paid = reservation.and_then(|key| self.reservations.remove(&key)).map_or(0, |(prepaid, charge)| prepaid + charge.bytes());
         if self.objects[index].views.iter().any(|existing| existing == meta.id) {
-            self.meter.refund(prepaid);
+            self.ledger.give(paid);
             self.add_diagnostic("registration", &format!("object {object_id} computed two views with the id {}", meta.id), Some(meta.id), None, None);
             return;
         }
         let view = match result {
             Ok(view) => view,
             Err(error) => {
-                self.meter.refund(prepaid);
+                self.ledger.give(paid);
                 self.add_diagnostic(&error.category, &error.message, Some(meta.id), None, None);
                 return;
             }
         };
         let consistency = (best_effort || object_best_effort).then_some("best-effort");
         let mut pending_pages: Vec<Json> = Vec::new();
+        let mut counted: Vec<(String, u64)> = Vec::new();
         let mut record = Map::new();
         record.insert("viewId".into(), json!(meta.id));
         record.insert("objectId".into(), json!(object_id));
@@ -528,7 +560,7 @@ impl State {
             ViewBody::Built(built) => {
                 if built.component != meta.component {
                     let message = format!("view {} declares component {:?} but built a {:?}", meta.id, meta.component, built.component);
-                    self.meter.refund(prepaid);
+                    self.ledger.give(paid);
                     self.add_diagnostic("output-schema", &message, Some(meta.id), None, None);
                     return;
                 }
@@ -540,9 +572,7 @@ impl State {
                     completeness.insert("reason".into(), json!(if built.omitted.contains_key("rows") { "row-limit" } else { "string-limit" }));
                     let omitted: Map<String, Json> = built.omitted.iter().map(|(name, count)| (name.clone(), json!({"known": true, "count": count}))).collect();
                     completeness.insert("omitted".into(), Json::Object(omitted));
-                    for (name, count) in &built.omitted {
-                        self.count(name, *count);
-                    }
+                    counted.extend(built.omitted.iter().map(|(name, count)| (name.clone(), *count)));
                 }
                 if let Some(mode) = consistency {
                     completeness.insert("consistency".into(), json!(mode));
@@ -564,27 +594,27 @@ impl State {
                 }
             }
         }
-        // the view's data and pages were charged while the builders produced them (the page references with their pages); the record
-        // around them and its entry in the object are settled against what `enter_view` paid up front
-        let mut frame = record.clone();
-        frame.remove("data");
-        frame.remove("pages");
-        let cost = json_bytes(&Json::Object(frame)) + json_bytes(&json!(meta.id)) + 2;
-        if cost > prepaid && cost - prepaid > self.meter.room() {
-            self.meter.refund(prepaid);
+        let record = Json::Object(record);
+        let mut exact = bytes_of(&record) + u64::from(!self.views.is_empty()) + bytes_of(&json!(meta.id)) + u64::from(!self.objects[index].views.is_empty());
+        for (offset, page) in pending_pages.iter().enumerate() {
+            exact += bytes_of(page) + u64::from(!self.pages.is_empty() || offset > 0);
+        }
+        if exact > paid && !self.ledger.take(exact - paid) {
+            self.ledger.give(paid);
             self.count("views", 1);
             let message = format!("view {} of object {object_id} was dropped: the byte budget of this capture is used up", meta.id);
             self.add_diagnostic("limit", &message, Some(meta.id), None, None);
             return;
         }
-        if cost > prepaid {
-            self.meter.spend(cost - prepaid);
-        } else {
-            self.meter.refund(prepaid - cost);
+        if exact < paid {
+            self.ledger.give(paid - exact);
+        }
+        for (name, amount) in counted {
+            self.count(&name, amount);
         }
         self.pages.extend(pending_pages);
         self.objects[index].views.push(meta.id.to_string());
-        self.views.push(Json::Object(record));
+        self.views.push(record);
     }
 
     fn object_json(&self, index: usize) -> Json {
@@ -605,36 +635,50 @@ impl State {
         })
     }
 
+    /// The finished document, serialized once by the bounded serializer. When the bound cannot hold even the empty document, or the measure of
+    /// the text disagrees with the ledger, the empty marked graph is written (the host refuses the first, and the second is a defect).
     fn finish(self) -> ObjectGraph {
-        let objects: Vec<Json> = (0..self.objects.len()).map(|index| self.object_json(index)).collect();
-        let completeness = if self.omitted.is_empty() {
-            json!({"status": "complete"})
-        } else {
-            let omitted: Map<String, Json> = self.omitted.iter().map(|(name, count)| (name.clone(), json!({"known": true, "count": count}))).collect();
-            json!({"status": "partial", "omitted": omitted})
-        };
-        ObjectGraph {
-            json: json!({
-                "schemaVersion": "paneweft.object-graph/1",
-                "captureId": self.options.capture_id,
-                "runId": self.options.run_id,
-                "invocationId": self.options.invocation_id,
-                "roots": self.roots,
-                "objects": objects,
-                "views": self.views,
-                "pages": self.pages,
-                "diagnostics": self.diagnostics,
-                "limits": self.options.limits.to_json(),
-                "completeness": completeness,
-            }),
+        let omitted: Map<String, Json> = self.omitted.iter().map(|(name, count)| (name.clone(), json!({"known": true, "count": count}))).collect();
+        let completeness = if omitted.is_empty() { json!({"status": "complete"}) } else { json!({"status": "partial", "omitted": omitted}) };
+        let empty = || document(&self.options, &[], &[], &[], &[], &[], json!({"status": "partial", "omitted": {"collectionBytes": {"known": true, "count": self.omitted.get("collectionBytes").copied().unwrap_or(0).max(1)}}}));
+        if self.sealed {
+            let text = emit(&empty());
+            return ObjectGraph { json: serde_json::from_str(&text.text).expect("the document is JSON"), text: text.text, emergency: false };
         }
+        let objects: Vec<Json> = (0..self.objects.len()).map(|index| self.object_json(index)).collect();
+        let document = document(&self.options, &self.roots, &objects, &self.views, &self.pages, &self.diagnostics, completeness);
+        let emission = serialize_graph(&document, self.options.limits.collection_bytes, empty);
+        let json = if emission.emergency { serde_json::from_str(&emission.text).expect("the document is JSON") } else { document };
+        ObjectGraph { json, text: emission.text, emergency: emission.emergency }
     }
+}
+
+/// The document, member by member. The frame (everything but the lists) is what the ledger was charged for before any content.
+fn document(options: &CaptureOptions, roots: &[String], objects: &[Json], views: &[Json], pages: &[Json], diagnostics: &[Json], completeness: Json) -> Json {
+    json!({
+        "schemaVersion": "paneweft.object-graph/1",
+        "captureId": options.capture_id,
+        "runId": options.run_id,
+        "invocationId": options.invocation_id,
+        "roots": roots,
+        "objects": objects,
+        "views": views,
+        "pages": pages,
+        "diagnostics": diagnostics,
+        "limits": options.limits.to_json(),
+        "completeness": completeness,
+    })
 }
 
 /// Passed to view functions: bounded builders, references and the object's own fields.
 pub struct Context<'a> {
     state: &'a mut State,
     object: usize,
+    /// What the view being computed has charged; set for the length of one view.
+    charge: Option<Rc<Charge>>,
+    /// What builders created outside a view (their result is pushed, not run) have charged. `State::open` gives it back before the pushed
+    /// entries are settled, and each entry then pays for the text it becomes.
+    loose: Vec<Rc<Charge>>,
     view: Option<&'static str>,
     view_best_effort: bool,
     any_best_effort: bool,
@@ -645,16 +689,17 @@ impl<'a> Context<'a> {
     /// without one; `record_view` settles the difference. Returns the reservation, or `None` (and counts the omission) when there is no room for the frame.
     pub(crate) fn enter_view(&mut self, meta: ViewMeta) -> Option<Reservation> {
         let object_id = self.state.objects[self.object].id.clone();
-        let frame = json!({"viewId": meta.id, "objectId": object_id, "title": meta.title, "question": meta.question, "component": meta.component, "priority": meta.priority, "evidence": {"provenance": "observed", "runId": self.state.options.run_id}, "completeness": {"status": "partial", "reason": "row-limit", "omitted": {"rows": {"known": true, "count": 1_000_000_000u64}, "strings": {"known": true, "count": 1_000_000_000u64}}}, "pages": []});
-        let prepaid = json_bytes(&frame) + json_bytes(&json!(meta.id)) + 2 + 160;
-        if prepaid > self.state.meter.room().saturating_sub(RESERVE) {
+        let frame = json!({"viewId": meta.id, "objectId": object_id, "title": meta.title, "question": meta.question, "component": meta.component, "priority": meta.priority, "evidence": {"provenance": "observed", "runId": self.state.options.run_id}, "completeness": {"status": "partial", "reason": "row-limit", "omitted": {"rows": {"known": true, "count": u64::MAX}, "strings": {"known": true, "count": u64::MAX}}}, "data": 0, "rowsTotal": u64::MAX, "pages": []});
+        let prepaid = bytes_of(&frame) + bytes_of(&json!(meta.id)) + 2;
+        if !self.state.ledger.take(prepaid) {
             self.state.count("views", 1);
             return None;
         }
-        self.state.meter.spend(prepaid);
         let reservation = Reservation { object: self.object, invocation: self.state.next_invocation };
         self.state.next_invocation += 1;
-        self.state.reservations.insert(reservation, prepaid);
+        let charge = Rc::new(Charge::new(self.state.ledger.clone()));
+        self.state.reservations.insert(reservation, (prepaid, charge.clone()));
+        self.charge = Some(charge);
         self.view = Some(meta.id);
         self.view_best_effort = false;
         Some(reservation)
@@ -662,6 +707,7 @@ impl<'a> Context<'a> {
 
     pub(crate) fn leave_view(&mut self) -> bool {
         self.view = None;
+        self.charge = None;
         std::mem::take(&mut self.view_best_effort)
     }
 
@@ -669,8 +715,24 @@ impl<'a> Context<'a> {
         Budget::start(self.state.nested_ns.clone(), self.state.limits().view_budget_ms)
     }
 
-    pub fn details(&mut self) -> DetailsBuilder { DetailsBuilder::new(self.state.limits(), self.budget(), self.state.meter.clone()) }
-    pub fn table(&mut self) -> TableBuilder { TableBuilder::new(self.state.limits(), self.budget(), self.state.meter.clone()) }
+    fn charge(&mut self) -> Rc<Charge> {
+        if let Some(charge) = &self.charge {
+            return charge.clone();
+        }
+        let charge = Rc::new(Charge::new(self.state.ledger.clone()));
+        self.loose.push(charge.clone());
+        charge
+    }
+
+    pub fn details(&mut self) -> DetailsBuilder {
+        let charge = self.charge();
+        DetailsBuilder::new(self.state.limits(), self.budget(), charge)
+    }
+    pub fn table(&mut self) -> TableBuilder {
+        let (object, view, page_rows) = (self.state.objects[self.object].id.clone(), self.view.unwrap_or("").to_string(), self.state.limits().page_rows);
+        let charge = self.charge();
+        TableBuilder::new(self.state.limits(), self.budget(), charge, Box::new(move |index| page_frame(&object, &view, index, page_rows)))
+    }
 
     /// Publishes `value` as a NEW observation and returns a reference. Beyond a bound it returns `ObjectRef::NotCaptured`, not an error.
     ///

@@ -2,7 +2,8 @@
 // exhaustion gives partial output, never a failed view. Lowering follows docs/v1-red-contract.md section 3.
 import { createHash } from "node:crypto";
 import { ViewError, type Bounded, type Direction, type Json, type Limits, type ObjectRef } from "./types.ts";
-import { RESERVE, exceedsCodePoints, newStats, scalarOf, typeName, type ByteMeter, type CapturedValue, type EncodeStats } from "./values.ts";
+import { emit, type Charge } from "./bounded.ts";
+import { exceedsCodePoints, newStats, scalarOf, typeName, type CapturedValue, type EncodeStats } from "./values.ts";
 
 export interface BuiltPage {
   pageId: string;
@@ -72,14 +73,13 @@ function omissions(rows: number, strings: number): Record<string, number> | unde
   return Object.keys(omitted).length === 0 ? undefined : omitted;
 }
 
-const jsonBytes = (json: Json): number => Buffer.byteLength(JSON.stringify(json), "utf8");
 /** A view that cannot even hold its frame in the byte budget says so instead of failing. */
 const NO_ROOM = "the byte budget of this capture is used up: the view could not be built";
 
 export class DetailsBuilder {
   private readonly fields: Array<[string, CapturedValue]> = [];
   private omitted = 0;
-  constructor(private readonly limits: Limits, private readonly budget: Budget, private readonly meter?: ByteMeter) {}
+  constructor(private readonly limits: Limits, private readonly budget: Budget, private readonly charge: Charge) {}
 
   /** Fluent. When the builder is full the field is refused and counted; the omission shows in the view's completeness. */
   field(name: string, value: CapturedValue): this {
@@ -93,12 +93,9 @@ export class DetailsBuilder {
     const seen = new Set<string>();
     const leaves: Json[] = [];
     const children: string[] = [];
-    // the frame of the shape (root field, basis, root) is charged first; each field is then charged as it is built (S2)
-    const frame = 200;
-    if (this.meter !== undefined) {
-      if (this.meter.room() < frame + RESERVE) return { kind: "unsupported", reason: NO_ROOM };
-      this.meter.spend(frame);
-    }
+    const root = (ids: string[]): Json => ({ id: "details", path: "$", type: "object", presence: "required", children: ids, provenance: "observed", evidence: evidence() });
+    // the frame of the shape (root field, basis, root) is charged first; each field is then charged by the text it becomes (S2)
+    if (!this.charge.take(emit({ basis: "observed", root: "details", fields: [root([])] }).bytes)) return { kind: "unsupported", reason: NO_ROOM };
     let kept = 0;
     for (const [name, value] of this.fields) {
       validId("field name", name);
@@ -106,17 +103,14 @@ export class DetailsBuilder {
       seen.add(name);
       const id = `details.${name}`;
       const leaf: Json = { id, path: `$.${name}`, type: typeName(value), presence: "required", example: scalarOf(value, this.limits, stats), children: [], provenance: "observed", evidence: evidence() };
-      if (this.meter !== undefined) {
-        const cost = jsonBytes(leaf) + jsonBytes(id) + 2;
-        if (cost > this.meter.room() - RESERVE) break;
-        this.meter.spend(cost);
-      }
+      // the leaf in `fields` and its id in the root's `children`, each after a comma but the first id
+      if (!this.charge.take(emit(leaf).bytes + 1 + emit(id).bytes + (kept > 0 ? 1 : 0))) break;
       children.push(id);
       leaves.push(leaf);
       kept += 1;
     }
     this.omitted += this.fields.length - kept;
-    const fields: Json[] = [{ id: "details", path: "$", type: "object", presence: "required", children, provenance: "observed", evidence: evidence() }, ...leaves];
+    const fields: Json[] = [root(children), ...leaves];
     const omitted = omissions(this.omitted, stats.strings);
     const over = this.budget.over();
     return { kind: "built", component: "shape", data: { basis: "observed", root: "details", fields }, ...(omitted === undefined ? {} : { omitted }), ...(over === undefined ? {} : { overBudgetMs: over }) };
@@ -147,7 +141,7 @@ export class TableBuilder {
   private order: { key: string; direction: Direction } | undefined;
   private readonly rows: RowSpec[] = [];
   private omitted = 0;
-  constructor(private readonly limits: Limits, private readonly budget: Budget, private readonly meter?: ByteMeter) {}
+  constructor(private readonly limits: Limits, private readonly budget: Budget, private readonly charge: Charge, private readonly pageFrame: (index: number) => number) {}
 
   textColumn(key: string, title: string): this {
     this.columns.push({ key, title, format: "text" });
@@ -193,15 +187,12 @@ export class TableBuilder {
     const stats: EncodeStats = newStats();
     const ids = new Set<string>();
     const rendered: Array<{ sort: Json; row: Json }> = [];
-    // The frame (columns, order, the list record) is charged first. Rows are then charged in insertion order as they are rendered, page
-    // overhead included, and the rows that no longer fit are dropped and counted (S2): stored page bodies count like first-page rows.
+    // The frame (columns, order, the list record) is charged first. Rows are then charged in insertion order by the text they become, a stored
+    // page's own frame at the first row it holds, and the rows that no longer fit are dropped and counted (S2): stored page bodies count like
+    // first-page rows.
     const pageRows = Math.max(1, this.limits.pageRows);
-    const pageOverhead = 300;
-    if (this.meter !== undefined) {
-      const frame = 160 + jsonBytes(this.columns.map((column) => ({ key: column.key, title: column.title, format: column.format }))) + jsonBytes(order);
-      if (this.meter.room() < frame + RESERVE) return { kind: "unsupported", reason: NO_ROOM };
-      this.meter.spend(frame);
-    }
+    const columns = this.columns.map((column) => ({ key: column.key, title: column.title, format: column.format }));
+    if (!this.charge.take(emit({ columns, rows: [], order }).bytes)) return { kind: "unsupported", reason: NO_ROOM };
     for (const spec of this.rows) {
       validId("row id", spec.id);
       if (ids.has(spec.id)) throw new ViewError("output-schema", `duplicate row id ${JSON.stringify(spec.id)}: row ids are occurrence ids and must be unique`);
@@ -213,14 +204,11 @@ export class TableBuilder {
       }
       const row: { [key: string]: Json } = { id: spec.id, cells, provenance: "observed", evidence: evidence() };
       if (spec.target !== undefined) row.target = spec.target as Json;
-      if (this.meter !== undefined) {
-        const startsPage = rendered.length >= pageRows && (rendered.length - pageRows) % pageRows === 0;
-        const cost = jsonBytes(row) + 1 + (startsPage ? pageOverhead : 0);
-        if (cost > this.meter.room() - RESERVE) {
-          this.omitted += this.rows.length - rendered.length;
-          break;
-        }
-        this.meter.spend(cost);
+      const at = rendered.length;
+      const startsPage = at >= pageRows && at % pageRows === 0;
+      if (!this.charge.take(emit(row).bytes + (at % pageRows === 0 ? 0 : 1) + (startsPage ? this.pageFrame(at / pageRows) : 0))) {
+        this.omitted += this.rows.length - rendered.length;
+        break;
       }
       rendered.push({ sort: cells[order.key] ?? null, row });
     }
@@ -236,7 +224,6 @@ export class TableBuilder {
     }
     const omitted = omissions(this.omitted, stats.strings);
     const over = this.budget.over();
-    const columns = this.columns.map((column) => ({ key: column.key, title: column.title, format: column.format }));
     return { kind: "built", component: "list", data: { columns, rows: rows.slice(0, pageRows), order }, pages, rowsTotal: rows.length, ...(omitted === undefined ? {} : { omitted }), ...(over === undefined ? {} : { overBudgetMs: over }) };
   }
 }

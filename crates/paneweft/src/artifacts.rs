@@ -40,18 +40,32 @@ pub fn limits_from_env() -> crate::Limits {
 
 /// Writes `value` to `path` through a temporary sibling and a rename, so a reader never sees half a document.
 pub(crate) fn write_json(path: &Path, value: &Json) -> std::io::Result<()> {
+    write_text(path, serde_json::to_string(value).expect("a JSON value serializes").as_bytes())
+}
+
+/// Writes `bytes` through a temporary sibling and a rename. The text of a graph is the text the bounded serializer counted.
+pub(crate) fn write_text(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
-    std::fs::write(&temporary, serde_json::to_vec(value).expect("a JSON value serializes"))?;
+    std::fs::write(&temporary, bytes)?;
     std::fs::rename(&temporary, path)
 }
 
 /// Artifact writes must never mask a test result: a failure is reported on stderr and the run continues, and the host then counts
 /// the missing record.
 pub(crate) fn write_or_report(path: &Path, value: &Json) {
-    if let Err(error) = write_json(path, value) {
+    report(path, write_json(path, value));
+}
+
+/// As `write_or_report`, for text that was already serialized.
+pub(crate) fn write_text_or_report(path: &Path, text: &str) {
+    report(path, write_text(path, text.as_bytes()));
+}
+
+fn report(path: &Path, outcome: std::io::Result<()>) {
+    if let Err(error) = outcome {
         eprintln!("paneweft: could not write {}: {error}", path.display());
     }
 }

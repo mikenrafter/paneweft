@@ -5,7 +5,7 @@
 // and `exampleTest` rethrows `error` so the runner still fails.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { join } from "node:path";
-import { limitsFromEnv, stagingFromEnv, writeArtifact, type Staging } from "./artifacts.ts";
+import { limitsFromEnv, stagingFromEnv, writeArtifact, writeArtifactText, type Staging } from "./artifacts.ts";
 import { Capture, runWithCapture, type TypeToken } from "./capture.ts";
 import { callerLine } from "./callsite.ts";
 import type { Json } from "./types.ts";
@@ -217,7 +217,7 @@ export async function runExample<T>(definition: ExampleDefinition<T>, options: {
     summary.diagnostics = capture.diagnostics.map((d) => d.id);
     if (!didThrow || summary.diagnostics.length > 0) {
       summary.captureId = id;
-      writeArtifact(join(staging.dir, "captures", `${id}.json`), capture.finish().toJSON());
+      writeArtifactText(join(staging.dir, "captures", `${id}.json`), capture.finish().text);
     }
     summary.outcome = didThrow ? "none" : summary.root === undefined || capture.hasFault() ? "failed" : "captured";
   }

@@ -192,3 +192,62 @@ describe("[IV1] lowering a view record to a v0 envelope", () => {
     expect(rows.every((r: any) => r.target === undefined), "the SDK-only member is gone from the stored row").toBe(true);
   });
 });
+
+describe("[D1] the host measures the document it was given", () => {
+  const sizeOf = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), "utf8");
+  /** Declares exactly the size the document has once it declares it (the declared number is part of the document). */
+  const declareOwnSize = (graph: any): number => {
+    for (let round = 0; round < 4; round += 1) graph.limits.collectionBytes = sizeOf(graph);
+    return sizeOf(graph);
+  };
+
+  // why: D1. A graph that declares collectionBytes=N and is bigger than N was admitted: the declared limit was only ever checked by the SDK
+  // that produced the artifact, and a hostile or buggy SDK is exactly what admission is for. Rejects admission that trusts the SDK's accounting.
+  // proves: CLAIM(D1-host-ceilings)
+  it("refuses a graph that is larger than the collectionBytes it declares", () => {
+    const graph = fixture();
+    must(validateObjectGraph(structuredClone(graph), { expectedRunId: "run-1" }), "positive control: the fixture is smaller than its declared bound");
+    const size = declareOwnSize(graph);
+    must(validateObjectGraph(structuredClone(graph), { expectedRunId: "run-1" }), "exactly the declared size is admitted");
+    graph.limits.collectionBytes = size - 1;
+    const error = mustFail(validateObjectGraph(graph, { expectedRunId: "run-1" }), "one byte over");
+    expect(error.errors.map((e) => [e.code, e.pointer])).toContainEqual(["LIMIT_EXCEEDED", "/limits/collectionBytes"]);
+  });
+
+  // why: D1. The size of a graph that was read from a file is the size of the file: a re-serialization could differ (number formats), so the
+  // caller that has the bytes passes their length and admission uses it.
+  // proves: CLAIM(D1-host-ceilings)
+  it("measures the byte length the caller read when it is given", () => {
+    const graph = fixture();
+    const size = declareOwnSize(graph);
+    must(validateObjectGraph(structuredClone(graph), { expectedRunId: "run-1", byteLength: size }), "within the bound by the length given");
+    const error = mustFail(validateObjectGraph(graph, { expectedRunId: "run-1", byteLength: size + 1 }), "the file was bigger");
+    expect(error.errors.map((e) => e.pointer)).toContain("/limits/collectionBytes");
+  });
+
+  // why: D1. rootBytes bounds the objects, views and stored pages of one root; a graph whose first root holds more than it declares is refused.
+  // proves: CLAIM(D1-host-ceilings)
+  it("refuses a root that holds more than the rootBytes the graph declares", () => {
+    const graph = fixture();
+    graph.limits.rootBytes = 100;
+    const error = mustFail(validateObjectGraph(graph, { expectedRunId: "run-1" }), "oversized root");
+    expect(error.errors.map((e) => [e.code, e.pointer])).toContainEqual(["LIMIT_EXCEEDED", "/limits/rootBytes"]);
+  });
+
+  // why: D1. The operator's ceilings are enforced where the artifact is admitted, independently of what the artifact says about itself: a graph
+  // that declares a bound above the operator's ceiling is refused, even when it is within its own declaration.
+  // proves: CLAIM(D1-host-ceilings)
+  it.each([
+    ["collectionBytes", (graph: any) => declareOwnSize(graph) - 1],
+    ["rootBytes", () => 10],
+    ["objects", () => 2],
+    ["stringBytes", () => 3],
+  ])("refuses a graph that declares more than the operator's %s ceiling", (name, ceiling) => {
+    const graph = fixture();
+    const limit = ceiling(graph);
+    must(validateObjectGraph(structuredClone(graph), { expectedRunId: "run-1" }), "positive control: no ceilings");
+    must(validateObjectGraph(structuredClone(graph), { expectedRunId: "run-1", ceilings: { [name]: 2 ** 40 } }), "positive control: a ceiling above the declaration");
+    const error = mustFail(validateObjectGraph(graph, { expectedRunId: "run-1", ceilings: { [name]: limit } }), "above the ceiling");
+    expect(error.errors.map((e) => [e.code, e.pointer])).toContainEqual(["LIMIT_EXCEEDED", `/limits/${name}`]);
+  });
+});

@@ -557,3 +557,21 @@ describe("[S6] an intent is published whole or not at all", () => {
     expect(seen.filter((s) => s.startsWith("partial"))).toEqual([]);
   });
 });
+
+describe("[D1] the host holds a capture to the operator's ceilings", () => {
+  // why: D1. The worker's own SDK is told the ceilings through PANEWEFT_LIMITS, but the host does not rely on that: a capture that declares
+  // bounds above the adapter's limitCeilings (an SDK that ignored its environment, or a hostile one) is quarantined, and the run still imports.
+  // Rejects admission that trusts the declared limits of the artifact.
+  // proves: CLAIM(D1-host-ceilings)
+  it("quarantines a capture that declares more than the adapter's ceiling", async () => {
+    const { session, dir } = await open();
+    const qex = fake();
+    const adapter = fakeCargoAdapter({ limitCeilings: { objects: 2 } });
+    const service = createJobService({ session, sessionDir: dir, qex: qex.client, adapters: [adapter], catalogueFor: async () => catalogue, cancelWaitMs: 3000 });
+    must(await service.collect(request("job-d1")), "collect");
+    const view = await settle(service, "job-d1", ["failed"]);
+    expect(view.collectionStatus).toBe("failed");
+    expect(existsSync(join(dir, "jobs", "job-d1", "quarantine", "captures", "inv-1.json")), "the oversized capture sits in quarantine").toBe(true);
+    expect(must(await openV1Reader(session).run("run-job-d1"), "the run is still recorded").run.invocations[0]!.capture.outcome).toBe("failed");
+  });
+});

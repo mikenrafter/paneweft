@@ -4,11 +4,12 @@
 // views and follows the references the views declare. Everything is bounded while it is built: a bound that bites yields a
 // not-captured reference and a named omission, never an error and never silence.
 import { AsyncLocalStorage } from "node:async_hooks";
+import { Charge, Ledger, emit, emitString, serializeGraph } from "./bounded.ts";
 import { Budget, DetailsBuilder, TableBuilder, canonicalJson, sha256Hex, type ViewResult } from "./builders.ts";
 import { callerLine } from "./callsite.ts";
 import { applyLimitOverrides, defaultLimits } from "./limits.ts";
 import { ViewError, type Component, type DiagnosticRecord, type Json, type Limits, type ObjectRef } from "./types.ts";
-import { RESERVE, cutString, encodeValue, jsonStringBytes, newStats, type ByteMeter, type CapturedValue } from "./values.ts";
+import { cutString, encodeValue, newStats, type CapturedValue } from "./values.ts";
 
 /** The symbol a class implements to be inspectable without a token. */
 export const paneweftViews: unique symbol = Symbol.for("paneweft.views");
@@ -89,11 +90,16 @@ export type InspectResult =
   | { status: "published"; ref: ObjectRef }
   | { status: "failed"; code: "NO_TYPE" | "VIEW_FAILED"; message: string };
 
-/** The finished immutable result: a paneweft.object-graph/1 document. */
+/** The finished immutable result: a paneweft.object-graph/1 document. `text` is the document as it is written and `bytes` its size in UTF-8
+ * bytes: the text the serializer counted is the text that goes to the file. */
 export class ObjectGraph {
-  constructor(private readonly document: Json) {}
+  private parsed: Json | undefined;
+  constructor(readonly text: string, readonly bytes: number, document: Json | undefined, readonly emergency: boolean) {
+    this.parsed = document;
+  }
   toJSON(): Json {
-    return this.document;
+    this.parsed ??= JSON.parse(this.text) as Json;
+    return this.parsed;
   }
 }
 
@@ -106,15 +112,24 @@ interface ObjectRec {
   edges: Json[];
   views: string[];
   depth: number;
-  /** The label text the byte budget was charged for. */
-  chargedLabel: string;
+  /** The bytes of the label the ledger was charged for. */
+  labelBytes: number;
+  /** The bytes each declared field was charged: its name, the colon and its encoded value. */
+  fieldBytes: Map<string, number>;
 }
+
+/** Every name under which a capture counts what it left out. */
+type OmissionName = "collectionBytes" | "depth" | "diagnostics" | "fields" | "labels" | "objects" | "references" | "rootBytes" | "roots" | "rows" | "strings" | "values" | "views";
+const OMISSION_NAMES: readonly OmissionName[] = ["collectionBytes", "depth", "diagnostics", "fields", "labels", "objects", "references", "rootBytes", "roots", "rows", "strings", "values", "views"];
+/** The completeness block at its largest: every omission named, with the largest count. The document's frame holds room for it from the start. */
+const WIDEST_COMPLETENESS: Json = { status: "partial", omitted: Object.fromEntries(OMISSION_NAMES.map((name) => [name, { known: true, count: Number.MAX_SAFE_INTEGER }])) };
 
 type Bound = "depth" | "objects" | "references" | "rootBytes" | "collectionBytes" | "roots";
 const BOUND_REASON: Record<Bound, string> = { depth: "depth-limit", objects: "object-limit", references: "reference-limit", rootBytes: "root-bytes-limit", collectionBytes: "collection-limit", roots: "collection-limit" };
 
+/** The hash an object record carries is 64 hex digits; its place is paid for before the fields that it covers exist. */
+const CONTENT_HASH_PLACEHOLDER = "0".repeat(64);
 const FAULT_CATEGORIES: ReadonlyArray<DiagnosticRecord["category"]> = ["view-exception", "output-schema", "reference", "registration"];
-const jsonBytes = (json: Json): number => Buffer.byteLength(JSON.stringify(json), "utf8");
 const DIAGNOSTIC_CATEGORIES: ReadonlyArray<DiagnosticRecord["category"]> = ["compiler", "typecheck", "assertion", "view-exception", "output-schema", "reference", "limit", "registration", "renderer", "runner"];
 const NEXT_ACTION: Record<string, string> = {
   "view-exception": "Fix the exception in the named view function, then recollect the example.",
@@ -134,11 +149,19 @@ class ObjectContext implements ViewBuilders {
   viewBestEffort = false;
   anyBestEffort = false;
   constructor(private readonly capture: Capture, readonly index: number) {}
+  /** What the view being computed has charged; set for the length of one view. */
+  charge: Charge | undefined;
   details(): DetailsBuilder {
-    return new DetailsBuilder(this.capture.limits, new Budget(this.capture.nested, this.capture.limits.viewBudgetMs), this.capture.meter);
+    return new DetailsBuilder(this.capture.limits, new Budget(this.capture.nested, this.capture.limits.viewBudgetMs), this.chargeOfView());
   }
   table(): TableBuilder {
-    return new TableBuilder(this.capture.limits, new Budget(this.capture.nested, this.capture.limits.viewBudgetMs), this.capture.meter);
+    const object = this.capture.objectAt(this.index).id;
+    const view = this.currentView ?? "";
+    return new TableBuilder(this.capture.limits, new Budget(this.capture.nested, this.capture.limits.viewBudgetMs), this.chargeOfView(), (page) => this.capture.pageFrame(object, view, page));
+  }
+  private chargeOfView(): Charge {
+    if (this.charge === undefined) throw new ViewError("output-schema", "a builder can only be created while a view is being computed");
+    return this.charge;
   }
   reference(value: unknown, token?: TypeToken<any>, options: { name?: string; key?: string } = {}): ObjectRef {
     const name = options.name ?? this.currentView ?? "reference";
@@ -183,33 +206,29 @@ export class Capture {
   private readonly byToken = new Map<string, number>();
   private readonly path: number[] = [];
   private references = 0;
-  private readonly omitted = new Map<string, number>();
+  private readonly omitted = new Map<OmissionName, number>();
   /** Omissions whose size the capture does not know (an object cut short mid-walk): reported `known: false`, never as a guessed count. */
-  private readonly unknownOmissions = new Set<string>();
-  /** Bytes of JSON text charged to the current root and to the whole collection (S2). */
-  private rootUsed = 0;
-  private totalUsed = 0;
+  private readonly unknownOmissions = new Set<OmissionName>();
+  /** The bytes every part of the document is charged to as it is built (S2): object records, field values, edges, view records and their data,
+   * stored page bodies and diagnostics, each by the size of the text it becomes. The ledger starts with the document's own frame. */
+  private readonly ledger: Ledger;
+  private readonly sealed: boolean;
   private faulted = false;
-
-  /** The byte budget every part of the graph is charged to AS IT IS BUILT: object records, field values, edges, view records and their data,
-   * stored page bodies and diagnostics. Nothing is measured after the fact. */
-  readonly meter: ByteMeter = {
-    room: () => Math.max(0, Math.min(this.limits.rootBytes - this.rootUsed, this.limits.collectionBytes - this.totalUsed)),
-    spend: (bytes) => { this.rootUsed += bytes; this.totalUsed += bytes; },
-    reason: () => (this.limits.rootBytes - this.rootUsed <= this.limits.collectionBytes - this.totalUsed ? "root-bytes-limit" : "collection-limit"),
-  };
 
   constructor(options: CaptureOptions = {}) {
     this.limits = applyLimitOverrides(defaultLimits(), options.limits);
     const captureId = options.captureId ?? "c1";
     this.options = { captureId, runId: options.runId ?? "run-1", invocationId: options.invocationId ?? "inv-1" };
+    const frame = emit(this.document([], [], [], [], [], WIDEST_COMPLETENESS)).bytes;
+    this.ledger = new Ledger(this.limits.rootBytes, this.limits.collectionBytes, frame);
+    this.sealed = frame > this.limits.collectionBytes;
   }
 
   objectAt(index: number): ObjectRec {
     return this.objects[index] as ObjectRec;
   }
 
-  count(name: string, amount: number): void {
+  count(name: OmissionName, amount: number): void {
     if (amount > 0) this.omitted.set(name, (this.omitted.get(name) ?? 0) + amount);
   }
 
@@ -231,12 +250,8 @@ export class Capture {
     const entry: DiagnosticRecord = { id, category: known, message: cutString(message, 2000)[0], ...(extra.viewId === undefined ? {} : { viewId: extra.viewId }), ...(extra.exampleId === undefined ? {} : { exampleId: extra.exampleId }), nextAction: NEXT_ACTION[known] ?? "Read the message, fix the named source, then recollect the example." };
     if (FAULT_CATEGORIES.includes(known)) this.faulted = true;
     // a diagnostic is charged like everything else; when even it does not fit it is counted, and a fault still fails the capture
-    const cost = jsonBytes(entry as unknown as Json) + 1;
-    if (cost > this.meter.room()) this.count("diagnostics", 1);
-    else {
-      this.meter.spend(cost);
-      this.diagnosticRecords.push(entry);
-    }
+    if (!this.ledger.take(emit(entry as unknown as Json).bytes + (this.diagnosticRecords.length > 0 ? 1 : 0))) this.count("diagnostics", 1);
+    else this.diagnosticRecords.push(entry);
     return id;
   }
 
@@ -245,18 +260,23 @@ export class Capture {
     return this.faulted;
   }
 
-  /** Charges and stores a declared field. The value is encoded against the byte budget; what does not fit is cut and counted. */
+  /** Charges and stores a declared field. The name is charged as the text it becomes, then the value is encoded against what is left; what
+   * does not fit is cut and counted. */
   setField(index: number, name: string, value: CapturedValue): void {
     const object = this.objectAt(index);
     const known = Object.hasOwn(object.fields, name);
-    const nameBytes = known ? 0 : jsonStringBytes(name, this.meter.room() - RESERVE - 2);
-    if (nameBytes === undefined) {
+    if (known) this.ledger.give(object.fieldBytes.get(name) as number);
+    const separator = !known && object.fieldBytes.size > 0 ? 1 : 0;
+    const key = emitString(name, this.ledger.spare() - separator - 1);
+    if (key === undefined || !this.ledger.take(separator + key.bytes + 1)) {
+      if (known) throw new Error("a declared field no longer fits the room it was given back");
       this.count("fields", 1);
       return;
     }
-    if (!known) this.meter.spend(nameBytes + 2);
+    const before = this.ledger.used();
     const stats = newStats();
-    const encoded = encodeValue(value, this.limits, stats, 0, this.meter);
+    const encoded = encodeValue(value, this.limits, stats, 0, this.ledger);
+    object.fieldBytes.set(name, key.bytes + 1 + (this.ledger.used() - before));
     this.count("strings", stats.strings);
     this.count("values", stats.values);
     if (stats.open) this.unknownOmissions.add("values");
@@ -267,22 +287,22 @@ export class Capture {
   setLabel(index: number, text: string): void {
     const object = this.objectAt(index);
     const label = cutString(text, 256)[0];
-    const delta = jsonBytes(label) - jsonBytes(object.chargedLabel);
-    if (delta > 0 && delta > this.meter.room() - RESERVE) {
+    const bytes = emit(label).bytes;
+    const delta = bytes - object.labelBytes;
+    if (delta > 0 && !this.ledger.take(delta)) {
       this.count("labels", 1);
       return;
     }
-    this.meter.spend(delta);
+    if (delta < 0) this.ledger.give(-delta);
     object.label = label;
-    object.chargedLabel = label;
+    object.labelBytes = bytes;
   }
 
   /** Records an edge if the budget has room for it; reports whether it did. */
   private addEdge(index: number, edge: Json): boolean {
-    const cost = jsonBytes(edge) + 1;
-    if (cost > this.meter.room() - RESERVE) return false;
-    this.meter.spend(cost);
-    this.objectAt(index).edges.push(edge);
+    const object = this.objectAt(index);
+    if (!this.ledger.take(emit(edge).bytes + (object.edges.length > 0 ? 1 : 0))) return false;
+    object.edges.push(edge);
     return true;
   }
 
@@ -295,10 +315,10 @@ export class Capture {
     return undefined;
   }
 
-  /** The byte bound that refuses a new object whose record and edge need `need` bytes, if any. A root starts a fresh root budget. */
-  private byteRefusal(need: number, isRoot: boolean): Bound | undefined {
-    if (need <= this.meter.room() - RESERVE) return undefined;
-    return !isRoot && this.meter.reason() === "root-bytes-limit" ? "rootBytes" : "collectionBytes";
+  /** The byte bound that refuses `bytes` more, if any. A root starts a fresh root budget. */
+  private byteRefusal(bytes: number, isRoot: boolean): Bound | undefined {
+    if (bytes <= this.ledger.spare()) return undefined;
+    return !isRoot && this.ledger.reason() === "root-bytes-limit" ? "rootBytes" : "collectionBytes";
   }
 
   private refuse(parent: { index: number; name: string } | undefined, bound: Bound): ObjectRef {
@@ -325,24 +345,26 @@ export class Capture {
     const parentDepth = parent === undefined ? undefined : this.objectAt(parent.index).depth;
     const bound = this.refusal(parentDepth);
     if (bound !== undefined) return this.refuse(parent, bound);
-    if (parent === undefined) this.rootUsed = 0; // a root starts a fresh root budget
+    if (parent === undefined) this.ledger.startRoot(); // a root starts a fresh root budget
 
     const index = this.objects.length;
     const id = `o${index + 1}`;
     const context = new ObjectContext(this, index);
     const selection = this.select(value, token, context);
     const typeId = selection.type.id;
-    // the record of the object (and the edge that reaches it) is charged before the object exists: no room, no object
-    // a domain key is at most 256 characters in the schema; a longer one is cut (and counted), not kept whole
+    // the record of the object, its entry in the root list and the edge that reaches it are charged before the object exists: no room, no object.
+    // A domain key is at most 256 characters in the schema; a longer one is cut (and counted), not kept whole.
     const [domainKey, keyCut] = key === undefined ? [null, 0] : cutString(key, 256);
     const label = cutString(domainKey ?? typeId.split("::").pop() ?? typeId, 256)[0];
     const childEdge: Json | undefined = parent === undefined ? undefined : { name: parent.name, kind: "child", target: id };
-    const skeleton = 170 + jsonBytes(id) + jsonBytes(typeId) + jsonBytes(domainKey) + jsonBytes(label) + (childEdge === undefined ? 0 : jsonBytes(childEdge) + 1);
-    const byteBound = this.byteRefusal(skeleton, parent === undefined);
+    const record = emit({ id, typeId, domainKey, label, fields: {}, edges: [], views: [], contentHash: CONTENT_HASH_PLACEHOLDER }).bytes + (this.objects.length > 0 ? 1 : 0);
+    const listed = parent === undefined ? emit(id).bytes + (this.rootIds.length > 0 ? 1 : 0) : 0;
+    const edge = childEdge === undefined ? 0 : emit(childEdge).bytes + (this.objectAt((parent as { index: number }).index).edges.length > 0 ? 1 : 0);
+    const byteBound = this.byteRefusal(record + listed + edge, parent === undefined);
     if (byteBound !== undefined) return this.refuse(parent, byteBound);
-    this.meter.spend(skeleton - (childEdge === undefined ? 0 : jsonBytes(childEdge) + 1));
+    this.ledger.take(record + listed);
     if (keyCut > 0) this.count("strings", 1);
-    this.objects.push({ id, typeId, domainKey, label: undefined, fields: {}, edges: [], views: [], depth: parentDepth === undefined ? 0 : parentDepth + 1, chargedLabel: label });
+    this.objects.push({ id, typeId, domainKey, label: undefined, fields: {}, edges: [], views: [], depth: parentDepth === undefined ? 0 : parentDepth + 1, labelBytes: emit(label).bytes, fieldBytes: new Map() });
     if (trackable) this.byObject.set(value, index);
     if (identity !== undefined) this.byToken.set(identity, index);
     if (parent === undefined) {
@@ -373,15 +395,16 @@ export class Capture {
     }
     // The frame of the view record is paid for BEFORE the view runs, so a field or table that takes all the room cannot leave its own view
     // without one; recordView settles the difference. No room for the frame: the view is not run, and the omission is named.
-    const prepaid = jsonBytes({ viewId: definition.id, objectId: object.id, title: definition.title, question: definition.question, component: definition.component, priority: definition.priority, evidence: { provenance: "observed", runId: this.options.runId }, completeness: { status: "partial", reason: "row-limit", omitted: { rows: { known: true, count: 1_000_000_000 }, strings: { known: true, count: 1_000_000_000 } } }, pages: [] }) + jsonBytes(definition.id) + 2 + 160;
-    if (prepaid > this.meter.room() - RESERVE) {
+    const prepaid = emit({ viewId: definition.id, objectId: object.id, title: definition.title, question: definition.question, component: definition.component, priority: definition.priority, evidence: { provenance: "observed", runId: this.options.runId }, completeness: { status: "partial", reason: "row-limit", omitted: { rows: { known: true, count: Number.MAX_SAFE_INTEGER }, strings: { known: true, count: Number.MAX_SAFE_INTEGER } } }, data: 0, rowsTotal: Number.MAX_SAFE_INTEGER, pages: [] }).bytes + emit(definition.id).bytes + 2;
+    if (!this.ledger.take(prepaid)) {
       this.count("views", 1);
       this.addDiagnostic("limit", `view ${definition.id} of object ${object.id} was not run: the byte budget of this capture is used up`, { viewId: definition.id });
       return;
     }
-    this.meter.spend(prepaid);
     context.currentView = definition.id;
     context.viewBestEffort = false;
+    context.charge = new Charge(this.ledger);
+    const charge = context.charge;
     let result: ViewResult;
     try {
       const returned: unknown = definition.render(value, context);
@@ -393,24 +416,28 @@ export class Capture {
     } catch (error) {
       const category = error instanceof ViewError ? error.category : "view-exception";
       const message = error instanceof ViewError ? error.message : `view ${definition.id} threw: ${error instanceof Error ? error.message : String(error)}`;
-      this.refund(prepaid);
+      this.ledger.give(prepaid + charge.bytes);
       this.addDiagnostic(category, message, { viewId: definition.id });
       return;
     } finally {
       context.currentView = undefined;
+      context.charge = undefined;
     }
-    this.recordView(index, definition, result, context.viewBestEffort || context.anyBestEffort, prepaid);
+    this.recordView(index, definition, result, context.viewBestEffort || context.anyBestEffort, prepaid + charge.bytes);
   }
 
-  private refund(bytes: number): void {
-    this.rootUsed = Math.max(0, this.rootUsed - bytes);
-    this.totalUsed = Math.max(0, this.totalUsed - bytes);
+  /** The most a stored page of `viewId` of `objectId` costs besides its rows: its record in `pages` and its reference in the view, with commas. */
+  pageFrame(objectId: string, viewId: string, index: number): number {
+    const pageId = `sha256:${"0".repeat(64)}`;
+    return emit({ pageId, viewId, objectId, index, rows: [] }).bytes + emit({ index, pageId, rowCount: this.limits.pageRows }).bytes + 2;
   }
 
-  private recordView(index: number, definition: ViewDefinition<any>, result: ViewResult, bestEffort: boolean, prepaid: number): void {
+  /** Settles a view against the text it becomes: the record, its stored pages and its entries in the lists that name them are measured by the
+   * serializer, and the difference to what was charged while the view was built is charged or given back. A view that no longer fits is dropped. */
+  private recordView(index: number, definition: ViewDefinition<any>, result: ViewResult, bestEffort: boolean, paid: number): void {
     const object = this.objectAt(index);
     if (result === null || typeof result !== "object" || (result.kind !== "built" && result.kind !== "unsupported")) {
-      this.refund(prepaid);
+      this.ledger.give(paid);
       this.addDiagnostic("output-schema", `view ${definition.id} did not return a built or unsupported result: finish the builder with done() or return view.unsupported(reason)`, { viewId: definition.id });
       return;
     }
@@ -423,6 +450,8 @@ export class Capture {
       priority: definition.priority,
       evidence: { provenance: "observed", runId: this.options.runId },
     };
+    const pages: Json[] = [];
+    const counted: Array<[OmissionName, number]> = [];
     if (result.kind === "unsupported") {
       const reason = cutString(result.reason, 500)[0];
       record.completeness = { status: "unsupported", reason, ...(bestEffort ? { consistency: "best-effort" } : {}) };
@@ -430,36 +459,37 @@ export class Capture {
       record.pages = [];
     } else {
       if (result.component !== definition.component) {
-        this.refund(prepaid);
+        this.ledger.give(paid);
         this.addDiagnostic("output-schema", `view ${definition.id} declares component ${JSON.stringify(definition.component)} but built a ${JSON.stringify(result.component)}`, { viewId: definition.id });
         return;
       }
       const omitted = result.omitted ?? {};
-      const names = Object.keys(omitted);
+      const names = Object.keys(omitted) as Array<"rows" | "strings">;
       const completeness: Record<string, Json> = names.length === 0 ? { status: "complete" } : { status: "partial", reason: names.includes("rows") ? "row-limit" : "string-limit", omitted: Object.fromEntries(names.map((name) => [name, { known: true, count: omitted[name] as number }])) };
-      for (const name of names) this.count(name, omitted[name] as number);
+      for (const name of names) counted.push([name, omitted[name] as number]);
       if (bestEffort) completeness.consistency = "best-effort";
       if (result.overBudgetMs !== undefined) this.addDiagnostic("limit", `view ${definition.id} spent ${result.overBudgetMs} ms of its own computation; the cooperative budget is ${this.limits.viewBudgetMs} ms`, { viewId: definition.id });
       record.completeness = completeness;
       record.data = result.data;
       record.pages = (result.pages ?? []).map((page, offset) => ({ index: offset + 1, pageId: page.pageId, rowCount: page.rows.length }));
-      for (const [offset, page] of (result.pages ?? []).entries()) this.pageRecords.push({ pageId: page.pageId, viewId: definition.id, objectId: object.id, index: offset + 1, rows: page.rows });
+      for (const [offset, page] of (result.pages ?? []).entries()) pages.push({ pageId: page.pageId, viewId: definition.id, objectId: object.id, index: offset + 1, rows: page.rows });
       if (result.rowsTotal !== undefined) record.rowsTotal = result.rowsTotal;
     }
-    // the view's data and pages were charged while the builders produced them; the record around them and its entry in the object are charged here
-    // (the page references were paid for with their pages)
-    const { data: _data, pages: _pages, ...frame } = record;
-    const cost = jsonBytes(frame as Json) + jsonBytes(definition.id) + 2;
-    if (cost > prepaid && cost - prepaid > this.meter.room()) {
-      this.refund(prepaid);
+    let exact = emit(record as Json).bytes + (this.viewRecords.length > 0 ? 1 : 0) + emit(definition.id).bytes + (object.views.length > 0 ? 1 : 0);
+    pages.forEach((page, offset) => {
+      exact += emit(page).bytes + (this.pageRecords.length + offset > 0 ? 1 : 0);
+    });
+    if (exact > paid && !this.ledger.take(exact - paid)) {
+      this.ledger.give(paid);
       this.count("views", 1);
       this.addDiagnostic("limit", `view ${definition.id} of object ${object.id} was dropped: the byte budget of this capture is used up`, { viewId: definition.id });
       return;
     }
-    if (cost > prepaid) this.meter.spend(cost - prepaid);
-    else this.refund(prepaid - cost);
+    if (exact < paid) this.ledger.give(paid - exact);
+    for (const [name, amount] of counted) this.count(name, amount);
     object.views.push(definition.id);
     this.viewRecords.push(record);
+    this.pageRecords.push(...pages);
   }
 
   private objectJson(index: number): Json {
@@ -469,23 +499,37 @@ export class Capture {
     return { id: object.id, typeId: object.typeId, domainKey: object.domainKey, label, fields: object.fields, edges: object.edges, views: object.views, contentHash: sha256Hex(canonicalJson(hashInput)) };
   }
 
-  finish(): ObjectGraph {
-    const names = [...new Set([...this.omitted.keys(), ...this.unknownOmissions])].sort();
-    const omitted = Object.fromEntries(names.map((name) => [name, this.unknownOmissions.has(name) ? { known: false, count: null } : { known: true, count: this.omitted.get(name) as number }]));
-    const completeness: Json = names.length === 0 ? { status: "complete" } : { status: "partial", omitted };
-    return new ObjectGraph({
+  /** The document, member by member. The frame (everything but the lists) is what the ledger was charged for before any content. */
+  private document(roots: string[], objects: Json[], views: Json[], pages: Json[], diagnostics: Json[], completeness: Json): Json {
+    return {
       schemaVersion: "paneweft.object-graph/1",
       captureId: this.options.captureId,
       runId: this.options.runId,
       invocationId: this.options.invocationId,
-      roots: this.rootIds,
-      objects: this.objects.map((_, index) => this.objectJson(index)),
-      views: this.viewRecords,
-      pages: this.pageRecords,
-      diagnostics: this.diagnosticRecords as unknown as Json,
+      roots,
+      objects,
+      views,
+      pages,
+      diagnostics,
       limits: { ...this.limits },
       completeness,
-    });
+    };
+  }
+
+  /** The finished document, serialized once by the bounded serializer. When the bound cannot hold even the empty document, or the measure of
+   * the text disagrees with the ledger, the empty marked graph is written (the host refuses the first, and the second is a defect). */
+  finish(): ObjectGraph {
+    const names = [...new Set([...this.omitted.keys(), ...this.unknownOmissions])].sort();
+    const omitted = Object.fromEntries(names.map((name) => [name, this.unknownOmissions.has(name) ? { known: false, count: null } : { known: true, count: this.omitted.get(name) as number }]));
+    const completeness: Json = names.length === 0 ? { status: "complete" } : { status: "partial", omitted };
+    const empty = (): Json => this.document([], [], [], [], [], { status: "partial", omitted: { collectionBytes: { known: true, count: Math.max(1, this.omitted.get("collectionBytes") ?? 0) } } });
+    if (this.sealed) {
+      const text = emit(empty());
+      return new ObjectGraph(text.text, text.bytes, undefined, false);
+    }
+    const document = this.document(this.rootIds, this.objects.map((_, index) => this.objectJson(index)), this.viewRecords, this.pageRecords, this.diagnosticRecords as unknown as Json[], completeness);
+    const emission = serializeGraph(document, this.limits, empty);
+    return new ObjectGraph(emission.text, emission.bytes, emission.emergency ? undefined : document, emission.emergency);
   }
 }
 

@@ -4,7 +4,7 @@
 //! The generated function wraps its own body in [`invoke`], so a direct call from another example records a parent edge. A failed
 //! check is recorded and the panic is deferred until the body has returned its value, so the failing example still publishes the
 //! object it built (failed tests retain valid objects). Cargo sees the panic, resumed after the record is written.
-use crate::artifacts::{limits_from_env, staging_from_env, write_or_report, Staging};
+use crate::artifacts::{limits_from_env, staging_from_env, write_or_report, write_text_or_report, Staging};
 use crate::capture::{activate, deactivate, panic_message, Capture, CaptureOptions, Inspectable, ObjectRef};
 use crate::catalogue::ExampleDescriptor;
 use crate::json::now_rfc3339;
@@ -267,7 +267,7 @@ fn run_invocation<R>(
         if value.is_some() || !summary.diagnostics.is_empty() {
             summary.capture_id = Some(options.capture_id.clone());
             let graph = capture.finish();
-            write_or_report(&staging.dir.join("captures").join(format!("{}.json", options.capture_id)), &graph.to_json());
+            write_text_or_report(&staging.dir.join("captures").join(format!("{}.json", options.capture_id)), graph.text());
         }
         summary.outcome = if summary.root.is_none() && value.is_none() { "none" } else if failed || summary.root.is_none() { "failed" } else { "captured" };
         if summary.root.is_none() && value.is_some() {

@@ -89,6 +89,16 @@ Defaults (spec section 4): depth 4, objects 1000, references 4000, rootBytes 2 M
 `omitted.rows`, the capture names `omitted` per limit that bit (`objects`, `references`, `depth`, `rows`, `strings`). References beyond
 a bound return a not-captured reference. Depth counts edges from the published root.
 
+**Bytes (D1).** `collectionBytes` bounds the document an SDK writes: the bytes of the JSON text of the whole graph, escaping included, page
+bodies included. `rootBytes` bounds the objects, views and stored pages of one root (the objects from that root up to the next one, with their
+views and pages; the brackets of the lists belong to the document's frame). Each SDK has ONE path that produces capture output
+(`bounded.ts`, `bounded.rs`): every size it charges is the size of text its serializer emitted, a charge is admitted all or nothing, the
+document's frame and its worst-case completeness block are charged first, and the bytes of one `not-captured` marker are held back from
+ordinary content. A bound below the size of an empty graph cannot be honoured: the SDK writes the empty marked graph (`omitted.collectionBytes`).
+The text the SDK counted is the text it writes (`graph.text`), and the host measures the same document independently at admission: the bytes of
+the file (or of the re-serialized document), against the declared `collectionBytes`; each root's records against the declared `rootBytes`; and every
+declared bound against the operator's ceiling (the adapter's `limitCeilings`).
+
 ## 6. Outcome model (`test-run.schema.json`)
 
 Levels (S6): **invocation** (one attempt; `native.outcome` passed|failed|error|skipped|filtered|cancelled|blocked, `capture.outcome`

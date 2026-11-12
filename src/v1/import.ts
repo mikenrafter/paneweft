@@ -16,6 +16,7 @@ import type { Entity, EntityRef, Envelope, ViewDefinition } from "../core/wire.t
 import type { ObjectGraph } from "../generated/v1/ObjectGraph.ts";
 import type { TestRun } from "../generated/v1/TestRun.ts";
 import { entityOfObject, lowerViewRecord, validateObjectGraph } from "./capture.ts";
+import type { LimitName } from "./limits.ts";
 import { captureFile, committedImport, customFile, pageFile, runDirectory, snapshotOfRun, v1Directory, type ImportRecord, type Origin } from "./read.ts";
 import { validateAgainstV1 } from "./schemas.ts";
 
@@ -30,6 +31,10 @@ export interface CollectionImport {
   origin: Origin;
   run: unknown;
   graphs: unknown[];
+  /** The operator's ceilings, re-checked here against what each graph declares (D1). */
+  ceilings?: Partial<Record<LimitName, number>>;
+  /** The size in bytes of each graph as it was written, in the order of `graphs`, when the caller read them from files. */
+  graphBytes?: number[];
 }
 
 export interface ImportReceipt {
@@ -127,7 +132,7 @@ function prepare(input: CollectionImport, run: TestRun): Result<Prepared> {
   const graphs: ObjectGraph[] = [];
   const faults: ValidationIssue[] = [];
   for (const [index, document] of input.graphs.entries()) {
-    const checked = validateObjectGraph(document, { expectedRunId: input.runId });
+    const checked = validateObjectGraph(document, { expectedRunId: input.runId, ...(input.ceilings === undefined ? {} : { ceilings: input.ceilings }), ...(input.graphBytes?.[index] === undefined ? {} : { byteLength: input.graphBytes[index] as number }) });
     if (checked.ok) graphs.push(checked.value);
     else faults.push(...checked.error.errors.map((fault) => ({ ...fault, pointer: `/graphs/${index}${fault.pointer}` })));
   }

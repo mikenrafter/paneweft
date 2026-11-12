@@ -8,6 +8,7 @@ import { sha256Hex } from "../core/digest.ts";
 import { err, ok, type Result, type ValidationIssue } from "../core/errors.ts";
 import type { Entity, EntityRef, Envelope, ViewDefinition } from "../core/wire.ts";
 import type { ObjectGraph, ObjectRecord, ViewRecord } from "../generated/v1/ObjectGraph.ts";
+import { LIMIT_FLOORS, LIMIT_NAMES, type LimitName } from "./limits.ts";
 import { checkListRows, rowIds } from "./page-rows.ts";
 import { validateAgainstV1 } from "./schemas.ts";
 
@@ -59,8 +60,48 @@ export function entityOfObject(repo: string, graph: ObjectGraph, objectId: strin
   return { repository: repo, id: entityId(graph, objectId), kind: entityKindOf(record.typeId), snapshotId: `snap-${graph.runId}`, label: record.label.length > 0 ? record.label : record.id, dataRoles: [...record.views], relations };
 }
 
-/** Admission of one SDK artifact. `expectedRunId` is the run being imported: a graph of another run is foreign or stale and refused. */
-export function validateObjectGraph(document: unknown, context: { expectedRunId: string }): Result<ObjectGraph> {
+export interface AdmissionContext {
+  /** The run being imported: a graph of another run is foreign or stale and refused. */
+  expectedRunId: string;
+  /** The operator's ceilings (the adapter's `limitCeilings`): a graph may not declare a bound above them. */
+  ceilings?: Partial<Record<LimitName, number>>;
+  /** The size in bytes of the document as it was written, when the caller has it; otherwise the document is serialized to measure it. */
+  byteLength?: number;
+}
+
+const textBytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), "utf8");
+/** The records of a list and the commas between them: the brackets of the list belong to the frame of the document, not to a root. */
+const recordsBytes = (items: unknown[]): number => textBytes(items) - 2;
+
+/** The bounds the host holds a graph to, independently of the SDK that wrote it (D1): what it declares may not exceed the operator's
+ * ceilings, the document may not be larger than the collectionBytes it declares, and the objects, views and stored pages of one root (the
+ * objects from that root up to the next one, with their views and pages) may not be larger than the rootBytes it declares. */
+function sizeIssues(graph: ObjectGraph, document: unknown, context: AdmissionContext): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  for (const name of LIMIT_NAMES) {
+    const ceiling = context.ceilings?.[name];
+    if (ceiling === undefined) continue;
+    const allowed = Math.max(LIMIT_FLOORS[name], ceiling);
+    if (graph.limits[name] > allowed) issues.push(issue("LIMIT_EXCEEDED", `/limits/${name}`, `at most ${allowed} (the operator's ceiling for ${name})`, `The graph declares ${graph.limits[name]}: it was captured under a bound the operator does not allow.`));
+  }
+  const size = context.byteLength ?? textBytes(document);
+  if (size > graph.limits.collectionBytes) issues.push(issue("LIMIT_EXCEEDED", "/limits/collectionBytes", `the document is at most ${graph.limits.collectionBytes} bytes (the capture's own limit)`, `The document is ${size} bytes: the SDK that wrote it did not hold the bound it declares.`));
+  const position = new Map(graph.objects.map((object, at) => [object.id, at]));
+  const starts = graph.roots.map((root) => position.get(root)).filter((at): at is number => at !== undefined);
+  const span = (owner: string, from: number, to: number): boolean => {
+    const at = position.get(owner);
+    return at !== undefined && at >= from && at < to;
+  };
+  starts.forEach((from, rank) => {
+    const to = rank + 1 < starts.length ? (starts[rank + 1] as number) : graph.objects.length;
+    const used = recordsBytes(graph.objects.slice(from, to)) + recordsBytes(graph.views.filter((view) => span(view.objectId, from, to))) + recordsBytes(graph.pages.filter((page) => span(page.objectId, from, to)));
+    if (used > graph.limits.rootBytes) issues.push(issue("LIMIT_EXCEEDED", "/limits/rootBytes", `the records of one root are at most ${graph.limits.rootBytes} bytes (the capture's own limit)`, `The root "${graph.objects[from]?.id}" holds ${used} bytes.`));
+  });
+  return issues;
+}
+
+/** Admission of one SDK artifact. */
+export function validateObjectGraph(document: unknown, context: AdmissionContext): Result<ObjectGraph> {
   const shape = validateAgainstV1("urn:paneweft:schema:v1:object-graph:1", document);
   if (shape.length > 0) return err("VALIDATION_FAILED", `the object graph does not match paneweft.object-graph/1 (${shape.length} fault${shape.length === 1 ? "" : "s"})`, { errors: shape });
   const graph = document as ObjectGraph;
@@ -141,6 +182,7 @@ export function validateObjectGraph(document: unknown, context: { expectedRunId:
   if (graph.objects.length > graph.limits.objects) issues.push(issue("LIMIT_EXCEEDED", "/objects", `at most ${graph.limits.objects} objects (the capture's own limit)`, "The artifact exceeds the limits it declares; a hostile or buggy SDK produced it."));
   if (references > graph.limits.references) issues.push(issue("LIMIT_EXCEEDED", "/objects", `at most ${graph.limits.references} references (the capture's own limit)`, "The artifact exceeds the limits it declares."));
   if (graph.roots.length > graph.limits.roots) issues.push(issue("LIMIT_EXCEEDED", "/roots", `at most ${graph.limits.roots} roots (the capture's own limit)`, "The artifact exceeds the limits it declares."));
+  issues.push(...sizeIssues(graph, document, context));
   if (issues.length > 0) return err("VALIDATION_FAILED", `the object graph is not admissible (${issues.length} fault${issues.length === 1 ? "" : "s"})`, { errors: issues.sort((a, b) => (a.pointer < b.pointer ? -1 : a.pointer > b.pointer ? 1 : 0)) });
   return ok(graph);
 }

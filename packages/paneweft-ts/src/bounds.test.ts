@@ -86,8 +86,9 @@ describe("[S2] byte budgets are charged while the graph is built", () => {
   // why: S2. A string longer than the room left is cut to it, not just to stringBytes.
   // proves: CLAIM(S2-budgets)
   it("cuts a string to the room that is left", () => {
-    const graph = publish({ items: "x".repeat(1_000_000) }, { collectionBytes: 1024 });
-    expect(charged(graph)).toBeLessThanOrEqual(1024);
+    const graph = publish({ items: "x".repeat(1_000_000) }, { collectionBytes: 4096 });
+    expect(charged(graph)).toBeLessThanOrEqual(4096);
+    expect(graph.objects[0].fields.items.$paneweft).toBe("truncated");
     expect(graph.completeness.status).toBe("partial");
   });
 

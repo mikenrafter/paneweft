@@ -4,7 +4,7 @@
 use crate::capture::{ObjectRef, ViewError, ViewResult};
 use crate::json::{canonical, sha256_hex};
 use crate::limits::Limits;
-use crate::meter::{json_bytes, Meter, RESERVE};
+use crate::bounded::{bytes_of, Charge};
 use crate::value::{EncodeStats, Value};
 use serde_json::{json, Map, Value as Json};
 use std::cell::Cell;
@@ -119,15 +119,15 @@ pub struct DetailsBuilder {
     pub(crate) limits: Limits,
     pub(crate) omitted: u64,
     pub(crate) budget: Budget,
-    meter: Rc<Meter>,
+    charge: Rc<Charge>,
 }
 
 /// A view that cannot even hold its frame in the byte budget says so instead of failing.
 const NO_ROOM: &str = "the byte budget of this capture is used up: the view could not be built";
 
 impl DetailsBuilder {
-    pub(crate) fn new(limits: Limits, budget: Budget, meter: Rc<Meter>) -> DetailsBuilder {
-        DetailsBuilder { fields: Vec::new(), limits, omitted: 0, budget, meter }
+    pub(crate) fn new(limits: Limits, budget: Budget, charge: Rc<Charge>) -> DetailsBuilder {
+        DetailsBuilder { fields: Vec::new(), limits, omitted: 0, budget, charge }
     }
 
     /// Adds one named leaf. A full builder refuses the field and counts it.
@@ -145,12 +145,11 @@ impl DetailsBuilder {
         let mut seen = HashSet::new();
         let mut children = Vec::new();
         let mut leaves = Vec::new();
-        // the frame of the shape is charged first; each field is then charged as it is built (S2)
-        const FRAME: u64 = 200;
-        if self.meter.room() < FRAME + RESERVE {
+        // the frame of the shape (root field, basis, root) is charged first; each field is then charged by the text it becomes (S2)
+        let root = |ids: Vec<Json>| json!({"id": "details", "path": "$", "type": "object", "presence": "required", "children": ids, "provenance": "observed", "evidence": evidence()});
+        if !self.charge.take(bytes_of(&json!({"basis": "observed", "root": "details", "fields": [root(Vec::new())]}))) {
             return Ok(View::unsupported(NO_ROOM));
         }
-        self.meter.spend(FRAME);
         let mut kept: u64 = 0;
         for (name, value) in &self.fields {
             valid_id("field name", name)?;
@@ -168,17 +167,16 @@ impl DetailsBuilder {
             leaf.insert("provenance".into(), json!("observed"));
             leaf.insert("evidence".into(), evidence());
             let leaf = Json::Object(leaf);
-            let cost = json_bytes(&leaf) + json_bytes(&json!(id)) + 2;
-            if cost > self.meter.room().saturating_sub(RESERVE) {
+            // the leaf in `fields` and its id in the root's `children`, each after a comma but the first id
+            if !self.charge.take(bytes_of(&leaf) + 1 + bytes_of(&json!(id)) + u64::from(kept > 0)) {
                 break;
             }
-            self.meter.spend(cost);
             children.push(json!(id));
             leaves.push(leaf);
             kept += 1;
         }
         let dropped = self.fields.len() as u64 - kept;
-        let mut fields = vec![json!({"id": "details", "path": "$", "type": "object", "presence": "required", "children": children, "provenance": "observed", "evidence": evidence()})];
+        let mut fields = vec![root(children)];
         fields.extend(leaves);
         let mut omitted = BTreeMap::new();
         if self.omitted + dropped > 0 {
@@ -212,12 +210,14 @@ pub struct TableBuilder {
     limits: Limits,
     omitted: u64,
     budget: Budget,
-    meter: Rc<Meter>,
+    charge: Rc<Charge>,
+    /// The cost of a stored page besides its rows, by page index.
+    page_frame: Box<dyn Fn(u64) -> u64>,
 }
 
 impl TableBuilder {
-    pub(crate) fn new(limits: Limits, budget: Budget, meter: Rc<Meter>) -> TableBuilder {
-        TableBuilder { rows: Vec::new(), columns: Vec::new(), order: None, limits, omitted: 0, budget, meter }
+    pub(crate) fn new(limits: Limits, budget: Budget, charge: Rc<Charge>, page_frame: Box<dyn Fn(u64) -> u64>) -> TableBuilder {
+        TableBuilder { rows: Vec::new(), columns: Vec::new(), order: None, limits, omitted: 0, budget, charge, page_frame }
     }
 
     fn column(mut self, key: &str, title: &str, format: Format) -> TableBuilder {
@@ -273,15 +273,15 @@ impl TableBuilder {
         let mut stats = EncodeStats::default();
         let mut row_ids = HashSet::new();
         let mut rendered: Vec<(Json, Json)> = Vec::new();
-        // The frame (columns, order, the list record) is charged first. Rows are then charged in insertion order as they are rendered, page
-        // overhead included, and the rows that no longer fit are dropped and counted (S2): stored page bodies count like first-page rows.
+        // The frame (columns, order, the list record) is charged first. Rows are then charged in insertion order by the text they become, a stored
+        // page's own frame at the first row it holds, and the rows that no longer fit are dropped and counted (S2): stored page bodies count like
+        // first-page rows.
         let page_rows = self.limits.page_rows.max(1) as usize;
-        const PAGE_OVERHEAD: u64 = 300;
-        let frame = 160 + json_bytes(&json!(self.columns.iter().map(|(key, title, format)| json!({"key": key, "title": title, "format": format.name()})).collect::<Vec<_>>())) + json_bytes(&json!({"key": order_key, "direction": "desc"}));
-        if self.meter.room() < frame + RESERVE {
+        let columns: Vec<Json> = self.columns.iter().map(|(key, title, format)| json!({"key": key, "title": title, "format": format.name()})).collect();
+        let order = json!({"key": order_key, "direction": if direction == Direction::Ascending { "asc" } else { "desc" }});
+        if !self.charge.take(bytes_of(&json!({"columns": columns, "rows": [], "order": order}))) {
             return Ok(View::unsupported(NO_ROOM));
         }
-        self.meter.spend(frame);
         let mut dropped: u64 = 0;
         for row in &self.rows {
             valid_id("row id", &row.id)?;
@@ -305,13 +305,13 @@ impl TableBuilder {
                 entry.insert("target".into(), target.to_json());
             }
             let entry = Json::Object(entry);
-            let starts_page = rendered.len() >= page_rows && (rendered.len() - page_rows).is_multiple_of(page_rows);
-            let cost = json_bytes(&entry) + 1 + if starts_page { PAGE_OVERHEAD } else { 0 };
-            if cost > self.meter.room().saturating_sub(RESERVE) {
+            let at = rendered.len();
+            let starts_page = at >= page_rows && at.is_multiple_of(page_rows);
+            let cost = bytes_of(&entry) + u64::from(!at.is_multiple_of(page_rows)) + if starts_page { (self.page_frame)((at / page_rows) as u64) } else { 0 };
+            if !self.charge.take(cost) {
                 dropped = (self.rows.len() - rendered.len()) as u64;
                 break;
             }
-            self.meter.spend(cost);
             rendered.push((sort_key, entry));
         }
         rendered.sort_by(|(left, _), (right, _)| {
@@ -323,7 +323,6 @@ impl TableBuilder {
         let mut chunks = rows.chunks(page_rows);
         let first: Vec<Json> = chunks.next().map(<[Json]>::to_vec).unwrap_or_default();
         let pages: Vec<BuiltPage> = chunks.map(|chunk| BuiltPage { page_id: format!("sha256:{}", sha256_hex(&canonical(&Json::Array(chunk.to_vec())))), rows: chunk.to_vec() }).collect();
-        let columns: Vec<Json> = self.columns.iter().map(|(key, title, format)| json!({"key": key, "title": title, "format": format.name()})).collect();
         let mut omitted = BTreeMap::new();
         if self.omitted + dropped > 0 {
             omitted.insert("rows".to_string(), self.omitted + dropped);
@@ -331,7 +330,6 @@ impl TableBuilder {
         if stats.strings > 0 {
             omitted.insert("strings".to_string(), stats.strings);
         }
-        let order = json!({"key": order_key, "direction": if direction == Direction::Ascending { "asc" } else { "desc" }});
         Ok(View { body: ViewBody::Built(Built { component: "list", data: json!({"columns": columns, "rows": first, "order": order}), pages, rows_total: Some(total), omitted, over_budget_ms: self.budget.over() }) })
     }
 }

@@ -34,13 +34,18 @@ export function limitsFromEnv(env: Record<string, string | undefined> = process.
   }
 }
 
-/** Writes through a temporary sibling and a rename, so a reader never sees half a document. A failed write is reported on stderr
- * and never masks a test result; the host counts the missing record. */
+/** Writes `value` as JSON; see `writeArtifactText`. */
 export function writeArtifact(path: string, value: Json | Record<string, unknown>): void {
+  writeArtifactText(path, JSON.stringify(value));
+}
+
+/** Writes `text` through a temporary sibling and a rename, so a reader never sees half a document. A failed write is reported on stderr
+ * and never masks a test result; the host counts the missing record. The text of a graph is the text the bounded serializer counted. */
+export function writeArtifactText(path: string, text: string): void {
   try {
     mkdirSync(dirname(path), { recursive: true });
     const temporary = `${path}.tmp-${process.pid}`;
-    writeFileSync(temporary, JSON.stringify(value));
+    writeFileSync(temporary, text);
     renameSync(temporary, path);
   } catch (error) {
     process.stderr.write(`paneweft: could not write ${path}: ${error instanceof Error ? error.message : String(error)}\n`);

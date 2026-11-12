@@ -18,7 +18,7 @@ pub mod catalogue;
 pub mod example;
 mod json;
 pub mod limits;
-mod meter;
+mod bounded;
 pub mod trail;
 pub mod value;
 
