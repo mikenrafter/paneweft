@@ -70,7 +70,8 @@ describe("[IV22 groundwork] skills/paneweft-views/SKILL.md", () => {
     expect(steps, "8: the real diagnostic id").toMatch(/run-<job>:diag/);
     expect(skill).toMatch(/Rust recipe/);
     expect(skill).toMatch(/TypeScript recipe/);
-    expect(skill).toContain("vendor-rust-sdk.mjs");
+    expect(skill, "the Rust recipe is the pinned git dependency").toContain("[dependencies.paneweft]\ngit = ");
+    expect(skill).not.toContain("vendor-rust-sdk.mjs");
     expect(skill).toContain("@paneweft/sdk/vitest-reporter");
     expect(skill).toContain("mod paneweft_examples");
     expect(skill).toContain("cx.details()");

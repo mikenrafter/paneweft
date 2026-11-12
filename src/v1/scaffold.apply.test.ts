@@ -10,6 +10,8 @@ import { FIXTURES, REPO_ROOT, fakeCargoAdapter, loadFixture, useV1Sessions } fro
 import { useTempDirs } from "../../test/helpers/tmp.ts";
 import { executeV1Operation, type V1Context } from "./tools.ts";
 import { wordSlug, wordTitle } from "./scaffold-facts.ts";
+import { SDK_GIT_REV, SDK_GIT_URL } from "./sdk-source.ts";
+import { sdkGitEnv } from "../../test/helpers/sdk-git.ts";
 
 const open = useV1Sessions();
 const tmp = useTempDirs();
@@ -65,12 +67,16 @@ describe("[F12] the Rust scaffold applies to a crate that has no paneweft wiring
         mkdirSync(dirname(join(root, file.path)), { recursive: true });
         appendFileSync(join(root, file.path), `\n${file.text}`);
       }
+      // the reply's step: the first build fetches the SDK (from the mirror here); every later cargo run in this test is offline
+      const fetched = spawnSync("cargo", ["fetch"], { cwd: root, encoding: "utf8", env: cargoEnv });
+      expect(fetched.status, `cargo fetch:\n${fetched.stdout}${fetched.stderr}`).toBe(0);
     };
     /** The messages of a cargo run without its progress lines (the compiler's complaint is what a failing assertion needs to show). */
     const messages = (output: string): string => output.split("\n").filter((line) => !/^\s*(Compiling|Checking|Fresh|Running|Finished)/.test(line)).join("\n").slice(0, 2500);
+    const cargoEnv = { ...process.env, ...sdkGitEnv(), CARGO_TARGET_DIR: join(REPO_ROOT, "target", "scaffold-plain"), CARGO_TERM_COLOR: "never" };
     const cargo = (...args: string[]) => {
       const split = args.indexOf("--") < 0 ? args.length : args.indexOf("--");
-      const result = spawnSync("cargo", [...args.slice(0, split), "--features", "paneweft", "--offline", ...args.slice(split)], { cwd: root, encoding: "utf8", env: { ...process.env, CARGO_TARGET_DIR: join(REPO_ROOT, "target", "scaffold-plain"), CARGO_TERM_COLOR: "never" } });
+      const result = spawnSync("cargo", [...args.slice(0, split), "--features", "paneweft", "--offline", ...args.slice(split)], { cwd: root, encoding: "utf8", env: cargoEnv });
       return { status: result.status, output: `${result.stdout}${result.stderr}` };
     };
     return { scaffold, apply, cargo, messages, root };
@@ -85,7 +91,11 @@ describe("[F12] the Rust scaffold applies to a crate that has no paneweft wiring
     return (async () => {
       const world = await plainWorld();
       const reply = (await world.scaffold("scaffold_view", { type: "plain::Boat", question: "Which crew does this boat carry?" })) as Reply;
-      expect(reply.setup.map((entry) => entry.command).filter(Boolean).join("\n"), "the vendoring command names this checkout's script").toContain(join(REPO_ROOT, "scripts/vendor-rust-sdk.mjs"));
+      expect(reply.setup.filter((entry) => entry.command !== undefined), "no copy command: the SDK is a git dependency").toEqual([]);
+      expect(reply.setup.map((entry) => entry.step).join("\n"), "the step that explains the first fetch").toContain("cargo fetch");
+      const cargoPatch = reply.patches.find((patch) => patch.path === "Cargo.toml")!.text;
+      expect(cargoPatch, "the dependency is the public repository pinned at a commit").toContain(`git = "${SDK_GIT_URL}"\nrev = "${SDK_GIT_REV}"\noptional = true`);
+      expect(cargoPatch).not.toMatch(/\bpath\s*=/);
       expect(reply.patches.map((patch) => patch.path)).toEqual(["src/lib.rs", "Cargo.toml"]);
       expect(reply.outputTest.text).not.toMatch(/\bmod tests\b/);
       expect(reply.outputTest.text).toContain("mod paneweft_view_tests");
@@ -121,7 +131,7 @@ describe("[F12] the Rust scaffold applies to a crate that has no paneweft wiring
 
   // why: F12. `scaffold_example` put its example in `mod examples` and never mentioned `paneweft::test_adapter!()` or the feature. As given, the reply must
   // compile with the feature on, and the crate must still build with it off and the SDK absent from the build (the release recipe).
-  // proves: CLAIM(F12-rust-applies) CLAIM(F3-vendored-sdk)
+  // proves: CLAIM(F12-rust-applies) CLAIM(F3-git-sdk)
   it("an example scaffold compiles as given, with the feature on and with it off", async () => {
     const world = await plainWorld();
     // an example returns a value of a type that has views (`Inspectable`): the view scaffold comes first, as the skill says
@@ -132,7 +142,7 @@ describe("[F12] the Rust scaffold applies to a crate that has no paneweft wiring
     world.apply(reply, { skipOutputTest: true });
     const on = world.cargo("test", "--no-run");
     expect(on.status, world.messages(on.output)).toBe(0);
-    const off = spawnSync("cargo", ["build", "--release", "--offline"], { cwd: world.root, encoding: "utf8", env: { ...process.env, CARGO_TARGET_DIR: join(REPO_ROOT, "target", "scaffold-plain") } });
+    const off = spawnSync("cargo", ["build", "--release", "--offline"], { cwd: world.root, encoding: "utf8", env: { ...process.env, ...sdkGitEnv(), CARGO_TARGET_DIR: join(REPO_ROOT, "target", "scaffold-plain") } });
     expect(off.status, off.stderr).toBe(0);
   }, 600_000);
 
@@ -161,14 +171,36 @@ describe("[F12] the Rust scaffold applies to a crate that has no paneweft wiring
   });
 
   // why: F12, vigil's demo layout (F3's "demo change"): the crate already declares the feature and the dependency, with a path to a checkout next to the repository. The
-  // scaffold must not add them again (a second feature line is a Cargo error) and must say that the path is the thing to change, instead of copying an SDK nothing uses.
-  // proves: CLAIM(F12-rust-applies)
-  it("tells a crate whose dependency points outside the repository to point it at the vendored copy", async () => {
+  // scaffold must not add them again (a second feature line is a Cargo error) and must say that the path is the thing to change, with the git source and rev to change it to.
+  // proves: CLAIM(F12-rust-applies) CLAIM(F3-git-sdk)
+  it("tells a crate whose dependency is a path to replace it with the pinned git source", async () => {
     const world = await plainWorld();
     appendFileSync(join(world.root, "Cargo.toml"), '\n[features]\npaneweft = ["dep:paneweft"]\n\n[dependencies.paneweft]\npath = "../paneweft/crates/paneweft"\noptional = true\n');
     const reply = (await world.scaffold("scaffold_view", { type: "plain::Boat", question: "Which crew does this boat carry?" })) as Reply;
     expect(reply.patches.map((patch) => patch.path), "no second feature or dependency").toEqual(["src/lib.rs"]);
-    expect(reply.setup.map((entry) => entry.step).join("\n")).toContain("point it at `vendor/paneweft/paneweft`");
+    const steps = reply.setup.map((entry) => entry.step).join("\n");
+    expect(steps).toContain("../paneweft/crates/paneweft");
+    expect(steps).toContain(`git = "${SDK_GIT_URL}"`);
+    expect(steps).toContain(`rev = "${SDK_GIT_REV}"`);
+  });
+
+  // why: F3. A git dependency without a rev follows a branch: two machines build two SDKs, and `cargo update` moves the SDK under the author. A rev that is not this host's
+  // is named with the bump command. A crate pinned at this host's rev gets neither message.
+  // proves: CLAIM(F3-rev-policy)
+  it("asks for a rev on an unpinned git dependency and names the bump for another rev, and is silent for the pinned one", async () => {
+    const world = await plainWorld();
+    const manifest = join(world.root, "Cargo.toml");
+    const original = readFileSync(manifest, "utf8");
+    const declare = (extra: string) => writeFileSync(manifest, `${original}\n[features]\npaneweft = ["dep:paneweft"]\n\n[dependencies.paneweft]\ngit = "${SDK_GIT_URL}"\n${extra}optional = true\n`);
+    const stepsFor = async () => ((await world.scaffold("scaffold_view", { type: "plain::Boat", question: "Which crew does this boat carry?" })) as Reply).setup.map((entry) => entry.step).join("\n");
+    declare("");
+    expect(await stepsFor()).toMatch(/without a `rev`.*add `rev = "[0-9a-f]{40}"`/);
+    declare(`rev = "${"1".repeat(40)}"\n`);
+    const other = await stepsFor();
+    expect(other).toContain(`pins the paneweft SDK at ${"1".repeat(40)}`);
+    expect(other).toContain(`cargo update -p paneweft --precise ${SDK_GIT_REV}`);
+    declare(`rev = "${SDK_GIT_REV}"\n`);
+    expect(await stepsFor(), "pinned at this host's rev: nothing to say").toBe("");
   });
 
   // why: F12. The text reply (what an agent reads) carries the setup, the test and a counts line that agrees with what was returned.
@@ -178,7 +210,8 @@ describe("[F12] the Rust scaffold applies to a crate that has no paneweft wiring
     const body = (await world.scaffold("scaffold_view", { type: "plain::Boat", question: "Which crew does this boat carry?" }, "text")) as string;
     expect(body).toContain("counts: unit=patches total=2 matched=2 returned=2 omitted=0 truncated=false");
     expect(body).toContain("setup:");
-    expect(body).toContain("vendor-rust-sdk.mjs");
+    expect(body).toContain(`rev = "${SDK_GIT_REV}"`);
+    expect(body).not.toContain("vendor-rust-sdk");
   });
 });
 

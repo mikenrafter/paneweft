@@ -25,23 +25,31 @@ Week-one scope is amendment S1; claims outside it are tagged `later` in the repo
 
 A crate with in-crate views and examples declares the SDK as an optional dependency behind a `paneweft` feature. Cargo reads the manifest of every path dependency, optional ones included, whenever it
 resolves a package, so a path that leaves the repository (`../../paneweft/crates/paneweft`) makes `cargo build`, `cargo metadata` and a Nix build fail wherever that checkout is absent, with the
-feature off. The recipe therefore keeps the dependency inside the repository:
+feature off. The recipe therefore takes the SDK from the public repository at a pinned commit:
 
-```
-node <paneweft checkout>/scripts/vendor-rust-sdk.mjs vendor/paneweft      # run in the instrumented repository; run it again to update the copy
-```
 ```toml
 [features]
 paneweft = ["dep:paneweft"]
 [dependencies.paneweft]
-path = "vendor/paneweft/paneweft"
+git = "https://github.com/mikenrafter/paneweft"
+rev = "cb01e0e9f7f71b413a00e8851d852b70f37d4dad"
 optional = true
 ```
 
-A Nix build lists `./vendor` in its source fileset. A release build leaves the feature off: the SDK is not in its build graph (its few third-party dependencies are only in `Cargo.lock`) and nothing of it is linked.
-Alternatives rejected: a git dependency (resolved and fetched with the feature off, and Nix needs a hash for it; there is no remote), a separate instrumentation crate (Rust's orphan rule forbids
-implementing the SDK's trait for a type of another crate, and the spec's point is views beside the code), and a manifest the host generates at collect time (it breaks every `CARGO_MANIFEST_DIR`-relative path).
-Tested with real cargo in `test/v1/rust-vendoring.real.test.ts`.
+- **Rev policy.** A full 40-hex commit, never a branch or tag name (two machines or two days build one SDK). The commit must stay reachable from a branch or tag on the remote. The host pins one commit
+  (`SDK_GIT_REV` in `src/v1/sdk-source.ts`; the scaffold prints it); `src/v1/sdk-source.test.ts` fails when `crates/` differs from that commit, and when README, this file or the skill quote another rev.
+  Bumping an instrumented repository: edit `rev`, then `cargo update -p paneweft --precise <commit>`.
+- **Cargo.** `paneweft-macros` is a path dependency of `paneweft` inside the same repository, and the workspace-inherited keys resolve there, so one `paneweft` entry is enough. Cargo needs the git source to resolve the
+  lock even with the feature off: run `cargo fetch` once; every later `cargo build --release --offline --locked` works, compiles none of the SDK and links none of it (the SDK's few third-party crates are only in `Cargo.lock`).
+- **Offline machines.** `cargo vendor` carries git dependencies; the vendoring script of the earlier recipe is gone because a copy inside the repository goes stale and `cargo vendor` does the same job for every dependency.
+- **Nix.** A `rustPlatform.buildRustPackage` build vendors every package of `Cargo.lock`, the optional ones too, so the lock's git source needs a hash even for a feature-off build; without it evaluation fails with
+  "No hash was found while vendoring the git dependency paneweft-0.0.0". Add `cargoLock = { lockFile = ./Cargo.lock; outputHashes."paneweft-0.0.0" = "sha256-..."; };` (key `<name>-<version>`; one entry covers
+  `paneweft-macros`, which is in the same repository at the same commit; set `lib.fakeHash` once and copy the hash Nix prints). No fileset change is needed (nothing is copied into the repository). Bumping `rev`
+  changes the hash: update it in the same commit as `Cargo.lock`. Verified on vigil (`fix-f3-gitdep-report.md`).
+- Alternatives rejected: a copy of the SDK inside the instrumented repository (the previous recipe: ~3 300 lines to refresh by hand), a separate instrumentation crate (Rust's orphan rule forbids implementing the SDK's
+  trait for a type of another crate, and the spec's point is views beside the code), and a manifest the host generates at collect time (it breaks every `CARGO_MANIFEST_DIR`-relative path).
+
+Tested with real cargo in `test/v1/rust-gitdep.real.test.ts` (the GitHub URL is redirected to a local mirror of this checkout with git's `insteadOf`; manifests and locks hold the real URL and rev).
 
 Green implements every module and wires the tools into the CLI and the MCP server: `grep -rn NOT_IMPLEMENTED src packages crates scripts` is empty. The v0 surface is
 unchanged except where `test/v1/surface.test.ts` says otherwise; the v0 pins of the tool count (`src/cli/usage.test.ts`, `src/mcp/server.test.ts`) and the help table

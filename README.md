@@ -178,23 +178,26 @@ The record is `paneweft.adapter/1`, written by the owner. No tool and no agent c
 
 ### 2. Instrument a Rust crate
 
-The SDK is an optional development dependency behind a `paneweft` feature. Cargo reads the manifest of every path dependency, optional ones too, so the SDK is copied INTO
-the repository (a path outside it breaks every plain `cargo build` and Nix build where the checkout is absent):
-
-```sh
-cd /path/to/crate && node /path/to/paneweft/scripts/vendor-rust-sdk.mjs vendor/paneweft     # run it again to update the copy
-```
+The SDK is an optional development dependency behind a `paneweft` feature, taken from this public repository at a pinned commit:
 
 ```toml
 [features]
 paneweft = ["dep:paneweft"]
 
 [dependencies.paneweft]
-path = "vendor/paneweft/paneweft"
+git = "https://github.com/mikenrafter/paneweft"
+rev = "cb01e0e9f7f71b413a00e8851d852b70f37d4dad"
 optional = true
 ```
 
-A Nix build lists `./vendor` in its source fileset; a Cargo workspace root lists `vendor/paneweft/paneweft` and `vendor/paneweft/paneweft-macros` under `exclude`. Then, behind
+Why a git dependency: Cargo reads the manifest of every path dependency, optional ones too, so a path to a checkout next to the repository breaks every plain `cargo build` and
+Nix build where that checkout is absent. A git dependency resolves on any machine that can reach GitHub: run `cargo fetch` once (even with the feature off, Cargo needs the source to
+resolve the lock) and every later build can be `--offline`. The release build leaves the feature off and links none of the SDK.
+
+Rev policy: always a full commit, never a branch. It is the commit this checkout's scaffolds print (`paneweft scaffold view|example`), and `src/v1/sdk-source.test.ts` fails
+when `crates/` here differs from it. To bump an instrumented repository: set `rev` to the new commit and run `cargo update -p paneweft --precise <commit>`. For an offline
+machine use `cargo vendor` (it carries git dependencies). A Nix build of the crate (`rustPlatform.buildRustPackage`) gives the git source a hash: `cargoLock.outputHashes."paneweft-0.0.0" = "sha256-..."`
+(leave it empty once, copy the hash Nix prints), see `docs/v1-red-contract.md` section 1a. Then, behind
 `#[cfg(feature = "paneweft")]`, a views impl and an example (compact recipe; `paneweft scaffold view|example` prints these for your type and applies cleanly):
 
 ```rust

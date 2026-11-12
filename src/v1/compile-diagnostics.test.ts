@@ -73,20 +73,22 @@ describe("[F6] compile diagnostics say what was left out and where the error is"
     expect(own.nextAction).toMatch(/adapter with a `tsconfig`/);
   });
 
-  // why: F6 for Rust. The same classification for a cargo log: a vendored SDK path, a path outside the root, and the author's file.
+  // why: F6 for Rust. The same classification for a cargo log: the SDK's git checkout under CARGO_HOME (where the git dependency compiles from), a `cargo vendor` path, a path outside the root, and the author's file.
   // proves: CLAIM(F6-next-action)
   it("classifies cargo errors by the path of their span", () => {
     const log = [
       "error[E0599]: no method named `field` found", " --> src/watch.rs:10:5", "",
-      "error[E0308]: mismatched types", " --> vendor/paneweft/paneweft/src/lib.rs:3:9", "",
+      "error[E0308]: mismatched types", " --> /home/user/.cargo/git/checkouts/paneweft-1a2b3c/cb01e0e/crates/paneweft/src/lib.rs:3:9", "",
+      "error[E0308]: mismatched types", " --> vendor/paneweft/src/lib.rs:3:9", "",
       "error[E0432]: unresolved import", " --> /somewhere/else/lib.rs:1:5", "",
     ].join("\n");
     const found = compileDiagnostics({ log, typecheck: undefined, kind: "cargo", root: "/work/vigil" });
-    expect(found.map((d) => d.source!.path)).toEqual(["src/watch.rs", "vendor/paneweft/paneweft/src/lib.rs", "/somewhere/else/lib.rs"]);
+    expect(found.map((d) => d.source!.path)).toEqual(["src/watch.rs", "/home/user/.cargo/git/checkouts/paneweft-1a2b3c/cb01e0e/crates/paneweft/src/lib.rs", "vendor/paneweft/src/lib.rs", "/somewhere/else/lib.rs"]);
     expect(found[0]!.nextAction).toMatch(/Fix the named field or type in the view source/);
     expect(found[0]!.nextAction, "cargo has no tsconfig to scope").not.toMatch(/tsconfig/);
     expect(found[1]!.nextAction).toMatch(/paneweft SDK/);
-    expect(found[2]!.nextAction).toMatch(/outside the repository root/);
+    expect(found[2]!.nextAction).toMatch(/paneweft SDK/);
+    expect(found[3]!.nextAction).toMatch(/outside the repository root/);
   });
 
   // why: F6. With no parseable error the fallback stays one diagnostic carrying the output (unchanged behaviour).

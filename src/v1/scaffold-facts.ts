@@ -34,8 +34,6 @@ export interface RustFacts {
   source: string | undefined;
   /** `Cargo.toml` of the adapter root. */
   cargo: string | undefined;
-  /** The SDK copy `vendor/paneweft/paneweft/Cargo.toml` exists. */
-  vendored: boolean;
   /** Some `.rs` file of the crate already invokes `paneweft::test_adapter!()`. */
   testAdapter: boolean;
 }
@@ -61,7 +59,6 @@ export function rustFacts(adapter: AdapterRecord, sourcePath: string): RustFacts
   return {
     source: readInside(root, sourcePath),
     cargo: readInside(root, "Cargo.toml"),
-    vendored: existsSync(join(root, "vendor/paneweft/paneweft/Cargo.toml")),
     testAdapter: files.some((file) => /test_adapter!\s*[(\[{]/.test(readInside(root, file) ?? "")),
   };
 }

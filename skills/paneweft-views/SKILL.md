@@ -4,7 +4,7 @@ description: Author and maintain permanent typed views and executable examples i
 ---
 
 Use this when a recurring development question needs an inspectable answer.
-Read the repo instructions, then check what paneweft wiring the repository already has. Rust: a `paneweft` cargo feature, `vendor/paneweft`,
+Read the repo instructions, then check what paneweft wiring the repository already has. Rust: a `paneweft` cargo feature, the `[dependencies.paneweft]` git dependency,
 `#[paneweft::views]` impls. TypeScript: `@paneweft/sdk` in `package.json`, a `paneweft.views.ts` manifest, the reporter in the vitest config. A
 repository with none of it gets it in step 2; there is nothing to read first. State the question and the type.
 
@@ -71,7 +71,8 @@ says `changed`: collect the example again (`docs/renderers.md`).
 Rust recipe (the scaffold prints these for your type; everything stays behind the feature):
 
 ```sh
-node <paneweft checkout>/scripts/vendor-rust-sdk.mjs vendor/paneweft        # in the crate root; again to update
+cargo fetch                                                                 # once: the SDK is a git dependency, even a feature-off build resolves it
+cargo update -p paneweft --precise <commit>                                 # to bump the pinned SDK (after editing rev)
 cargo tree -i paneweft                                                      # release check: "did not match any packages"
 strings target/release/<artifact> | grep -c -i paneweft                     # 0 with the feature off (nonzero with it: the control)
 ```
@@ -80,7 +81,8 @@ strings target/release/<artifact> | grep -c -i paneweft                     # 0 
 [features]
 paneweft = ["dep:paneweft"]
 [dependencies.paneweft]
-path = "vendor/paneweft/paneweft"
+git = "https://github.com/mikenrafter/paneweft"
+rev = "cb01e0e9f7f71b413a00e8851d852b70f37d4dad"   # a full commit, never a branch
 optional = true
 ```
 

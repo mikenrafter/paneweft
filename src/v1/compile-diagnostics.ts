@@ -8,7 +8,7 @@ export const MAX_LISTED_COMPILE_ERRORS = 20;
 type Where = "repository" | "sdk" | "outside";
 interface Found { message: string; path: string; line: number; column: number }
 
-/** A path that belongs to the paneweft SDK wherever it was copied or linked to (the package, a vendored copy, the crates, an installed package). */
+/** A path that belongs to the paneweft SDK wherever it was copied or linked to (the package, the crates, the SDK's git checkout under CARGO_HOME, a `cargo vendor` copy, an installed package). */
 const SDK_PATH = /(^|\/)(packages\/paneweft-ts|vendor\/paneweft|crates\/paneweft(-macros)?|node_modules\/@paneweft\/sdk)(\/|$)/;
 
 function whereIs(path: string, root: string): Where {

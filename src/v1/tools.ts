@@ -24,6 +24,7 @@ import type { Inventory } from "../generated/v1/Inventory.ts";
 import type { Fingerprint } from "./fingerprint.ts";
 import type { JobService } from "./jobs.ts";
 import { withStoredPages } from "./pages.ts";
+import { SDK_GIT_REV, SDK_GIT_URL, sdkDependencySource, sdkDependencyToml } from "./sdk-source.ts";
 import { CHECKOUT_ROOT, adapterRoot, cargoWiring, declaresRustModule, rustFacts, typeScriptFacts, wordSlug, wordTitle, type RustFacts, type TypeScriptFacts } from "./scaffold-facts.ts";
 import { rendererOfCatalogue, rendererOfLastCapture, rendererOfStoredView, type StoredRenderer, type ViewRenderer } from "./renderer-status.ts";
 import { exampleOfCapture, isFailedExample, type ExampleOfResult } from "./result-example.ts";
@@ -437,16 +438,18 @@ function rustPlan(facts: RustFacts): RustPlan {
   const wiring = cargoWiring(facts.cargo);
   const steps: SetupStep[] = [];
   const cargoPatches: Patch[] = [];
-  if (!facts.vendored) steps.push({ step: "copy the SDK into this repository, in the crate root (a path outside it breaks every plain build where the paneweft checkout is absent; run it again to update the copy)", command: `node ${shellWord(`${CHECKOUT_ROOT}/scripts/vendor-rust-sdk.mjs`)} vendor/paneweft` });
   const lines: string[] = [];
   if (!wiring.feature) {
     if (wiring.featuresTable) steps.push({ step: "add `paneweft = [\"dep:paneweft\"]` under the existing [features] of Cargo.toml" });
     else lines.push("[features]", "paneweft = [\"dep:paneweft\"]", "");
   }
-  if (!wiring.dependency) lines.push("[dependencies.paneweft]", "path = \"vendor/paneweft/paneweft\"", "optional = true", "");
+  if (!wiring.dependency) lines.push(...sdkDependencyToml(), "");
   if (lines.length > 0) cargoPatches.push({ path: "Cargo.toml", text: ["# Cargo.toml: the SDK is an optional development dependency behind the `paneweft` feature; a release build leaves the feature off.", ...lines].join("\n") });
-  if (wiring.dependency && facts.cargo !== undefined && !/vendor\/paneweft\/paneweft/.test(facts.cargo)) steps.push({ step: "Cargo.toml declares the paneweft dependency with another path (the field-test layout: a checkout next to the repository): point it at `vendor/paneweft/paneweft` or a plain build still needs that checkout" });
-  if (facts.cargo !== undefined && /^\s*\[workspace\]/m.test(facts.cargo) && !/vendor\/paneweft/.test(facts.cargo)) steps.push({ step: "when this crate is the root of a Cargo workspace, list `vendor/paneweft/paneweft` and `vendor/paneweft/paneweft-macros` under `exclude` of [workspace] (the copy holds two crates)" });
+  const source = sdkDependencySource(facts.cargo);
+  if (source.kind === "path") steps.push({ step: `Cargo.toml declares the paneweft dependency with a path (\`${source.path}\`; the field-test layout, a checkout next to the repository): Cargo reads even an optional path dependency with the feature off, so every plain build and Nix build fails wherever that checkout is absent. Replace the \`path\` line with \`git = "${SDK_GIT_URL}"\` and \`rev = "${SDK_GIT_REV}"\`, then run \`cargo update -p paneweft\`` });
+  else if (source.kind === "git" && source.rev === undefined) steps.push({ step: `Cargo.toml declares the paneweft git dependency without a \`rev\`: add \`rev = "${SDK_GIT_REV}"\` (a commit, not a branch, so every machine and every day builds the same SDK), then run \`cargo update -p paneweft\`` });
+  else if (source.kind === "git" && source.rev !== SDK_GIT_REV) steps.push({ step: `Cargo.toml pins the paneweft SDK at ${source.rev}; this host's SDK is ${SDK_GIT_REV}. To bump: set \`rev\` to it and run \`cargo update -p paneweft --precise ${SDK_GIT_REV}\`` });
+  if (!wiring.dependency) steps.push({ step: "the first build fetches the SDK from GitHub (once, even with the feature off); run `cargo fetch` before going offline. A `rustPlatform.buildRustPackage` build of this crate needs `cargoLock.outputHashes.\"paneweft-0.0.0\" = \"sha256-...\";` for the git source in `Cargo.lock` (set `lib.fakeHash` once and copy the hash Nix prints)" });
   const viewTestsModule = "paneweft_view_tests";
   const examplesModule = "paneweft_examples";
   return { cargoPatches, steps, viewTestsModule, examplesModule };
@@ -487,7 +490,7 @@ function scaffoldView(kind: "cargo" | "vitest", args: { typeId: string; source: 
   const title = wordTitle(args.question, 80);
   const viewId = `${wordSlug(args.source.symbol, 48)}.${name}`;
   if (kind === "cargo") {
-    const facts = args.rust ?? { source: undefined, cargo: undefined, vendored: false, testAdapter: false };
+    const facts = args.rust ?? { source: undefined, cargo: undefined, testAdapter: false };
     const plan = rustPlan(facts);
     const existing = declaresRustModule(facts.source, plan.viewTestsModule);
     const notices = declaresRustModule(facts.source, "tests") ? [`${args.source.path} already has a \`mod tests\`: the scaffold's test goes into its own module \`${plan.viewTestsModule}\` (two modules of one name are error E0428)`] : [];
