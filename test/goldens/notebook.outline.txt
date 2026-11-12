@@ -8,6 +8,7 @@ viewer
       tab aria-selected="true" data-definition-id="d-notebook" role="tab" tabindex="0" "Story"
       tab aria-selected="false" data-definition-id="builtin:metadata" role="tab" tabindex="-1"
       tab aria-selected="false" data-definition-id="builtin:raw" role="tab" tabindex="-1"
+    question "How do the evidence and views answer this investigation?"
     status-strip
       completeness data-status="complete" "complete (the five blocks of the fixture page)"
       freshness data-status="fresh" "fresh"

@@ -22,6 +22,7 @@ Viewport and locale come from `MountOptions`; the layout version string is expos
 | `needs-evidence` | collapsed `<details>` listing registered but unavailable views |
 | `unavailable-view` | one entry; text states the missing roles or the reason |
 | `tabpanel` | `role="tabpanel"`, labelled by its tab |
+| `question` | `<p>`; the view's question (`envelope.question`), as text, directly above the `status-strip` (F17) |
 | `status-strip` | persistent strip above the view; contains the four below |
 | `completeness` | `data-status` (`complete`/`partial`/`unsupported`); visible text: status word plus criterion, first gap, or reason |
 | `freshness` | `data-status` (`fresh`/`stale`/`unknown`); text names changed paths or inaccessible roots |
@@ -55,6 +56,10 @@ Viewport and locale come from `MountOptions`; the layout version string is expos
 column key, `aria-sort` on the sorted one) and `row` (`role="row"`, `data-id`, `aria-selected`,
 `data-provenance`) > `cell` (`role="gridcell"`, `data-id` = column key; text = value). Group headings:
 `group` (text = group label). Enter on a focused row opens its entity in the next pane.
+
+Layout (F17): the header row and every `row` are CSS grids with ONE template (`grid-template-columns`: one track per column, then one for the row's actions), set on the
+elements themselves, so a column lines up whatever the page's stylesheet; the `columnheader` texts are the column titles in column order. The roles, the roving
+`tabindex` and the keys are unchanged.
 
 ## Tree
 

@@ -16,5 +16,5 @@ await build({
 });
 await writeFile(
   "dist/viewer/index.html",
-  '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>paneweft</title></head><body><div id="root"></div><script src="/assets/app.js"></script></body></html>\n',
+  '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>paneweft</title><style>body{font:14px/1.45 system-ui,sans-serif;margin:1em 1.5em;color:#222}[data-pw=pane]{margin:.5em 0 1.5em}[data-pw=status-strip]{font-size:12px;color:#555;margin:.25em 0 .75em}[data-pw=row]:focus,[data-pw=row][aria-selected=true]{outline:2px solid #06c;outline-offset:-2px}[data-pw=cell]{overflow-wrap:anywhere}</style></head><body><div id="root"></div><script src="/assets/app.js"></script></body></html>\n',
 );

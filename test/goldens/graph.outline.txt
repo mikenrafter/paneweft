@@ -8,6 +8,7 @@ viewer
       tab aria-selected="false" data-definition-id="d-code" role="tab" tabindex="-1" "Denial branch"
       tab aria-selected="false" data-definition-id="builtin:metadata" role="tab" tabindex="-1"
       tab aria-selected="false" data-definition-id="builtin:raw" role="tab" tabindex="-1"
+    question "What connects these entities, and by which relation?"
     status-strip
       completeness data-status="complete" "complete (all direct invocations in the fixture)"
       freshness data-status="fresh" "fresh"

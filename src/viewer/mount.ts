@@ -284,7 +284,7 @@ export async function mountViewer(container: HTMLElement, options: MountOptions)
       const summary = summarise(view, filterFor(view, ui));
       const input = h(doc, "input", { type: "search", "data-pw": "filter-input", "aria-label": "Filter" }) as HTMLInputElement;
       input.value = ui.filterText;
-      parts.push(statusStrip(view, summarise(view)), input,
+      parts.push(h(doc, "p", { "data-pw": "question", style: "margin:.25em 0;font-weight:600" }, view.envelope.question), statusStrip(view, summarise(view)), input,
         h(doc, "div", { "data-pw": "match-count", "data-matched": summary.matched, "data-total": summary.total }, `${summary.matched} of ${summary.total} match`));
       const context: ComponentContext = {
         doc, locale, layoutVersion, paneIndex: index, envelope: view.envelope, summary, ui, selection: pane.selection, interactive: true,

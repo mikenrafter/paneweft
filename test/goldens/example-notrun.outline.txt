@@ -7,6 +7,7 @@ viewer
       tab aria-selected="true" data-definition-id="d-example" role="tab" tabindex="0" "One change fires"
       tab aria-selected="false" data-definition-id="builtin:metadata" role="tab" tabindex="-1"
       tab aria-selected="false" data-definition-id="builtin:raw" role="tab" tabindex="-1"
+    question "Can I rerun this scenario and inspect its tested result?"
     status-strip
       completeness data-status="partial" "partial (1 gaps; first: g-not-run: Does the scenario pass in this checkout?)"
       freshness data-status="fresh" "fresh"

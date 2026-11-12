@@ -7,6 +7,7 @@ viewer
       tab aria-selected="true" data-definition-id="d-tree" role="tab" tabindex="0" "Layout"
       tab aria-selected="false" data-definition-id="builtin:metadata" role="tab" tabindex="-1"
       tab aria-selected="false" data-definition-id="builtin:raw" role="tab" tabindex="-1"
+    question "How is this entity composed?"
     status-strip
       completeness data-status="complete" "complete (all directory entries of the fixture)"
       freshness data-status="fresh" "fresh"

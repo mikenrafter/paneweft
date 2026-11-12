@@ -7,6 +7,7 @@ viewer
       tab aria-selected="true" data-definition-id="d-shape" role="tab" tabindex="0" "Watch message"
       tab aria-selected="false" data-definition-id="builtin:metadata" role="tab" tabindex="-1"
       tab aria-selected="false" data-definition-id="builtin:raw" role="tab" tabindex="-1"
+    question "What does this value or boundary payload contain?"
     status-strip
       completeness data-status="complete" "complete (the declared fields of the fixture)"
       freshness data-status="fresh" "fresh"
