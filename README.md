@@ -270,7 +270,7 @@ The SDK's `.ts` sources run under Node and Vitest; its package ships declaration
 
 ```sh
 paneweft collect --request-id r1 --repo vigil --adapter cargo --example watch.pending     # exports the catalogue itself, runs the example, imports the run
-paneweft collection status r1                  # the job advances by itself (a detached driver follows it); status only reports
+paneweft collection status r1                  # the job advances by itself (a detached driver follows it); status reports it and advances it while it runs, but does not restart a driver that died: `collect` again with the same request id does
 paneweft result --run run-r1 --view watch.status --example watch.pending
 paneweft failure run-r1:diag-inv-1             # explain a diagnostic
 paneweft serve                                 # the viewer: the question, the status strip, the rows, keyboard navigation

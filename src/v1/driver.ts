@@ -1,7 +1,7 @@
 // Jobs that advance without anyone asking (F20). A collection job is driven by whoever calls `status`: it submits the run stage after the catalogue export and imports the results when
 // qex says the job stopped. A CLI `collect` exits as soon as the job is submitted and an MCP client may go away, so in the field test the export finished, and the run stage and the
 // import never happened until somebody polled. The service therefore hands each job it submitted to a DRIVER: a detached process that does what a polling agent would do, `status` with
-// a wait, until the job is terminal. It owns nothing the files do not hold: a driver that dies, a server that restarts or an agent that polls instead all work (S2, S41), and
+// a wait, until the job is terminal. It owns nothing the files do not hold: a driver that dies, a server that restarts or an agent that polls instead all work (S2, S41): `status` advances a job while it runs, but only `collect` with the same request id (it kicks) starts a new driver. And
 // `cancel` reaches the same job from any process.
 import { spawn } from "node:child_process";
 import { closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";

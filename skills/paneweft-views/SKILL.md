@@ -31,7 +31,7 @@ repository with none of it gets it in step 2; there is nothing to read first. St
 5. Call `collect` with a registered adapter and the exact example ids. The collection exports the catalogue itself, resolves
    your ids against what it exported (so an example you just wrote needs no extra step), runs those examples, and stores the
    catalogue it exported once it succeeds. An id that no export declares fails the job and names the nearest declared ids. The job
-   advances by itself (a detached driver follows it), so you do not have to poll; `collection_status` reports it, and
+   advances by itself (a detached driver follows it), so you do not have to poll (if the driver died, `status` still advances the job while you poll it; the same `collect` again restarts the driver); `collection_status` reports it, and
    `--wait-seconds N` (at most 30) waits up to N seconds for it to change; repeat until the state is terminal. Use `explain_failure` for named diagnostics. `cancel_collection` stops a job.
 6. Call `view_result`. With two or more examples in the run name one: `--example <id>` picks the example's own result, `--observation`
    an object. Read the header's example line (a view captured by a failed example says so). Test facts, navigation, empty and error
