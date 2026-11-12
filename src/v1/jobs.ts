@@ -639,28 +639,27 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
       const stage = stageOf(intent, terminal);
       const resolved = await resolvedOf(id, intent, stage);
       if (resolved === undefined) throw new Error(`job "${id}" has no resolved ${stage} stage to finish`);
-      // the lease first: whoever sees `importing` on disk can also see who holds it, so a second instance never imports concurrently
-      await writeState(id, { state: "importing", observedStop: qexJob }, `qex job ${qexJob.id} is ${qexJob.state}`);
-      const logFile = join(jobDir(id), stage === "export" ? "export.log" : "job.log");
-      let log = await readFile(logFile, "utf8").catch(() => undefined);
-      if (log === undefined) {
-        const fetched = neverRan ? ok("") : await deps.qex.logs(qexJob.id);
-        log = fetched.ok ? fetched.value : "";
-        await writeDurably(logFile, log.slice(-adapter.limits.logBytes));
-      }
       let outcome: { status: NonNullable<JobView["collectionStatus"]>; snapshotIds: string[]; diagnostics: Diagnostic[]; counts?: Record<string, number> } | undefined;
-      // a cancel that was requested before the export ended: no example of the run ever started, so the job is cancelled whatever the export did
-      if (neverRan || (stage === "export" && cancelRequested)) outcome = { status: "cancelled", snapshotIds: [], diagnostics: [] };
-      else {
-        // CLAIM(T1-terminal): a finish that fails (the import above all) ends the job `failed` with a diagnostic; it never leaves the job `importing`.
-        try {
-          if (stage === "export") outcome = await finishExport(id, intent, adapter, qexJob, log, resolved);
-          else if (intent.params.mode === "catalogue") outcome = await finalizeCatalogue(id, adapter, qexJob, log, resolved);
-          else outcome = await finalizeRun(id, intent, adapter, qexJob, log, cancelRequested && qexJob.state === "killed", resolved);
-        } catch (cause) {
-          if (typeof cause === "object" && cause !== null && injected.has(cause)) throw cause;
-          outcome = await failedFinish(id, stage, cause);
+      // CLAIM(T1-terminal), CLAIM(T7-prepare-in-try): a finish that fails ends the job `failed` with a diagnostic; it never leaves the job `importing`. That covers
+      // the preparation (the `importing` write, the log) as much as the import.
+      try {
+        // the lease first: whoever sees `importing` on disk can also see who holds it, so a second instance never imports concurrently
+        await writeState(id, { state: "importing", observedStop: qexJob }, `qex job ${qexJob.id} is ${qexJob.state}`);
+        const logFile = join(jobDir(id), stage === "export" ? "export.log" : "job.log");
+        let log = await readFile(logFile, "utf8").catch(() => undefined);
+        if (log === undefined) {
+          const fetched = neverRan ? ok("") : await deps.qex.logs(qexJob.id);
+          log = fetched.ok ? fetched.value : "";
+          await writeDurably(logFile, log.slice(-adapter.limits.logBytes));
         }
+        // a cancel that was requested before the export ended: no example of the run ever started, so the job is cancelled whatever the export did
+        if (neverRan || (stage === "export" && cancelRequested)) outcome = { status: "cancelled", snapshotIds: [], diagnostics: [] };
+        else if (stage === "export") outcome = await finishExport(id, intent, adapter, qexJob, log, resolved);
+        else if (intent.params.mode === "catalogue") outcome = await finalizeCatalogue(id, adapter, qexJob, log, resolved);
+        else outcome = await finalizeRun(id, intent, adapter, qexJob, log, cancelRequested && qexJob.state === "killed", resolved);
+      } catch (cause) {
+        if (typeof cause === "object" && cause !== null && injected.has(cause)) throw cause;
+        outcome = await failedFinish(id, stage, cause);
       }
       if (outcome === undefined) return;
       const finalState: JobStateName = outcome.status === "succeeded" ? "succeeded" : outcome.status === "cancelled" ? "cancelled" : "failed";

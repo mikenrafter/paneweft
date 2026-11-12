@@ -1020,7 +1020,6 @@ function staleStatus(qex: QexClient): { client: QexClient; seen: () => boolean; 
   let used = false;
   return { client: { ...qex, status: async (id) => { const real = await qex.status(id); if (used) return real; used = true; seen = true; await gate; return real; } }, seen: () => seen, release };
 }
-const stateOf = (dir: string, id: string): any => JSON.parse(readFileSync(join(dir, "jobs", id, "state.json"), "utf8"));
 
 describe("[T5] a finish belongs to the qex job of the stage on disk", () => {
   // WHY CLAIM(T5-stage-identity): cancel read the export's stopped qex job; a status then finished the export and submitted the run; cancel's finish ran
@@ -1071,5 +1070,20 @@ describe("[T6] a cancel is recorded before a stopped export is decided", () => {
     expect(must(await w.service().status("t6", { waitSeconds: 2 }), "status")).toMatchObject({ state: "cancelled" });
     expect(w.qex.executions(), "no run was submitted after the cancel").toHaveLength(1);
     expect(w.qex.jobs()).toHaveLength(1);
+  });
+});
+
+describe("[T7] a storage error while a finish prepares ends the job failed", () => {
+  // WHY CLAIM(T7-prepare-in-try): the `importing` write and the log fetch/write sat outside T1's try, so a storage error there left the job `importing` and
+  // made every status throw. Here job.log is a directory, so the log cannot be written. Rejects a catch that covers only the import.
+  it("an error writing the log ends the job failed with an import diagnostic", async () => {
+    const { dir, service } = await world();
+    const jobs = service();
+    must(await jobs.collect(request("t7")), "collect");
+    mkdirSync(join(dir, "jobs", "t7", "job.log"));
+    const view = await settle(jobs, "t7", ["failed", "succeeded"]);
+    expect(view.state, JSON.stringify(view)).toBe("failed");
+    expect(view.diagnosticIds.some((id) => id.startsWith("run-t7:diag-import"))).toBe(true);
+    expect(must(await jobs.cancel("t7"), "cancel")).toMatchObject({ outcome: "already-terminal", state: "failed" });
   });
 });
