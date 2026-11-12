@@ -62,7 +62,7 @@ describe("session writes are durable in the right order (T10)", () => {
       "sync:object", "rename:object",
       "sync:object", "rename:object",
       "sync:objects-dir", "sync:session-dir",
-      "sync:manifest", "rename:manifest",
+      "sync:manifest", "rename:manifest", "sync:session-dir",
     ]);
   });
 
@@ -74,7 +74,7 @@ describe("session writes are durable in the right order (T10)", () => {
     must(await session.importBundle(subBundle(["modules"])));
     const events = await observe(dir);
     must(await session.importBundle(subBundle(["modules"])));
-    expect(events).toEqual(["sync:manifest", "rename:manifest"]);
+    expect(events).toEqual(["sync:manifest", "rename:manifest", "sync:session-dir"]);
   });
 
   // why: a rejected request stages nothing and writes nothing, so it fsyncs nothing either.

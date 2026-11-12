@@ -1,0 +1,119 @@
+{
+  "schemaVersion": "paneweft.object-graph/1",
+  "captureId": "inv-1",
+  "runId": "run-2",
+  "invocationId": "inv-1",
+  "roots": [
+    "o1"
+  ],
+  "objects": [
+    {
+      "id": "o1",
+      "typeId": "containmarks::ContainerMappingRecord",
+      "domainKey": null,
+      "label": "",
+      "fields": {
+        "firstSeenIndex": 4,
+        "cookieStoreId": "firefox-container-3",
+        "backupName": "Work"
+      },
+      "edges": [],
+      "views": [
+        "mapping.details"
+      ],
+      "contentHash": "f9c7c625daef68e8eeaf276f31fbcb0a3735c23316e7e9e0e4a3815b50420431"
+    }
+  ],
+  "views": [
+    {
+      "viewId": "mapping.details",
+      "objectId": "o1",
+      "title": "Container mapping",
+      "question": "Which original index and container does this mapping preserve?",
+      "component": "shape",
+      "priority": 10,
+      "completeness": {
+        "status": "complete"
+      },
+      "evidence": {
+        "provenance": "observed",
+        "runId": "run-2"
+      },
+      "data": {
+        "basis": "observed",
+        "root": "details",
+        "fields": [
+          {
+            "id": "details",
+            "path": "$",
+            "type": "object",
+            "presence": "required",
+            "children": [
+              "details.original index",
+              "details.container ID",
+              "details.backup name"
+            ],
+            "provenance": "observed",
+            "evidence": [
+              "run"
+            ]
+          },
+          {
+            "id": "details.original index",
+            "path": "$.original index",
+            "type": "number",
+            "presence": "required",
+            "example": 4,
+            "children": [],
+            "provenance": "observed",
+            "evidence": [
+              "run"
+            ]
+          },
+          {
+            "id": "details.container ID",
+            "path": "$.container ID",
+            "type": "string",
+            "presence": "required",
+            "example": "firefox-container-3",
+            "children": [],
+            "provenance": "observed",
+            "evidence": [
+              "run"
+            ]
+          },
+          {
+            "id": "details.backup name",
+            "path": "$.backup name",
+            "type": "string",
+            "presence": "required",
+            "example": "Work",
+            "children": [],
+            "provenance": "observed",
+            "evidence": [
+              "run"
+            ]
+          }
+        ]
+      },
+      "pages": []
+    }
+  ],
+  "pages": [],
+  "diagnostics": [],
+  "limits": {
+    "depth": 4,
+    "objects": 1000,
+    "references": 4000,
+    "rootBytes": 2097152,
+    "stringBytes": 16384,
+    "pageRows": 100,
+    "collectionBytes": 33554432,
+    "roots": 100,
+    "viewRows": 10000,
+    "viewBudgetMs": 100
+  },
+  "completeness": {
+    "status": "complete"
+  }
+}

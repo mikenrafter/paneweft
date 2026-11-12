@@ -97,6 +97,8 @@ export interface SessionOptions {
  * a compound operation (open_entity, navigate, render, ...) needs so that its steps cannot see different generations (CLAIM(manifest-snapshot-read)).
  */
 export interface SessionReader {
+  /** The session directory: the v1 files (runs, adapters) live beside the v0 store, and freshness of a collected snapshot is judged from them. */
+  readonly dir: string;
   getView(key: ViewKey): Promise<Result<StoredView>>;
   listViews(): Promise<ViewKey[]>;
   /** The stored views (of one snapshot when `snapshotId` is given) with entity, title, definition id and completeness, in key order. Opens no object whose manifest row has them. */
@@ -127,13 +129,18 @@ export interface Session extends SessionReader {
   readonly dir: string;
   /** One manifest read, to be passed through every step of a compound operation. */
   snapshot(): Promise<SessionSnapshot>;
-  importBundle(input: unknown, options?: { predecessorSnapshotId?: string }): Promise<Result<ImportSummary>>;
+  /**
+   * `replaceDefinitions` are registered definitions that this bundle changes (the v0 registry otherwise refuses a different definition under a
+   * registered id): they are validated and replaced in the SAME manifest swap as the bundle's views, so an import that is refused or never
+   * commits leaves the registry as it was (CLAIM(S7-transaction)).
+   */
+  importBundle(input: unknown, options?: { predecessorSnapshotId?: string; replaceDefinitions?: ViewDefinition[] }): Promise<Result<ImportSummary>>;
   /**
    * What importBundle (a `paneweft.bundle/1`) or putView (an envelope) would answer for `input` against this session as it is now, with nothing stored
    * and no lock taken: the same validation with the session's reference context and the same identity and snapshot conflict checks, through the same code
    * (CLAIM(preflight-parity)). `validate` with a session is this.
    */
-  preflight(input: unknown, options?: { predecessorSnapshotId?: string }): Promise<Result<{ kind: "envelope" | "bundle"; notes: ValidationNote[] }>>;
+  preflight(input: unknown, options?: { predecessorSnapshotId?: string; replaceDefinitions?: ViewDefinition[] }): Promise<Result<{ kind: "envelope" | "bundle"; notes: ValidationNote[] }>>;
   /** A single envelope; its entity and view definition must already be registered. */
   putView(input: unknown, options?: { predecessorSnapshotId?: string }): Promise<Result<ImportSummary>>;
   registerView(definition: unknown, expectedRevision: number): Promise<Result<{ revision: number }>>;
@@ -268,7 +275,7 @@ async function readStoredObject(dir: string, hash: string): Promise<unknown> {
 class ManifestReader implements SessionSnapshot {
   readonly generation: number;
   readonly registryRevision: number;
-  private readonly dir: string;
+  readonly dir: string;
   private readonly manifest: Manifest;
   private readonly derived: Map<string, IndexFields>;
 
@@ -547,6 +554,7 @@ class DirectorySession implements Session {
     }
     await this.hooks.beforeManifestRename?.({ operation });
     await rename(temporary, target);
+    await syncDirectory(this.dir);
     await this.hooks.afterManifestRename?.({ operation });
   }
 
@@ -647,8 +655,27 @@ class DirectorySession implements Session {
     };
   }
 
+  /** `manifest` with each registered definition of `replacements` replaced by the submitted one (validated like register_view); definitions not yet
+   * registered are left to the merge. The registry revision advances once per replaced definition, as register_view would. */
+  private replaceDefinitions(manifest: Manifest, replacements: readonly ViewDefinition[]): { manifest: Manifest } | { error: Failure } {
+    let definitions = manifest.definitions;
+    let registryRevision = manifest.registryRevision;
+    for (const submitted of replacements) {
+      const current = definitions.find((candidate) => candidate.id === submitted.id);
+      if (current === undefined || canonicalJson(current) === canonicalJson(submitted)) continue;
+      const report = validateDefinition(submitted, definitions);
+      if (!report.ok) return { error: validationFailure("the definition", report.errors) };
+      definitions = [...definitions.filter((candidate) => candidate.id !== submitted.id), submitted];
+      registryRevision += 1;
+    }
+    return { manifest: { ...manifest, definitions, registryRevision } };
+  }
+
   /** The admission of a bundle against `manifest`: validation with the session's reference context, then the conflict checks and the merge. */
-  private async admitBundle(manifest: Manifest, input: unknown, predecessor: string | undefined, stage: (value: unknown) => Promise<string>): Promise<{ manifest: Manifest; value: ImportSummary } | { error: Failure }> {
+  private async admitBundle(base: Manifest, input: unknown, predecessor: string | undefined, stage: (value: unknown) => Promise<string>, replacements: readonly ViewDefinition[] = []): Promise<{ manifest: Manifest; value: ImportSummary } | { error: Failure }> {
+    const replaced = this.replaceDefinitions(base, replacements);
+    if ("error" in replaced) return replaced;
+    const manifest = replaced.manifest;
     const report = validateSubmission(input, await this.contextFor(manifest, (input as { views?: unknown[] } | null)?.views ?? []));
     if (!report.ok) return { error: validationFailure("the bundle", report.errors) };
     if (report.kind !== "bundle") return { error: failure("INVALID_ARGUMENT", "importBundle takes a paneweft.bundle/1 document; use putView for a single envelope", { errors: [{ code: "SCHEMA_VERSION", pointer: "/schemaVersion", constraint: 'const: "paneweft.bundle/1"', hint: 'Use the literal "paneweft.bundle/1".' }] }) };
@@ -667,20 +694,20 @@ class DirectorySession implements Session {
     return { manifest: merged.manifest, value: { ...merged.summary, notes: report.notes } };
   }
 
-  async importBundle(input: unknown, options: { predecessorSnapshotId?: string } = {}): Promise<Result<ImportSummary>> {
-    return this.mutate<ImportSummary>("importBundle", (manifest, stage) => this.admitBundle(manifest, input, options.predecessorSnapshotId, stage));
+  async importBundle(input: unknown, options: { predecessorSnapshotId?: string; replaceDefinitions?: ViewDefinition[] } = {}): Promise<Result<ImportSummary>> {
+    return this.mutate<ImportSummary>("importBundle", (manifest, stage) => this.admitBundle(manifest, input, options.predecessorSnapshotId, stage, options.replaceDefinitions));
   }
 
   async putView(input: unknown, options: { predecessorSnapshotId?: string } = {}): Promise<Result<ImportSummary>> {
     return this.mutate<ImportSummary>("putView", (manifest, stage) => this.admitView(manifest, input, options.predecessorSnapshotId, stage));
   }
 
-  async preflight(input: unknown, options: { predecessorSnapshotId?: string } = {}): Promise<Result<{ kind: "envelope" | "bundle"; notes: ValidationNote[] }>> {
+  async preflight(input: unknown, options: { predecessorSnapshotId?: string; replaceDefinitions?: ViewDefinition[] } = {}): Promise<Result<{ kind: "envelope" | "bundle"; notes: ValidationNote[] }>> {
     try {
       const manifest = await this.readManifest();
       const isBundle = typeof input === "object" && input !== null && (input as { schemaVersion?: unknown }).schemaVersion === "paneweft.bundle/1";
       const dry = async (value: unknown): Promise<string> => canonicalSha256(value); // names the object, writes nothing
-      const admitted = isBundle ? await this.admitBundle(manifest, input, options.predecessorSnapshotId, dry) : await this.admitView(manifest, input, options.predecessorSnapshotId, dry);
+      const admitted = isBundle ? await this.admitBundle(manifest, input, options.predecessorSnapshotId, dry, options.replaceDefinitions) : await this.admitView(manifest, input, options.predecessorSnapshotId, dry);
       return "error" in admitted ? admitted.error : ok({ kind: isBundle ? "bundle" as const : "envelope" as const, notes: admitted.value.notes });
     } catch (error) {
       if (error instanceof SessionStorageError) return failure(error.code, error.message);

@@ -15,6 +15,7 @@ import { completenessLine, freshnessLine, summariseView, type RecordedRuns, type
 import { compareCodeUnits } from "../core/canonical.ts";
 import { HAS_EMPTY_STATE, newPaneUi, renderComponent, renderOpenedSource, renderSourceDetail, type ComponentContext, type PaneUi } from "./components.ts";
 import { append, h, type Child } from "./dom.ts";
+import { renderRendererHost } from "./renderer-host.ts";
 import type { ViewerSource, ViewModel } from "./source.ts";
 
 export interface MountOptions {
@@ -133,6 +134,7 @@ export async function mountViewer(container: HTMLElement, options: MountOptions)
       const item = model !== undefined && model.ok ? viewItems(model.value.envelope).find((candidate) => candidate.id === itemId) : undefined;
       if (item === undefined) return { kind: "missing" };
       const target = entityRefOf(item);
+      if (target === undefined && item.notCaptured !== undefined) return { kind: "not-captured", reason: item.notCaptured.reason };
       return target === undefined ? { kind: "none" } : { kind: "entity", entity: target };
     },
     itemExists(entity, snapshotId, definitionId, itemId) {
@@ -149,13 +151,13 @@ export async function mountViewer(container: HTMLElement, options: MountOptions)
     win.history.pushState({ paneweft: state }, "");
   }
   async function prepare(action: InspectorAction): Promise<{ code: string; message: string } | null> {
-    if (action.type === "open") {
+    if (action.type === "open" || action.type === "openFromPane") {
       await ensureEntity(action.entity, action.snapshotId);
       const ranked = rankings.get(keyOfEntity(action.entity, action.snapshotId));
       const found = entities.get(keyOfEntity(action.entity, action.snapshotId));
       if (found !== undefined && !found.ok) return { code: found.error.code, message: found.error.message };
       if (ranked !== undefined && !ranked.ok) return { code: ranked.error.code, message: ranked.error.message };
-      if (action.viewDefinitionId !== undefined) await ensureView(action.entity, action.snapshotId, action.viewDefinitionId);
+      if (action.type === "open" && action.viewDefinitionId !== undefined) await ensureView(action.entity, action.snapshotId, action.viewDefinitionId);
     } else if (action.type === "select") {
       const pane = state.trail[action.paneIndex];
       if (pane !== undefined) {
@@ -219,12 +221,18 @@ export async function mountViewer(container: HTMLElement, options: MountOptions)
 
   function statusStrip(model: ViewModel, summary: ViewSummary): HTMLElement {
     const counts = PROVENANCE_ORDER.map((name) => `${name}=${summary.provenance[name]}`).join(" ");
+    const example = model.example;
+    const failedExample = example !== undefined && (example.outcome !== "passed" || example.failedClaims.length > 0)
+      ? h(doc, "div", { "data-pw": "example-outcome", "data-outcome": example.outcome, role: "note" },
+        `example ${example.id}: ${example.outcome}${example.failedClaims.length === 0 ? "" : `; failed claims: ${example.failedClaims.map((claim) => `${claim.claim}${claim.message === undefined ? "" : ` (${claim.message})`}`).join("; ")}`}. These values were captured by an example that did not pass: they show what it had built when it stopped, not an observation it vouched for.`)
+      : null;
     return h(doc, "div", { "data-pw": "status-strip" },
       h(doc, "div", { "data-pw": "completeness", "data-status": model.envelope.completeness.status }, completenessLine(model.envelope.completeness)),
       h(doc, "div", { "data-pw": "freshness", "data-status": model.freshness.status }, freshnessLine(model.freshness)),
       h(doc, "div", { "data-pw": "snapshot" }, model.envelope.snapshotId),
       h(doc, "div", { "data-pw": "provenance-summary" }, counts),
-      h(doc, "div", { "data-pw": "evidence-coverage" }, `sources=${summary.evidenceSources.join(",")}`));
+      h(doc, "div", { "data-pw": "evidence-coverage" }, `sources=${summary.evidenceSources.join(",")}`),
+      ...(failedExample === null ? [] : [failedExample]));
   }
 
   function builtinPanel(which: string, entity: Entity | undefined): HTMLElement {
@@ -276,7 +284,7 @@ export async function mountViewer(container: HTMLElement, options: MountOptions)
       const summary = summarise(view, filterFor(view, ui));
       const input = h(doc, "input", { type: "search", "data-pw": "filter-input", "aria-label": "Filter" }) as HTMLInputElement;
       input.value = ui.filterText;
-      parts.push(statusStrip(view, summarise(view)), input,
+      parts.push(h(doc, "p", { "data-pw": "question", style: "margin:.25em 0;font-weight:600" }, view.envelope.question), statusStrip(view, summarise(view)), input,
         h(doc, "div", { "data-pw": "match-count", "data-matched": summary.matched, "data-total": summary.total }, `${summary.matched} of ${summary.total} match`));
       const context: ComponentContext = {
         doc, locale, layoutVersion, paneIndex: index, envelope: view.envelope, summary, ui, selection: pane.selection, interactive: true,
@@ -286,7 +294,17 @@ export async function mountViewer(container: HTMLElement, options: MountOptions)
       if (ui.error !== null) panelChildren.push(h(doc, "div", { "data-pw": "error", role: "alert", "data-code": ui.error.code }, `${ui.error.code}: ${ui.error.message}`));
       const message = HAS_EMPTY_STATE.has(view.envelope.component) ? emptyMessage(summary, ui.filterText !== "" || ui.hiddenRelations.size > 0 || ui.claimStatus !== "all") : null;
       if (message !== null) panelChildren.push(h(doc, "div", { "data-pw": "empty-state" }, message));
-      else panelChildren.push(renderComponent(context));
+      else if (view.custom !== undefined) {
+        const custom = view.custom;
+        panelChildren.push(renderRendererHost({
+          doc, custom, viewId: view.envelope.id, snapshotId: pane.snapshotId, locale, fallback: [renderComponent(context)].flatMap((node) => (node === null ? [] : [node])),
+          // CLAIM(S36): a permitted object opens directly, bound to this snapshot, independent of fallback rows [custom-navigation.dom.test.ts].
+          openObject: (objectId) => {
+            const target = custom.frame?.objects[objectId];
+            if (target !== undefined) void enqueue(() => dispatch({ type: "openFromPane", paneIndex: index, entity: target, snapshotId: pane.snapshotId }));
+          },
+        }));
+      } else panelChildren.push(renderComponent(context));
       const resolved = ui.opened !== null && ui.opened.result.ok ? ui.opened.result.value : null;
       if (view.envelope.component !== "source" && resolved !== null && resolved.status === "resolved") opened = renderOpenedSource(context, resolved, ui.opened?.lines);
       if (ui.sourceDetail !== null) detail = renderSourceDetail(context, ui.sourceDetail);

@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:v1:job:1",
+  "title": "Collection job",
+  "description": "The durable record of a collection (spec S3, N1, N2). `intent.json` is created first with O_EXCL and fsync; `state.json` follows the lifecycle. qex is the supervisor that outlives MCP clients.",
+  "oneOf": [{ "$ref": "#/$defs/JobIntent" }, { "$ref": "#/$defs/JobState" }],
+  "$defs": {
+    "Id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "RequestId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" },
+    "Params": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repo", "adapter", "examples"],
+      "properties": {
+        "repo": { "$ref": "#/$defs/Id" },
+        "adapter": { "$ref": "#/$defs/Id" },
+        "examples": { "type": "array", "items": { "$ref": "#/$defs/Id" }, "minItems": 0, "maxItems": 256, "description": "Exact example ids; empty only in catalogue mode." },
+        "mode": { "enum": ["run", "catalogue"], "description": "run (default) collects the selected examples; catalogue runs only the reserved export tests and stores the catalogue." },
+        "views": { "type": "array", "items": { "$ref": "#/$defs/Id" }, "maxItems": 256 },
+        "limits": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 1 } },
+        "timeoutMs": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "JobIntent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "dedupeKey", "params", "createdAt"],
+      "properties": {
+        "schemaVersion": { "const": "paneweft.job-intent/1" },
+        "requestId": { "$ref": "#/$defs/RequestId" },
+        "dedupeKey": { "type": "string", "pattern": "^paneweft:[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" },
+        "params": { "$ref": "#/$defs/Params" },
+        "createdAt": { "type": "string" },
+        "resolved": { "type": "object", "description": "What the request resolved to when the intent was written (selection, process, timeout), so a recovery submits exactly that and never re-resolves against a catalogue that may have changed." }
+      }
+    },
+    "JobState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "requestId", "state", "qexId", "runId", "history"],
+      "properties": {
+        "schemaVersion": { "const": "paneweft.job/1" },
+        "requestId": { "$ref": "#/$defs/RequestId" },
+        "state": { "enum": ["intent", "submitted", "queued", "running", "importing", "succeeded", "failed", "cancelled", "indeterminate"] },
+        "qexId": { "type": ["string", "null"] },
+        "runId": { "type": ["string", "null"] },
+        "history": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["state", "at"], "properties": { "state": { "type": "string" }, "at": { "type": "string" }, "evidence": { "type": "string", "maxLength": 1024 } } } },
+        "indeterminate": { "type": "object", "additionalProperties": false, "required": ["evidence"], "properties": { "evidence": { "type": "array", "items": { "type": "string" }, "minItems": 1 } } },
+        "terminal": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["collectionStatus"],
+          "properties": { "collectionStatus": { "enum": ["succeeded", "failed", "cancelled", "timed-out", "incomplete"] }, "snapshotIds": { "type": "array", "items": { "type": "string" } }, "diagnosticIds": { "type": "array", "items": { "type": "string" } } }
+        },
+        "cancel": { "type": "object", "additionalProperties": false, "required": ["outcome"], "properties": { "outcome": { "enum": ["cancelled", "cancel-too-late", "already-terminal", "indeterminate"] }, "qexActions": { "type": "array", "items": { "enum": ["cancel", "kill"] } } } }
+      }
+    }
+  }
+}

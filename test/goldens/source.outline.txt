@@ -7,6 +7,7 @@ viewer
       tab aria-selected="true" data-definition-id="d-code" role="tab" tabindex="0" "Denial branch"
       tab aria-selected="false" data-definition-id="builtin:metadata" role="tab" tabindex="-1"
       tab aria-selected="false" data-definition-id="builtin:raw" role="tab" tabindex="-1"
+    question "Which exact code supports this statement?"
     status-strip
       completeness data-status="complete" "complete (the cited lines of src/check.ts)"
       freshness data-status="fresh" "fresh"

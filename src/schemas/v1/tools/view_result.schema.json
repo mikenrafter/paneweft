@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:tool:view_result:1",
+  "title": "view_result",
+  "description": "Reads a stored view of a run or job: bounded text, completeness, provenance, source anchors, object and run ids, the viewer link when a viewer is open, and the standard fallback text for custom renderers. Ambiguity lists candidates. Never executes code.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "view"
+  ],
+  "properties": {
+    "run": {
+      "$ref": "urn:paneweft:schema:common:1#/$defs/Id"
+    },
+    "job": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "view": {
+      "$ref": "urn:paneweft:schema:common:1#/$defs/Id"
+    },
+    "example": {
+      "$ref": "urn:paneweft:schema:common:1#/$defs/Id",
+      "description": "The example whose own result to read. Object ids restart in every capture, so in a run of several examples this is the selector that names one."
+    },
+    "observation": {
+      "$ref": "urn:paneweft:schema:common:1#/$defs/Id",
+      "description": "An object id, or the capture-qualified id (capture.object) when several captures of the run hold the same object id."
+    },
+    "cursor": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "description": "Continuation cursor from a previous reply of the same query."
+    },
+    "format": {
+      "enum": [
+        "text",
+        "json"
+      ],
+      "default": "text",
+      "description": "Reply format."
+    },
+    "maxBytes": {
+      "type": "integer",
+      "minimum": 2048,
+      "maximum": 32768,
+      "default": 8192,
+      "description": "UTF-8 byte budget of the whole serialized reply (design section 4)."
+    }
+  }
+}

@@ -54,6 +54,12 @@ export interface ListData {
       [k: string]: string | number | boolean | null;
     };
     group?: string;
+    /**
+     * v1: the object this row points at was not captured (a capture limit was reached); `reason` names the limit. Such a row has no entity to open.
+     */
+    notCaptured?: {
+      reason: string;
+    };
   })[];
   order: {
     key: string;

@@ -101,7 +101,7 @@
       "type": "array",
       "items": {
         "type": "object", "additionalProperties": false, "required": ["repository", "code", "reason"],
-        "properties": { "repository": { "type": "string" }, "code": { "enum": ["REPOSITORY_NOT_REGISTERED", "UNSUPPORTED_PLATFORM", "FILE_TOO_LARGE"] }, "reason": { "type": "string", "minLength": 1 }, "paths": { "type": "array", "items": { "type": "string" } } }
+        "properties": { "repository": { "type": "string" }, "code": { "enum": ["REPOSITORY_NOT_REGISTERED", "UNSUPPORTED_PLATFORM", "FILE_TOO_LARGE", "FINGERPRINT_UNAVAILABLE", "INPUT_UNSTABLE"] }, "reason": { "type": "string", "minLength": 1 }, "paths": { "type": "array", "items": { "type": "string" } } }
       }
     },
     "FreshnessResult": {
@@ -117,7 +117,8 @@
                 "type": "object", "additionalProperties": false, "required": ["repository", "path", "recordedSha256", "currentSha256"],
                 "properties": {
                   "repository": { "type": "string" }, "path": { "type": "string" },
-                  "recordedSha256": { "$ref": "urn:paneweft:schema:common:1#/$defs/Sha256" },
+                  "change": { "enum": ["added", "modified", "deleted"] },
+                  "recordedSha256": { "oneOf": [{ "$ref": "urn:paneweft:schema:common:1#/$defs/Sha256" }, { "type": "null" }] },
                   "currentSha256": { "oneOf": [{ "$ref": "urn:paneweft:schema:common:1#/$defs/Sha256" }, { "type": "null" }] }
                 }
               }
@@ -146,6 +147,18 @@
         "freshness": { "$ref": "#/$defs/FreshnessResult" },
         "contentHash": { "$ref": "urn:paneweft:schema:common:1#/$defs/Sha256" },
         "notebookRevision": { "type": "integer", "minimum": 1 },
+        "example": {
+          "description": "v1: the example whose invocation captured this stored view and how that invocation ended (outcome, failed claims). Absent for every view that is not a result of a collected run.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["runId", "id", "invocation", "nested", "outcome", "verified", "failedClaims"],
+          "properties": {
+            "runId": { "type": "string" }, "id": { "type": "string" }, "invocation": { "type": "string" }, "nested": { "type": "boolean" },
+            "outcome": { "enum": ["passed", "failed", "error", "skipped", "filtered", "cancelled", "blocked"] }, "verified": { "type": "boolean" }, "message": { "type": "string" },
+            "failedClaims": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["claim"], "properties": { "claim": { "type": "string" }, "message": { "type": "string" }, "source": { "type": "object", "additionalProperties": false, "required": ["path", "line"], "properties": { "path": { "type": "string" }, "line": { "type": "integer" } } } } } }
+          }
+        },
+        "custom": { "description": "v1: a repo-owned renderer overlay on this stored view (state ready, untrusted, changed, missing-asset, incompatible or failed, with the frame location and the objects the renderer may name). Absent for every view that has no renderer.", "type": "object" },
         "recordedRuns": {
           "description": "Example views with recorded runs: which run items of 'envelope' were recorded rather than stored in the envelope, and why a recorded run was left out.",
           "type": "object",

@@ -1,0 +1,16 @@
+# Fixture modelled on vigil's WatchFile (spec section 2). The SDK is an OPTIONAL development dependency behind the `paneweft`
+# feature: a release build without the feature does not contain it (IV4).
+[package]
+name = "watchfile"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[features]
+paneweft = ["dep:paneweft"]
+
+[dependencies.paneweft]
+path = "../../../crates/paneweft"
+optional = true
+
+[workspace]

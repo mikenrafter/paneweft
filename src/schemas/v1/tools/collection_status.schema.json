@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:tool:collection_status:1",
+  "title": "collection_status",
+  "description": "Reads a job: progress, compile/test/capture counts, diagnostic ids and terminal snapshot ids. Optional wait of up to 30 seconds. Never executes code.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "job"
+  ],
+  "properties": {
+    "job": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "waitSeconds": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 30
+    },
+    "logCursor": {
+      "type": "string",
+      "maxLength": 2048
+    },
+    "cursor": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "description": "Continuation cursor from a previous reply of the same query."
+    },
+    "format": {
+      "enum": [
+        "text",
+        "json"
+      ],
+      "default": "text",
+      "description": "Reply format."
+    },
+    "maxBytes": {
+      "type": "integer",
+      "minimum": 2048,
+      "maximum": 32768,
+      "default": 8192,
+      "description": "UTF-8 byte budget of the whole serialized reply (design section 4)."
+    }
+  }
+}

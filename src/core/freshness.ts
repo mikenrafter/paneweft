@@ -20,11 +20,13 @@ import { normaliseRelativePath } from "./anchors.ts";
 import { hashConfinedFile, MAX_CONFINED_FILE_BYTES, UNSUPPORTED_PLATFORM_MESSAGE } from "./confined-read.ts";
 import { compareCodeUnits } from "./canonical.ts";
 
-export interface ChangedPath { repository: string; path: string; recordedSha256: string; currentSha256: string | null }
+/** A recorded file that no longer matches. `recordedSha256` is null for a file that was not there when the result was recorded; `change` is set by
+ * sources that compare whole file sets (a collected run's input fingerprint can see an added file, an anchor check cannot). */
+export interface ChangedPath { repository: string; path: string; recordedSha256: string | null; currentSha256: string | null; change?: "added" | "modified" | "deleted" }
 /** A repository whose freshness was not checked. `code` is machine readable, `reason` is for people. */
 export interface UnverifiedRepository {
   repository: string;
-  code: "REPOSITORY_NOT_REGISTERED" | "UNSUPPORTED_PLATFORM" | "FILE_TOO_LARGE";
+  code: "REPOSITORY_NOT_REGISTERED" | "UNSUPPORTED_PLATFORM" | "FILE_TOO_LARGE" | "FINGERPRINT_UNAVAILABLE" | "INPUT_UNSTABLE";
   reason: string;
   /** FILE_TOO_LARGE only: the recorded files that were not hashed (the first 20, code-unit order). */
   paths?: string[];

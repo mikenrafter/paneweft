@@ -1,0 +1,141 @@
+{
+  "name": "shared-child",
+  "why": "Two parents reach one child: it converges on ONE captured object, the second reference is an alias edge, not a copy (IV9).",
+  "nodes": {
+    "a": {
+      "type": "fx::Node",
+      "key": null,
+      "label": "a",
+      "fields": {},
+      "links": [
+        {
+          "name": "left",
+          "to": "b"
+        },
+        {
+          "name": "right",
+          "to": "c"
+        }
+      ]
+    },
+    "b": {
+      "type": "fx::Node",
+      "key": null,
+      "label": "b",
+      "fields": {},
+      "links": [
+        {
+          "name": "down",
+          "to": "d"
+        }
+      ]
+    },
+    "c": {
+      "type": "fx::Node",
+      "key": null,
+      "label": "c",
+      "fields": {},
+      "links": [
+        {
+          "name": "down",
+          "to": "d"
+        }
+      ]
+    },
+    "d": {
+      "type": "fx::Node",
+      "key": null,
+      "label": "d",
+      "fields": {},
+      "links": []
+    }
+  },
+  "publish": [
+    "a"
+  ],
+  "expected": {
+    "roots": [
+      "o1"
+    ],
+    "objects": [
+      {
+        "id": "o1",
+        "typeId": "fx::Node",
+        "domainKey": null,
+        "label": "a",
+        "fields": {},
+        "edges": [
+          {
+            "name": "left",
+            "kind": "child",
+            "target": "o2"
+          },
+          {
+            "name": "right",
+            "kind": "child",
+            "target": "o4"
+          }
+        ],
+        "views": [
+          "node.details"
+        ],
+        "contentHash": "db6c2a870c69ffef113921a7dc154232c972e7b1a56dc5d329b48deece3cc19b",
+        "hashInput": "{\"domainKey\":null,\"fields\":{},\"label\":\"a\",\"typeId\":\"fx::Node\"}"
+      },
+      {
+        "id": "o2",
+        "typeId": "fx::Node",
+        "domainKey": null,
+        "label": "b",
+        "fields": {},
+        "edges": [
+          {
+            "name": "down",
+            "kind": "child",
+            "target": "o3"
+          }
+        ],
+        "views": [
+          "node.details"
+        ],
+        "contentHash": "7168f2ff3aff19448a33b914bbac45089c43e5a8a281d38007da13efcb7a7f8e",
+        "hashInput": "{\"domainKey\":null,\"fields\":{},\"label\":\"b\",\"typeId\":\"fx::Node\"}"
+      },
+      {
+        "id": "o3",
+        "typeId": "fx::Node",
+        "domainKey": null,
+        "label": "d",
+        "fields": {},
+        "edges": [],
+        "views": [
+          "node.details"
+        ],
+        "contentHash": "561c2018c597b55f525b0245f8bfc4e80c18a88b5f1738b87c5e83105cdde9eb",
+        "hashInput": "{\"domainKey\":null,\"fields\":{},\"label\":\"d\",\"typeId\":\"fx::Node\"}"
+      },
+      {
+        "id": "o4",
+        "typeId": "fx::Node",
+        "domainKey": null,
+        "label": "c",
+        "fields": {},
+        "edges": [
+          {
+            "name": "down",
+            "kind": "alias",
+            "target": "o3"
+          }
+        ],
+        "views": [
+          "node.details"
+        ],
+        "contentHash": "5b8b8bac695aed9f1ef2a4212100a4bcaaf0f7d3d9098e71b03f434f04979b3f",
+        "hashInput": "{\"domainKey\":null,\"fields\":{},\"label\":\"c\",\"typeId\":\"fx::Node\"}"
+      }
+    ],
+    "completeness": {
+      "status": "complete"
+    }
+  }
+}

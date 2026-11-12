@@ -1,0 +1,136 @@
+{
+  "schemaVersion": "paneweft.catalogue/1",
+  "target": {
+    "runner": "cargo",
+    "package": "watchfile",
+    "target": "lib",
+    "features": [
+      "paneweft"
+    ]
+  },
+  "linkedScope": [
+    "watchfile (lib)"
+  ],
+  "types": [
+    {
+      "typeId": "vigil::watch::Event",
+      "source": {
+        "path": "src/watch.rs",
+        "symbol": "Event"
+      }
+    },
+    {
+      "typeId": "vigil::watch::WatchFile",
+      "source": {
+        "path": "src/watch.rs",
+        "symbol": "WatchFile"
+      }
+    }
+  ],
+  "views": [
+    {
+      "id": "event.details",
+      "typeId": "vigil::watch::Event",
+      "title": "Event",
+      "question": "Which event is this, and was it redelivered?",
+      "component": "shape",
+      "priority": 10,
+      "source": {
+        "path": "src/watch.rs",
+        "line": 80
+      },
+      "module": "watch"
+    },
+    {
+      "id": "watch.events",
+      "typeId": "vigil::watch::WatchFile",
+      "title": "Events",
+      "question": "Which events were retained, and were they redelivered?",
+      "component": "list",
+      "priority": 20,
+      "source": {
+        "path": "src/watch.rs",
+        "line": 58
+      },
+      "module": "watch"
+    },
+    {
+      "id": "watch.status",
+      "typeId": "vigil::watch::WatchFile",
+      "title": "Status",
+      "question": "What state did this watch reach?",
+      "component": "shape",
+      "priority": 10,
+      "source": {
+        "path": "src/watch.rs",
+        "line": 41
+      },
+      "module": "watch"
+    }
+  ],
+  "examples": [
+    {
+      "id": "watch.cancelled",
+      "typeId": "vigil::watch::WatchFile",
+      "claims": [
+        "VW2",
+        "VW2-empty"
+      ],
+      "kind": "example",
+      "composes": [],
+      "module": "watch",
+      "source": {
+        "path": "src/watch.rs",
+        "line": 140
+      },
+      "selector": {
+        "runner": "cargo",
+        "name": "tests::paneweft_example_watch_cancelled",
+        "package": "watchfile",
+        "target": "lib"
+      }
+    },
+    {
+      "id": "watch.pending",
+      "typeId": "vigil::watch::WatchFile",
+      "claims": [
+        "VW1"
+      ],
+      "kind": "example",
+      "composes": [],
+      "module": "watch",
+      "source": {
+        "path": "src/watch.rs",
+        "line": 128
+      },
+      "selector": {
+        "runner": "cargo",
+        "name": "tests::paneweft_example_watch_pending",
+        "package": "watchfile",
+        "target": "lib"
+      }
+    },
+    {
+      "id": "watch.redelivered",
+      "typeId": "vigil::watch::WatchFile",
+      "claims": [
+        "VW3"
+      ],
+      "kind": "example",
+      "composes": [],
+      "module": "watch",
+      "source": {
+        "path": "src/watch.rs",
+        "line": 152
+      },
+      "selector": {
+        "runner": "cargo",
+        "name": "tests::paneweft_example_watch_redelivered",
+        "package": "watchfile",
+        "target": "lib"
+      }
+    }
+  ],
+  "duplicates": [],
+  "digest": "d2c63bb6703312eab8d3cef0114a7a4c1fd622c6495b649b7b6eb8a35c86d85e"
+}

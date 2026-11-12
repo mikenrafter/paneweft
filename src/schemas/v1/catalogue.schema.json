@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:v1:catalogue:1",
+  "title": "Catalogue",
+  "description": "A compiled catalogue: definitions, source locations and linked scope, kept apart from runtime observations. A catalogue never asserts repository-wide absence; it states the target and feature set it was compiled for.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "digest", "target", "linkedScope", "types", "views", "examples", "duplicates"],
+  "properties": {
+    "schemaVersion": { "const": "paneweft.catalogue/1" },
+    "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "sha256 of the canonical JSON of types, views, examples and target; independent of registration order." },
+    "target": { "type": "object", "additionalProperties": false, "required": ["runner", "package", "features"], "properties": { "runner": { "enum": ["cargo", "vitest"] }, "package": { "type": "string" }, "target": { "type": "string" }, "features": { "type": "array", "items": { "type": "string" } } } },
+    "linkedScope": { "type": "array", "items": { "type": "string" }, "description": "The modules or binaries whose registrations were linked into the catalogue's source. Anything outside is not covered." },
+    "types": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["typeId", "source"], "properties": { "typeId": { "type": "string" }, "source": { "type": "object", "additionalProperties": false, "required": ["path", "symbol"], "properties": { "path": { "type": "string" }, "symbol": { "type": "string" } } } } } },
+    "views": { "type": "array", "items": { "$ref": "#/$defs/ViewDef" } },
+    "examples": { "type": "array", "items": { "$ref": "#/$defs/ExampleDef" } },
+    "duplicates": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["id", "kind", "sources"], "properties": { "id": { "type": "string" }, "kind": { "enum": ["view", "example", "type"] }, "sources": { "type": "array", "items": { "$ref": "#/$defs/Source" }, "minItems": 2 } } } }
+  },
+  "$defs": {
+    "Source": { "type": "object", "additionalProperties": false, "required": ["path", "line"], "properties": { "path": { "type": "string" }, "line": { "type": "integer", "minimum": 1 } } },
+    "ViewDef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "typeId", "title", "question", "component", "priority", "source"],
+      "properties": { "id": { "type": "string" }, "typeId": { "type": "string" }, "title": { "type": "string" }, "question": { "type": "string" }, "component": { "type": "string" }, "priority": { "type": "integer" }, "source": { "$ref": "#/$defs/Source" }, "module": { "type": "string" }, "renderer": { "type": "string" } }
+    },
+    "ExampleDef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "typeId", "claims", "source", "selector", "composes"],
+      "properties": {
+        "id": { "type": "string" }, "typeId": { "type": "string" }, "claims": { "type": "array", "items": { "type": "string" } }, "source": { "$ref": "#/$defs/Source" }, "module": { "type": "string" },
+        "kind": { "enum": ["example", "dead-end"] },
+        "composes": { "type": "array", "items": { "type": "string" } },
+        "selector": { "type": "object", "additionalProperties": false, "required": ["runner", "name"], "properties": { "runner": { "enum": ["cargo", "vitest"] }, "name": { "type": "string", "description": "cargo: the exact libtest path; vitest: the full test name." }, "file": { "type": "string" }, "package": { "type": "string" }, "target": { "type": "string" } } }
+      }
+    }
+  }
+}

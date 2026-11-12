@@ -1,0 +1,128 @@
+{
+  "name": "depth-limit",
+  "why": "Depth 2 keeps a, b, c; the reference from c to d is refused as a not-captured edge with a reason and the omission is named, never silent (IV9).",
+  "limits": {
+    "depth": 2
+  },
+  "nodes": {
+    "a": {
+      "type": "fx::Node",
+      "key": null,
+      "label": "a",
+      "fields": {},
+      "links": [
+        {
+          "name": "next",
+          "to": "b"
+        }
+      ]
+    },
+    "b": {
+      "type": "fx::Node",
+      "key": null,
+      "label": "b",
+      "fields": {},
+      "links": [
+        {
+          "name": "next",
+          "to": "c"
+        }
+      ]
+    },
+    "c": {
+      "type": "fx::Node",
+      "key": null,
+      "label": "c",
+      "fields": {},
+      "links": [
+        {
+          "name": "next",
+          "to": "d"
+        }
+      ]
+    },
+    "d": {
+      "type": "fx::Node",
+      "key": null,
+      "label": "d",
+      "fields": {},
+      "links": []
+    }
+  },
+  "publish": [
+    "a"
+  ],
+  "expected": {
+    "roots": [
+      "o1"
+    ],
+    "objects": [
+      {
+        "id": "o1",
+        "typeId": "fx::Node",
+        "domainKey": null,
+        "label": "a",
+        "fields": {},
+        "edges": [
+          {
+            "name": "next",
+            "kind": "child",
+            "target": "o2"
+          }
+        ],
+        "views": [
+          "node.details"
+        ],
+        "contentHash": "db6c2a870c69ffef113921a7dc154232c972e7b1a56dc5d329b48deece3cc19b",
+        "hashInput": "{\"domainKey\":null,\"fields\":{},\"label\":\"a\",\"typeId\":\"fx::Node\"}"
+      },
+      {
+        "id": "o2",
+        "typeId": "fx::Node",
+        "domainKey": null,
+        "label": "b",
+        "fields": {},
+        "edges": [
+          {
+            "name": "next",
+            "kind": "child",
+            "target": "o3"
+          }
+        ],
+        "views": [
+          "node.details"
+        ],
+        "contentHash": "7168f2ff3aff19448a33b914bbac45089c43e5a8a281d38007da13efcb7a7f8e",
+        "hashInput": "{\"domainKey\":null,\"fields\":{},\"label\":\"b\",\"typeId\":\"fx::Node\"}"
+      },
+      {
+        "id": "o3",
+        "typeId": "fx::Node",
+        "domainKey": null,
+        "label": "c",
+        "fields": {},
+        "edges": [
+          {
+            "name": "next",
+            "kind": "not-captured",
+            "reason": "depth-limit"
+          }
+        ],
+        "views": [
+          "node.details"
+        ],
+        "contentHash": "5b8b8bac695aed9f1ef2a4212100a4bcaaf0f7d3d9098e71b03f434f04979b3f",
+        "hashInput": "{\"domainKey\":null,\"fields\":{},\"label\":\"c\",\"typeId\":\"fx::Node\"}"
+      }
+    ],
+    "completeness": {
+      "status": "partial",
+      "omitted": {
+        "depth": {
+          "known": true,
+          "count": 1
+        }
+      }
+    }
+  }
+}

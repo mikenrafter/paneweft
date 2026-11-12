@@ -1,6 +1,7 @@
 {
   "name": "paneweft",
   "version": "0.0.0",
+  "license": "MIT",
   "private": true,
   "description": "Portable moldable-development views: schema-first components that agents fill with facts, rendered locally and summarised in bounded text over CLI and MCP.",
   "type": "module",
@@ -16,7 +17,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "check": "npm run typecheck && npm test",
-    "gen:types": "node scripts/gen-types.mjs"
+    "gen:types": "node scripts/gen-types.mjs",
+    "gen:types:v1": "node scripts/gen-types-v1.mjs",
+    "gen:types:sdk": "node scripts/gen-types-sdk.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",
@@ -30,10 +33,11 @@
     "esbuild": "0.28.2",
     "fast-check": "4.10.2",
     "jsdom": "31.0.0",
+    "json-schema-to-typescript": "16.0.0",
+    "puppeteer-core": "25.17.0",
     "tsx": "4.23.15",
     "typescript": "5.9.3",
     "vite": "8.3.8",
-    "vitest": "5.1.0",
-    "json-schema-to-typescript": "16.0.0"
+    "vitest": "5.1.0"
   }
 }

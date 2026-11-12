@@ -1,0 +1,9 @@
+{
+  "name": "paneweft-vitest3-deps",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The pinned Vitest 3 that the real-runner tests install for real (test/helpers/vitest3.ts). ContainMarks runs this version; paneweft's own tests run Vitest 5.",
+  "devDependencies": {
+    "vitest": "3.2.4"
+  }
+}

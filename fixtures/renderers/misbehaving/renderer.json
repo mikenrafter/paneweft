@@ -1,0 +1,1 @@
+{ "id": "misbehaving", "apiVersion": 1, "title": "Protocol abuse", "payloadSchema": { "type": "object", "additionalProperties": true } }

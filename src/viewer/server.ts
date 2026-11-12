@@ -18,6 +18,8 @@ import { confinedReadsSupported, readConfinedFile } from "../core/confined-read.
 import type { Session } from "../core/session.ts";
 import type { EntityRef } from "../core/wire.ts";
 import { createSessionSource } from "./session-source.ts";
+import { createRendererServing } from "../v1/serve-renderer.ts";
+import { PARENT_FRAME_SRC, rendererResponseHeaders } from "../v1/renderer.ts";
 
 export interface ViewerServerOptions {
   session: Session;
@@ -27,6 +29,10 @@ export interface ViewerServerOptions {
   port?: number;
   /** Directory of bundled assets; default dist/viewer. */
   assetsDirectory?: string;
+  /** v1: the session directory, where renderers.trust.json lives (docs/v1-red-contract.md section 12). */
+  sessionDirectory?: string;
+  /** v1: clock for capability-token expiry (milliseconds since the epoch); default Date.now. */
+  clock?: () => number;
 }
 export interface ViewerServer {
   readonly host: string;
@@ -50,7 +56,7 @@ const PAGE_HEADERS = {
   "Cache-Control": "no-store",
   "X-Content-Type-Options": "nosniff",
   "Referrer-Policy": "no-referrer",
-  "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+  "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; " + PARENT_FRAME_SRC,
 };
 const STATUS_OF: Partial<Record<OperationErrorCode, number>> = {
   NOT_FOUND: 404, UNRESOLVED_TARGET: 404, UNAUTHORIZED: 401, FORBIDDEN_ORIGIN: 403, CONFLICT: 409, SNAPSHOT_CONFLICT: 409,
@@ -136,6 +142,7 @@ export async function startViewer(options: ViewerServerOptions): Promise<Result<
   const bundle = confinedReadsSupported() ? null : await loadBundle(assets);
   const token = randomBytes(32).toString("hex");
   const source = createSessionSource(session);
+  const renderers = createRendererServing({ session, sessionDirectory: options.sessionDirectory, ...(options.clock === undefined ? {} : { now: options.clock }) });
   let origin = "";
   let hostHeader = "";
 
@@ -164,7 +171,9 @@ export async function startViewer(options: ViewerServerOptions): Promise<Result<
       case "/api/view": {
         const [viewId, snapshotId] = [query.get("viewId"), query.get("snapshotId")];
         if (!viewId || !snapshotId) return fail("INVALID_ARGUMENT", "view needs viewId and snapshotId");
-        return fromResult(await source.getView({ viewId, snapshotId }), (model) => model);
+        const key = { viewId, snapshotId };
+        const custom = await renderers.custom(key); // a repo-owned renderer overlay, when this stored view has one
+        return fromResult(await source.getView(key), (model) => (custom === undefined ? model : { ...model, custom }));
       }
       case "/api/source": {
         const [viewId, snapshotId, itemId] = [query.get("viewId"), query.get("snapshotId"), query.get("itemId")];
@@ -227,6 +236,14 @@ export async function startViewer(options: ViewerServerOptions): Promise<Result<
     const query = new URLSearchParams(cut < 0 ? "" : target.slice(cut + 1));
     const method = request.method ?? "GET";
 
+    // Renderer documents are served WITHOUT the session bearer (a sandboxed frame cannot send it): the capability token in the path
+    // authorizes one digest, briefly, and the response carries the renderer headers (S4).
+    const rendererAsset = /^\/renderer\/([0-9a-f]{64})\/([A-Za-z0-9_-]{16,128})\/(index\.html|bundle\.js|style\.css)$/.exec(rawPath);
+    if (rendererAsset !== null) {
+      if (method !== "GET") return fail("NOT_FOUND", `no route ${method} ${rawPath}`);
+      const served = await renderers.asset(rendererAsset[1] as string, rendererAsset[2] as string, rendererAsset[3] as string);
+      return { status: served.status, type: served.type, body: served.body, extra: rendererResponseHeaders() };
+    }
     if (rawPath === "/api" || rawPath.startsWith("/api/")) {
       const authorization = request.headers.authorization ?? "";
       const presented = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : "";

@@ -157,7 +157,7 @@ export function filtersLine(filter: ViewFilter): string {
 export function freshnessLine(freshness: FreshnessResult): string {
   switch (freshness.status) {
     case "fresh": return "fresh";
-    case "stale": return `stale (changed: ${freshness.changedPaths.map((entry) => entry.path).join(", ")})`;
+    case "stale": return `stale (changed: ${freshness.changedPaths.map((entry) => (entry.change === undefined ? entry.path : `${entry.path}: ${entry.change}`)).join(", ")})`;
     case "unknown": {
       const tooLarge = (freshness.unverified ?? []).filter((entry) => entry.code === "FILE_TOO_LARGE");
       const files = tooLarge.flatMap((entry) => (entry.paths ?? []).map((path) => `${entry.repository}:${path}`));

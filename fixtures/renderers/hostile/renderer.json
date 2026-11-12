@@ -1,0 +1,1 @@
+{ "id": "hostile", "apiVersion": 1, "title": "Sandbox probe", "payloadSchema": { "type": "object", "additionalProperties": true } }

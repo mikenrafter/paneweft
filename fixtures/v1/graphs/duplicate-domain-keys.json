@@ -1,0 +1,123 @@
+{
+  "name": "duplicate-domain-keys",
+  "why": "Two observations with the same domain key and different contents stay distinct, never collapsed (spec section 4; vigil redelivery) (IV9).",
+  "nodes": {
+    "w": {
+      "type": "fx::Node",
+      "key": null,
+      "label": "watch",
+      "fields": {},
+      "links": [
+        {
+          "name": "events",
+          "to": "e1"
+        },
+        {
+          "name": "events",
+          "to": "e2"
+        }
+      ]
+    },
+    "e1": {
+      "type": "fx::Event",
+      "key": "evt-1",
+      "label": "evt-1",
+      "fields": {
+        "tick": {
+          "kind": "int",
+          "decimal": "3"
+        },
+        "redelivered": {
+          "kind": "bool",
+          "value": false
+        }
+      },
+      "links": []
+    },
+    "e2": {
+      "type": "fx::Event",
+      "key": "evt-1",
+      "label": "evt-1",
+      "fields": {
+        "tick": {
+          "kind": "int",
+          "decimal": "5"
+        },
+        "redelivered": {
+          "kind": "bool",
+          "value": true
+        }
+      },
+      "links": []
+    }
+  },
+  "publish": [
+    "w"
+  ],
+  "expected": {
+    "roots": [
+      "o1"
+    ],
+    "objects": [
+      {
+        "id": "o1",
+        "typeId": "fx::Node",
+        "domainKey": null,
+        "label": "watch",
+        "fields": {},
+        "edges": [
+          {
+            "name": "events",
+            "kind": "child",
+            "target": "o2"
+          },
+          {
+            "name": "events",
+            "kind": "child",
+            "target": "o3"
+          }
+        ],
+        "views": [
+          "node.details"
+        ],
+        "contentHash": "6718431287cde7ced6794ee956088b37a734733003e303e36ab13d5b7f361662",
+        "hashInput": "{\"domainKey\":null,\"fields\":{},\"label\":\"watch\",\"typeId\":\"fx::Node\"}"
+      },
+      {
+        "id": "o2",
+        "typeId": "fx::Event",
+        "domainKey": "evt-1",
+        "label": "evt-1",
+        "fields": {
+          "tick": 3,
+          "redelivered": false
+        },
+        "edges": [],
+        "views": [
+          "node.details"
+        ],
+        "contentHash": "9db253376e1ec0cda0cfb70dfbfd246080518272e0d9d9172c42c9a953c53a41",
+        "hashInput": "{\"domainKey\":\"evt-1\",\"fields\":{\"redelivered\":false,\"tick\":3},\"label\":\"evt-1\",\"typeId\":\"fx::Event\"}"
+      },
+      {
+        "id": "o3",
+        "typeId": "fx::Event",
+        "domainKey": "evt-1",
+        "label": "evt-1",
+        "fields": {
+          "tick": 5,
+          "redelivered": true
+        },
+        "edges": [],
+        "views": [
+          "node.details"
+        ],
+        "contentHash": "351ecab4b88992f0beab7ae17dd14f96a92681705320977e7ed2af8d80d6bfe0",
+        "hashInput": "{\"domainKey\":\"evt-1\",\"fields\":{\"redelivered\":true,\"tick\":5},\"label\":\"evt-1\",\"typeId\":\"fx::Event\"}"
+      }
+    ],
+    "completeness": {
+      "status": "complete"
+    }
+  }
+}

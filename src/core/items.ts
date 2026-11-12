@@ -13,6 +13,8 @@ export interface AnyItem {
   label?: string;
   anchor?: { repository: string; path: string; lines: [number, number] };
   entity?: { repository: string; id: string; kind: string };
+  /** v1 list rows: the object the row points at was not captured, and which limit stopped it. */
+  notCaptured?: { reason: string };
   reason?: string;
   basis?: string[];
   [member: string]: unknown;

@@ -1,0 +1,19 @@
+{
+  "schemaVersion": "paneweft.trail/1",
+  "id": "write-lock",
+  "title": "Why a kernel flock",
+  "entries": [
+    {
+      "id": "e1",
+      "order": 1,
+      "question": "How should writers exclude each other?",
+      "options": [
+        { "id": "userspace", "status": "failed", "reason": "three rounds of recovery protocol still had a crash window", "evidence": [{ "provenance": "read", "source": "docs/contract-additions/store.md" }] },
+        { "id": "flock", "status": "chosen", "reason": "the kernel releases the lock when the holder exits", "evidence": [] }
+      ],
+      "decision": "Use flock(1) through a helper process.",
+      "links": [],
+      "deadEndExample": "lock.userspace-recovery"
+    }
+  ]
+}

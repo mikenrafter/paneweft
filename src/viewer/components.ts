@@ -110,12 +110,14 @@ function actions(ctx: ComponentContext, item: Item): Child[] {
   return [button, menu];
 }
 
-const noTarget = (ctx: ComponentContext): HTMLElement => h(ctx.doc, "span", { "data-pw": "no-target" }, "no entity or source");
+const noTarget = (ctx: ComponentContext, item?: Item): HTMLElement => (item?.notCaptured === undefined
+  ? h(ctx.doc, "span", { "data-pw": "no-target" }, "no entity or source")
+  : h(ctx.doc, "span", { "data-pw": "no-target", "data-reason": item.notCaptured.reason }, `not captured: ${item.notCaptured.reason}`));
 
 /** badge, reason, links, then (rows, nodes, fields) the no-target note or the actions. */
 function factChildren(ctx: ComponentContext, item: Item, kind: "plain" | "actionable"): Child[] {
   const out = badge(ctx, item, false);
-  if (kind === "actionable") out.push(...(hasTarget(item) ? actions(ctx, item) : [noTarget(ctx)]));
+  if (kind === "actionable") out.push(...(hasTarget(item) ? actions(ctx, item) : [noTarget(ctx, item)]));
   return out;
 }
 
@@ -140,14 +142,16 @@ function renderList(ctx: ComponentContext): HTMLElement {
   const rows = ctx.summary.entries.map((entry) => byId.get(entry.id)).filter((row): row is Item => row !== undefined);
   const order = ctx.summary.order;
   const rove = roving(ctx, rows.map((row) => row.id));
-  const header = h(ctx.doc, "div", { role: "row" }, ...data.columns.map((column) => h(ctx.doc, "div", {
+  // F17: one track per column and one for the row's actions, the same template on the header and on every row, so a column lines up whatever the page's stylesheet
+  const grid = `display:grid;grid-template-columns:${data.columns.map(() => "minmax(6em,1fr)").join(" ")} minmax(3em,auto);gap:0 1em;align-items:baseline;padding:.2em 0;border-bottom:1px solid #ddd`;
+  const header = h(ctx.doc, "div", { role: "row", style: `${grid};font-weight:600` }, ...data.columns.map((column) => h(ctx.doc, "div", {
     "data-pw": "column-header", role: "columnheader", "data-id": column.key,
     "aria-sort": order !== null && order.key === column.key ? (order.direction === "asc" ? "ascending" : "descending") : undefined,
   }, column.title)));
   const rowElement = (row: Item): HTMLElement => {
     const cells = (row.cells ?? {}) as Record<string, unknown>;
     return h(ctx.doc, "div", {
-      "data-pw": "row", role: "row", "data-id": row.id, "data-provenance": row.provenance, "aria-selected": ctx.selection.includes(row.id) ? "true" : "false", tabindex: row.id === rove ? 0 : -1,
+      "data-pw": "row", role: "row", "data-id": row.id, "data-provenance": row.provenance, "aria-selected": ctx.selection.includes(row.id) ? "true" : "false", tabindex: row.id === rove ? 0 : -1, style: grid,
     },
     ...data.columns.map((column) => h(ctx.doc, "div", { "data-pw": "cell", role: "gridcell", "data-id": column.key }, formatCell(ctx, ownValue(cells, column.key), column.format))),
     h(ctx.doc, "div", { role: "gridcell" }, ...factChildren(ctx, row, "actionable")));
@@ -156,7 +160,7 @@ function renderList(ctx: ComponentContext): HTMLElement {
   const labels = [...new Set(rows.flatMap((row) => (typeof row.group === "string" ? [row.group] : [])))].sort(compareCodeUnits);
   const body: Child[] = ungrouped.map(rowElement);
   for (const label of labels) {
-    body.push(h(ctx.doc, "div", { "data-pw": "group", role: "row" }, h(ctx.doc, "div", { role: "gridcell" }, label)));
+    body.push(h(ctx.doc, "div", { "data-pw": "group", role: "row", style: "font-weight:600;padding:.4em 0 .1em" }, h(ctx.doc, "div", { role: "gridcell" }, label)));
     for (const row of rows) if (row.group === label) body.push(rowElement(row));
   }
   return h(ctx.doc, "div", { "data-pw": "list", role: "grid", "aria-label": ctx.envelope.title }, header, ...body);

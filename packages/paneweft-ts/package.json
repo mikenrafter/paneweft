@@ -1,0 +1,34 @@
+{
+  "name": "@paneweft/sdk",
+  "version": "0.0.0",
+  "license": "MIT",
+  "private": true,
+  "description": "Paneweft TypeScript SDK: typed views and executable examples beside the code they explain. Development-only: never import it from a production entry point.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "default": "./src/index.ts"
+    },
+    "./vitest": {
+      "types": "./types/vitest.d.ts",
+      "default": "./src/vitest.ts"
+    },
+    "./vitest-reporter": {
+      "types": "./types/vitest-reporter.d.ts",
+      "default": "./src/vitest-reporter.ts"
+    }
+  },
+  "files": [
+    "src",
+    "types"
+  ],
+  "peerDependencies": {
+    "vitest": ">=3.2 <6"
+  },
+  "peerDependenciesMeta": {
+    "vitest": {
+      "optional": true
+    }
+  }
+}

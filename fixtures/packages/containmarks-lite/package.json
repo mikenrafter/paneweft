@@ -1,0 +1,7 @@
+{
+  "name": "containmarks-lite",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Fixture modelled on ContainMarks' ContainerMappingRecord (spec section 2). Never edit the real repository from the paneweft tests."
+}

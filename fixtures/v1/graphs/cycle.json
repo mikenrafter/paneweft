@@ -1,0 +1,81 @@
+{
+  "name": "cycle",
+  "why": "A cycle terminates: the back reference to an ancestor is a cycle edge to the registered object (IV9).",
+  "nodes": {
+    "a": {
+      "type": "fx::Node",
+      "key": null,
+      "label": "a",
+      "fields": {},
+      "links": [
+        {
+          "name": "next",
+          "to": "b"
+        }
+      ]
+    },
+    "b": {
+      "type": "fx::Node",
+      "key": null,
+      "label": "b",
+      "fields": {},
+      "links": [
+        {
+          "name": "next",
+          "to": "a"
+        }
+      ]
+    }
+  },
+  "publish": [
+    "a"
+  ],
+  "expected": {
+    "roots": [
+      "o1"
+    ],
+    "objects": [
+      {
+        "id": "o1",
+        "typeId": "fx::Node",
+        "domainKey": null,
+        "label": "a",
+        "fields": {},
+        "edges": [
+          {
+            "name": "next",
+            "kind": "child",
+            "target": "o2"
+          }
+        ],
+        "views": [
+          "node.details"
+        ],
+        "contentHash": "db6c2a870c69ffef113921a7dc154232c972e7b1a56dc5d329b48deece3cc19b",
+        "hashInput": "{\"domainKey\":null,\"fields\":{},\"label\":\"a\",\"typeId\":\"fx::Node\"}"
+      },
+      {
+        "id": "o2",
+        "typeId": "fx::Node",
+        "domainKey": null,
+        "label": "b",
+        "fields": {},
+        "edges": [
+          {
+            "name": "next",
+            "kind": "cycle",
+            "target": "o1"
+          }
+        ],
+        "views": [
+          "node.details"
+        ],
+        "contentHash": "7168f2ff3aff19448a33b914bbac45089c43e5a8a281d38007da13efcb7a7f8e",
+        "hashInput": "{\"domainKey\":null,\"fields\":{},\"label\":\"b\",\"typeId\":\"fx::Node\"}"
+      }
+    ],
+    "completeness": {
+      "status": "complete"
+    }
+  }
+}

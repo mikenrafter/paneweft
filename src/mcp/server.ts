@@ -16,30 +16,16 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { executeOperation } from "../core/operations.ts";
 import type { Session } from "../core/session.ts";
+import { createSessionJobService } from "../v1/service.ts";
+import { V1_TOOL_NAMES } from "../v1/schemas.ts";
+import { executeV1Operation, v1ToolDescriptors } from "../v1/tools.ts";
+import { resolve } from "node:path";
+import { dereference } from "../schemas/dereference.ts";
 import { TOOL_NAMES, loadSchemaDocuments } from "../schemas/index.ts";
 
 type Json = any;
 
-/** Replaces every `$ref` by its target (urn:paneweft ids and local `#/...` pointers), so an advertised schema stands alone. */
-function dereference(schema: Json, documents: Map<string, Json>, root: Json, seen: string[] = []): Json {
-  if (Array.isArray(schema)) return schema.map((entry) => dereference(entry, documents, root, seen));
-  if (schema === null || typeof schema !== "object") return schema;
-  if (typeof schema.$ref === "string") {
-    const [id, fragment = ""] = schema.$ref.split("#");
-    const base = id === "" ? root : documents.get(id);
-    if (base === undefined) throw new Error(`unresolvable $ref ${schema.$ref}`);
-    if (seen.includes(schema.$ref)) throw new Error(`cyclic $ref ${schema.$ref}`);
-    let target = base;
-    for (const token of fragment.split("/").slice(1)) target = target[token.replace(/~1/g, "/").replace(/~0/g, "~")];
-    const { $ref: _ref, ...siblings } = schema;
-    return { ...dereference(target, documents, base, [...seen, schema.$ref]), ...dereference(siblings, documents, root, seen) };
-  }
-  const out: Json = {};
-  for (const [key, value] of Object.entries(schema)) if (key !== "$id" && key !== "$schema" && key !== "$defs") out[key] = dereference(value, documents, root, seen);
-  return out;
-}
-
-export function toolDescriptors(): Array<{ name: string; description: string; inputSchema: Json }> {
+export function toolDescriptors(): Array<{ name: string; description: string; inputSchema: Json; annotations?: { readOnlyHint: boolean } }> {
   const documents = new Map(loadSchemaDocuments().map((entry) => [entry.id, entry.document as Json]));
   return TOOL_NAMES.map((name) => {
     const document = documents.get(`urn:paneweft:schema:tool:${name}:1`) as Json;
@@ -60,15 +46,28 @@ export const INSTRUCTIONS = [
   "keep an investigation page: pass the revision you read as expectedRevision.",
   "Every reply fits maxBytes (default 8192, between 2048 and 32768) and opens with a header saying what is complete, fresh and left out.",
   "When a reply ends with a cursor, repeat the SAME request with that cursor to get the next page; a different request needs a new cursor-free call.",
-  "Freshness stays unverified until the session owner registers the repository root; no tool runs code or reads outside registered roots.",
+  "Freshness stays unverified until the session owner registers the repository root; no tool reads outside registered roots.",
+  "For code with an SDK: list_types, list_views_for_type, list_examples read the catalogue (stale means unproven), scaffold_view prints a patch (writes nothing; you edit),",
+  "collect runs exact example ids through an owner-registered adapter (the one tool that runs code), then collection_status, view_result, explain_failure.",
+  "No SDK, a read-only repo or a one-off question: the JSON fallback above.",
 ].join(" ");
 
-/** Serves until stdin closes (the client went away), then returns. */
+/** Serves until stdin closes (the client went away), then returns. The v1 tools read adapters, catalogues and jobs from the session directory. */
 export async function runMcpStdio(session: Session | null): Promise<void> {
   const server = new Server({ name: "paneweft", version: "0.0.0" }, { capabilities: { tools: {} }, instructions: INSTRUCTIONS });
-  const tools = toolDescriptors();
+  const tools = [...toolDescriptors(), ...v1ToolDescriptors()];
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools }));
+  const v1 = async () => {
+    if (session === null) return { session: null, sessionDir: null, jobs: null };
+    const sessionDir = resolve(session.dir);
+    const jobs = await createSessionJobService(session, sessionDir);
+    return { session, sessionDir, jobs };
+  };
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    if ((V1_TOOL_NAMES as readonly string[]).includes(request.params.name)) {
+      const outcome = await executeV1Operation(await v1(), request.params.name, request.params.arguments ?? {});
+      return { content: [{ type: "text" as const, text: outcome.body }], isError: !outcome.ok };
+    }
     const outcome = await executeOperation(session, request.params.name, request.params.arguments ?? {});
     return { content: [{ type: "text" as const, text: outcome.body }], isError: !outcome.ok };
   });

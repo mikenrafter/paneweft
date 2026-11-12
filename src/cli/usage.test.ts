@@ -147,7 +147,7 @@ describe("README Usage section", () => {
 
 describe("README MCP client configuration", () => {
   // why: an MCP client is configured with a command and args; the block the README gives must start a real paneweft MCP server (initialize
-  //   succeeds, the thirteen tools are listed) when its two placeholders are replaced by the repository and a session directory.
+  //   succeeds, the twenty-three tools (thirteen v0, ten v1) are listed) when its two placeholders are replaced by the repository and a session directory.
   // proves: CLAIM(readme-usage)
   it("[T2] the `json mcp-config` block launches a server that lists the tools", async () => {
     const block = fencedBlocks(section("Use it from an MCP client", USAGE ?? "", "###") ?? "").find((candidate) => candidate.info === "json mcp-config");
@@ -167,7 +167,7 @@ describe("README MCP client configuration", () => {
       expect(client.getServerVersion()?.name).toBe("paneweft");
       const listed = await client.listTools();
       expect(listed.tools.map((tool) => tool.name)).toContain("render");
-      expect(listed.tools).toHaveLength(13);
+      expect(listed.tools).toHaveLength(23);
     } finally {
       await client.close().catch(() => {});
     }

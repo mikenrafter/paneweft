@@ -1,0 +1,50 @@
+[
+  {
+    "name": "numeric keys",
+    "source": "{\"2\":\"two\",\"10\":\"ten\"}",
+    "canonical": "{\"10\":\"ten\",\"2\":\"two\"}",
+    "sha256": "b71e124675fc80e7314688bffdb68e83515851fb51474125db9a0c4c8aca3808"
+  },
+  {
+    "name": "small float",
+    "source": "{\"n\":1e-6}",
+    "canonical": "{\"n\":0.000001}",
+    "sha256": "28343867a0be00aee19f81aa90cfd6c646878b9303fa15410d16bfd3f8894578"
+  },
+  {
+    "name": "negative zero",
+    "source": "{\"n\":-0.0}",
+    "canonical": "{\"n\":0}",
+    "sha256": "f3013f933b9fb80ab6d995e7ad9da36f683837ba1d81e950c943d40111eac2f0"
+  },
+  {
+    "name": "large tagged integer",
+    "source": "{\"$paneweft\":\"bigint\",\"decimal\":\"18446744073709551615\"}",
+    "canonical": "{\"$paneweft\":\"bigint\",\"decimal\":\"18446744073709551615\"}",
+    "sha256": "a6c56384a2c6b51cd37f34e33a7c98d2178d24971fcf752532414c0c9a325e2f"
+  },
+  {
+    "name": "exponent",
+    "source": "{\"n\":1e21}",
+    "canonical": "{\"n\":1e+21}",
+    "sha256": "f1ee2b60ee95a3170fdc07a577e5f3514ced26867443d69da265acadead81007"
+  },
+  {
+    "name": "UTF16 keys",
+    "source": "{\"\\ue000\":2,\"😀\":1}",
+    "canonical": "{\"😀\":1,\"\":2}",
+    "sha256": "04208f6cdb854e2ab1b07dd3633a39dec854344fe72824cf7f2fdb4e2e33129e"
+  },
+  {
+    "name": "integer above safe range",
+    "source": "{\"n\":9007199254740993}",
+    "canonical": "{\"n\":9007199254740992}",
+    "sha256": "66c87d9cb3014e05a11baa97df62282d89d425f22ee15816577c84534e2ef1bb"
+  },
+  {
+    "name": "u64 maximum as IEEE754",
+    "source": "{\"n\":18446744073709551615}",
+    "canonical": "{\"n\":18446744073709552000}",
+    "sha256": "683c3b5df88dac54ef47abac301b2abd114258c10929f0d71cb7afd4099b7f02"
+  }
+]

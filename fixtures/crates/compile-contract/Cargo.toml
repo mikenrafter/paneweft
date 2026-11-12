@@ -1,0 +1,11 @@
+# Compile-contract fixtures (IV3/IV18): each example below is a deliberate compiler-contract case. Not a workspace member.
+[package]
+name = "compile-contract"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+paneweft = { path = "../../../crates/paneweft" }
+
+[workspace]

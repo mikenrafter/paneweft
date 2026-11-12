@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:tool:collect:1",
+  "title": "collect",
+  "description": "EXECUTES CODE of a registered repository through its registered adapter and the qex queue. Starts a durable job and returns its id; the same requestId with identical parameters returns the existing job, other parameters are CONFLICT. Takes exact example ids, never argv or shell text. Next: collection_status, then view_result.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "requestId",
+    "repo",
+    "adapter",
+    "examples"
+  ],
+  "properties": {
+    "requestId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "repo": {
+      "$ref": "urn:paneweft:schema:common:1#/$defs/Id",
+      "description": "Repository id registered with `paneweft repo add`."
+    },
+    "adapter": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{0,31}$"
+    },
+    "examples": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {
+        "$ref": "urn:paneweft:schema:common:1#/$defs/Id"
+      }
+    },
+    "views": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "$ref": "urn:paneweft:schema:common:1#/$defs/Id"
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "cursor": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "description": "Continuation cursor from a previous reply of the same query."
+    },
+    "format": {
+      "enum": [
+        "text",
+        "json"
+      ],
+      "default": "text",
+      "description": "Reply format."
+    },
+    "maxBytes": {
+      "type": "integer",
+      "minimum": 2048,
+      "maximum": 32768,
+      "default": 8192,
+      "description": "UTF-8 byte budget of the whole serialized reply (design section 4)."
+    }
+  }
+}

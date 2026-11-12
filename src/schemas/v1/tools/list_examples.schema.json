@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:tool:list_examples:1",
+  "title": "list_examples",
+  "description": "Discovery, reads the catalogue and never executes code. Example definitions with return types, claim ids, composition links, runner, selector and last outcomes. Next: collect.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "repo"
+  ],
+  "properties": {
+    "repo": {
+      "$ref": "urn:paneweft:schema:common:1#/$defs/Id",
+      "description": "Repository id registered with `paneweft repo add`."
+    },
+    "type": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "view": {
+      "$ref": "urn:paneweft:schema:common:1#/$defs/Id"
+    },
+    "tag": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "cursor": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "description": "Continuation cursor from a previous reply of the same query."
+    },
+    "format": {
+      "enum": [
+        "text",
+        "json"
+      ],
+      "default": "text",
+      "description": "Reply format."
+    },
+    "maxBytes": {
+      "type": "integer",
+      "minimum": 2048,
+      "maximum": 32768,
+      "default": 8192,
+      "description": "UTF-8 byte budget of the whole serialized reply (design section 4)."
+    }
+  }
+}

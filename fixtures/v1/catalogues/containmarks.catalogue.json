@@ -1,0 +1,75 @@
+{
+  "schemaVersion": "paneweft.catalogue/1",
+  "target": {
+    "runner": "vitest",
+    "package": "containmarks-lite",
+    "features": []
+  },
+  "linkedScope": [
+    "paneweft.views.ts"
+  ],
+  "types": [
+    {
+      "typeId": "containmarks::ContainerMappingRecord",
+      "source": {
+        "path": "src/models.ts",
+        "symbol": "ContainerMappingRecord"
+      }
+    }
+  ],
+  "views": [
+    {
+      "id": "mapping.details",
+      "typeId": "containmarks::ContainerMappingRecord",
+      "title": "Container mapping",
+      "question": "Which original index and container does this mapping preserve?",
+      "component": "shape",
+      "priority": 10,
+      "source": {
+        "path": "src/mappings/containerMappings.paneweft.ts",
+        "line": 11
+      },
+      "module": "src/mappings/containerMappings.paneweft.ts"
+    }
+  ],
+  "examples": [
+    {
+      "id": "mapping.renamed",
+      "typeId": "containmarks::ContainerMappingRecord",
+      "claims": [
+        "CM2"
+      ],
+      "kind": "example",
+      "composes": [],
+      "module": "tests/mappings.examples.ts",
+      "source": {
+        "path": "tests/mappings.examples.ts",
+        "line": 8
+      },
+      "selector": {
+        "runner": "vitest",
+        "name": "example:mapping.renamed"
+      }
+    },
+    {
+      "id": "mapping.work",
+      "typeId": "containmarks::ContainerMappingRecord",
+      "claims": [
+        "CM1"
+      ],
+      "kind": "example",
+      "composes": [],
+      "module": "tests/mappings.examples.ts",
+      "source": {
+        "path": "tests/mappings.examples.ts",
+        "line": 20
+      },
+      "selector": {
+        "runner": "vitest",
+        "name": "example:mapping.work"
+      }
+    }
+  ],
+  "duplicates": [],
+  "digest": "0a21d64c5ad460e091c439190a0e1ede69342cf62c141f75f72b759a3d53816c"
+}

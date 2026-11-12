@@ -1,0 +1,13 @@
+# paneweft monorepo, Rust side. The TypeScript host and CLI stay at the repository root (package.json); the Rust SDK lives here.
+# Fixture crates under fixtures/crates are NOT workspace members: the host tests build them through the cargo adapter (they include
+# deliberately failing examples and deliberately leaky dependency graphs), each with its own target directory.
+[workspace]
+resolver = "2"
+members = ["crates/paneweft", "crates/paneweft-macros"]
+exclude = ["fixtures/crates"]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "MIT"

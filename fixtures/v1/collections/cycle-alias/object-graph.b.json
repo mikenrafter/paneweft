@@ -1,0 +1,254 @@
+{
+  "schemaVersion": "paneweft.object-graph/1",
+  "captureId": "inv-1",
+  "runId": "run-b",
+  "invocationId": "inv-1",
+  "roots": [
+    "o1"
+  ],
+  "objects": [
+    {
+      "id": "o1",
+      "typeId": "fx::Node",
+      "domainKey": null,
+      "label": "a-B",
+      "fields": {},
+      "edges": [
+        {
+          "name": "next",
+          "kind": "child",
+          "target": "o2"
+        },
+        {
+          "name": "side",
+          "kind": "child",
+          "target": "o3"
+        }
+      ],
+      "views": [
+        "node.links"
+      ],
+      "contentHash": "412c3a6d33d53fe524716571bdb1c0796b81fcbd0ba3e2f781eef012802604c5"
+    },
+    {
+      "id": "o2",
+      "typeId": "fx::Node",
+      "domainKey": null,
+      "label": "b-B",
+      "fields": {},
+      "edges": [
+        {
+          "name": "next",
+          "kind": "cycle",
+          "target": "o1"
+        },
+        {
+          "name": "side",
+          "kind": "alias",
+          "target": "o3"
+        }
+      ],
+      "views": [
+        "node.links"
+      ],
+      "contentHash": "c2023eefc887892109aaa1b5442d294726d30f682d9b1f882d51ae0153948e17"
+    },
+    {
+      "id": "o3",
+      "typeId": "fx::Node",
+      "domainKey": null,
+      "label": "c-B",
+      "fields": {},
+      "edges": [],
+      "views": [
+        "node.links"
+      ],
+      "contentHash": "2d5c6624cd5da3ad78bab364cd434e9491a5e5ab9184ff00a3a0bdc246758a39"
+    }
+  ],
+  "views": [
+    {
+      "viewId": "node.links",
+      "title": "Links",
+      "question": "Where does this node point?",
+      "component": "list",
+      "priority": 10,
+      "completeness": {
+        "status": "complete"
+      },
+      "evidence": {
+        "provenance": "observed",
+        "runId": "run-b"
+      },
+      "pages": [],
+      "rowsTotal": 2,
+      "data": {
+        "columns": [
+          {
+            "key": "edge",
+            "title": "Edge",
+            "format": "text"
+          },
+          {
+            "key": "kind",
+            "title": "Kind",
+            "format": "text"
+          }
+        ],
+        "rows": [
+          {
+            "id": "link-0",
+            "cells": {
+              "edge": "next",
+              "kind": "child"
+            },
+            "provenance": "observed",
+            "evidence": [
+              "run"
+            ],
+            "target": {
+              "object": "o2"
+            }
+          },
+          {
+            "id": "link-1",
+            "cells": {
+              "edge": "side",
+              "kind": "child"
+            },
+            "provenance": "observed",
+            "evidence": [
+              "run"
+            ],
+            "target": {
+              "object": "o3"
+            }
+          }
+        ],
+        "order": {
+          "key": "edge",
+          "direction": "asc"
+        }
+      },
+      "objectId": "o1"
+    },
+    {
+      "viewId": "node.links",
+      "title": "Links",
+      "question": "Where does this node point?",
+      "component": "list",
+      "priority": 10,
+      "completeness": {
+        "status": "complete"
+      },
+      "evidence": {
+        "provenance": "observed",
+        "runId": "run-b"
+      },
+      "pages": [],
+      "rowsTotal": 2,
+      "data": {
+        "columns": [
+          {
+            "key": "edge",
+            "title": "Edge",
+            "format": "text"
+          },
+          {
+            "key": "kind",
+            "title": "Kind",
+            "format": "text"
+          }
+        ],
+        "rows": [
+          {
+            "id": "link-0",
+            "cells": {
+              "edge": "next",
+              "kind": "cycle"
+            },
+            "provenance": "observed",
+            "evidence": [
+              "run"
+            ],
+            "target": {
+              "object": "o1"
+            }
+          },
+          {
+            "id": "link-1",
+            "cells": {
+              "edge": "side",
+              "kind": "alias"
+            },
+            "provenance": "observed",
+            "evidence": [
+              "run"
+            ],
+            "target": {
+              "object": "o3"
+            }
+          }
+        ],
+        "order": {
+          "key": "edge",
+          "direction": "asc"
+        }
+      },
+      "objectId": "o2"
+    },
+    {
+      "viewId": "node.links",
+      "title": "Links",
+      "question": "Where does this node point?",
+      "component": "list",
+      "priority": 10,
+      "completeness": {
+        "status": "complete"
+      },
+      "evidence": {
+        "provenance": "observed",
+        "runId": "run-b"
+      },
+      "pages": [],
+      "rowsTotal": 0,
+      "data": {
+        "columns": [
+          {
+            "key": "edge",
+            "title": "Edge",
+            "format": "text"
+          },
+          {
+            "key": "kind",
+            "title": "Kind",
+            "format": "text"
+          }
+        ],
+        "rows": [],
+        "order": {
+          "key": "edge",
+          "direction": "asc"
+        }
+      },
+      "objectId": "o3"
+    }
+  ],
+  "pages": [],
+  "diagnostics": [],
+  "limits": {
+    "depth": 4,
+    "objects": 1000,
+    "references": 4000,
+    "rootBytes": 2097152,
+    "stringBytes": 16384,
+    "pageRows": 100,
+    "collectionBytes": 33554432,
+    "roots": 100,
+    "viewRows": 10000,
+    "viewBudgetMs": 100
+  },
+  "completeness": {
+    "status": "complete"
+  }
+}

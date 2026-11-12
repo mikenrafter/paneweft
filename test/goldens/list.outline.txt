@@ -7,6 +7,7 @@ viewer
       tab aria-selected="true" data-definition-id="d-list" role="tab" tabindex="0" "Modules"
       tab aria-selected="false" data-definition-id="builtin:metadata" role="tab" tabindex="-1"
       tab aria-selected="false" data-definition-id="builtin:raw" role="tab" tabindex="-1"
+    question "Which modules matter?"
     status-strip
       completeness data-status="complete" "complete (all modules in the fixture)"
       freshness data-status="fresh" "fresh"

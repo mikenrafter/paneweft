@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:v1:frame-message:1",
+  "title": "Renderer frame message",
+  "description": "The versioned postMessage contract between the host and a sandboxed renderer frame (design section 5, S4). Every message carries protocol version, frame/view/snapshot identity, a request id and a monotonic sequence number. There is no arbitrary URL, fetch proxy, file read, command, eval or MCP forwarding message, and none can start a collection.",
+  "type": "object",
+  "required": ["protocol", "type", "frameId", "viewId", "snapshotId", "requestId", "seq"],
+  "properties": {
+    "protocol": { "const": 1 },
+    "type": { "enum": ["init", "page", "selection_changed", "dispose", "ready", "resize", "select_item", "open_object", "request_page", "render_error"] },
+    "frameId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "viewId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "snapshotId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "requestId": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "seq": { "type": "integer", "minimum": 1 },
+    "body": { "type": "object" }
+  },
+  "additionalProperties": false
+}

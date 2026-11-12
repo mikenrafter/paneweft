@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:paneweft:schema:v1:adapter:1",
+  "title": "Collection adapter",
+  "description": "An owner-registered adapter record (design section 6, Execution authorization). Registering one is CLI-only. The checked-in manifest and any submitted payload can select declarations and tests; they can never replace the executable, add shell fragments, change the root or install a runner.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "id", "kind", "grammar", "repo", "executable", "workspaceRoot", "entry", "features", "supportedVersions", "limits", "queue"],
+  "properties": {
+    "schemaVersion": { "const": "paneweft.adapter/1" },
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$" },
+    "kind": { "enum": ["cargo", "vitest"] },
+    "grammar": { "enum": ["cargo-test/1", "vitest-run/1"], "description": "Pins the argv shape. The selectors are data; the grammar is code." },
+    "repo": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "executable": { "type": "string", "pattern": "^/", "description": "Absolute path; the identity of the executable is part of the record." },
+    "executableSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "workspaceRoot": { "type": "string", "pattern": "^/" },
+    "entry": { "type": "string", "minLength": 1, "description": "Manifest directory (cargo) or package directory (vitest), relative to workspaceRoot." },
+    "tsconfig": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^(?!/)(?!(.*/)?\\.\\.(/|$)).+$", "description": "vitest-run/1 only (F5): the tsconfig the collection typechecks against, relative to the package directory (workspaceRoot/entry), no `..` segment, an existing file. Default tsconfig.json. A file that extends the repository's own and lists only what the instrumentation imports keeps unrelated type errors from blocking a collect." },
+    "vitestConfig": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^(?!/)(?!(.*/)?\\.\\.(/|$)).+$", "description": "vitest-run/1 only (F5): the vitest config the run uses (it lists the paneweft reporter), relative to the package directory, no `..` segment, an existing file. Default vitest.config.ts." },
+    "features": { "type": "array", "items": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" } },
+    "supportedVersions": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+    "limits": { "type": "object", "additionalProperties": false, "required": ["timeoutMs", "logBytes"], "properties": { "timeoutMs": { "type": "integer", "minimum": 1 }, "logBytes": { "type": "integer", "minimum": 1024 } } },
+    "limitCeilings": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Operator ceilings for the capture bounds a collect request may ask for (S3). A request can only lower a bound; it is clamped to the smaller of these and the SDK defaults. Absent: the SDK defaults are the ceiling.",
+      "properties": {
+        "depth": { "type": "integer", "minimum": 0 },
+        "objects": { "type": "integer", "minimum": 1 },
+        "references": { "type": "integer", "minimum": 0 },
+        "rootBytes": { "type": "integer", "minimum": 1 },
+        "stringBytes": { "type": "integer", "minimum": 1 },
+        "pageRows": { "type": "integer", "minimum": 1 },
+        "collectionBytes": { "type": "integer", "minimum": 1 },
+        "roots": { "type": "integer", "minimum": 1 },
+        "viewRows": { "type": "integer", "minimum": 1 },
+        "viewBudgetMs": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "env": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The environment of every job of this adapter (F21). A job gets qex's minimal environment (HOME, LANG, LOGNAME, PATH, SHELL, USER of the submitting process), then the names in `passthrough` that the submitting process has (a list the host adds to: RUSTUP_HOME, CARGO_HOME, RUSTUP_TOOLCHAIN, CARGO_TARGET_DIR, TMPDIR, LC_ALL, TERM, SSL_CERT_FILE, SSL_CERT_DIR), then `set`, which wins. Values in `set` do not depend on who submits, so a CLI call and an MCP call run the same job; a passthrough name does.",
+      "properties": {
+        "set": { "type": "object", "propertyNames": { "pattern": "^(?!PANEWEFT_)[A-Za-z_][A-Za-z0-9_]{0,127}$" }, "additionalProperties": { "type": "string", "maxLength": 4096, "pattern": "^[^\\u0000]*$" }, "maxProperties": 64 },
+        "passthrough": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "type": "string", "pattern": "^(?!PANEWEFT_)[A-Za-z_][A-Za-z0-9_]{0,127}$" } }
+      }
+    },
+    "queue": { "type": "object", "additionalProperties": false, "required": ["wrapper", "cpu", "mem"], "properties": { "wrapper": { "const": "qex" }, "cpu": { "type": "string" }, "mem": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } } } }
+  }
+}

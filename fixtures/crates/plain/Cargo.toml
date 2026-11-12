@@ -1,0 +1,9 @@
+# A crate that has never heard of paneweft (F12): no feature, no dependency, and a `#[cfg(test)] mod tests` of its own. The scaffold tests apply
+# the scaffold's output to a copy of this crate exactly as given.
+[package]
+name = "plain"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
