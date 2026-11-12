@@ -14,5 +14,6 @@ const exitCode = await runCli(argv, {
   stderr: (text) => void process.stderr.write(text),
   env: process.env,
   cwd: process.cwd(),
+  drive: true,
 });
 process.exitCode = exitCode;

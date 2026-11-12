@@ -21,8 +21,8 @@ import { V1_COMMANDS, type V1Command } from "./v1-commands.ts";
 import { executeV1Operation } from "../v1/tools.ts";
 import { V1_TOOL_NAMES, type V1ToolName } from "../v1/schemas.ts";
 import { loadAdapters, registerAdapter } from "../v1/adapters.ts";
-import { createJobService } from "../v1/jobs.ts";
-import { createQexClient } from "../v1/qex.ts";
+import type { JobService } from "../v1/jobs.ts";
+import { createSessionJobService } from "../v1/service.ts";
 import { digestRenderer, openTrustStore } from "../v1/renderer.ts";
 
 export interface CliIo {
@@ -31,6 +31,8 @@ export interface CliIo {
   stderr: (text: string) => void;
   env: Record<string, string | undefined>;
   cwd: string;
+  /** `true` hands each job to a detached driver (F20), as the bin entry does; absent, nothing is spawned (in-process callers poll). */
+  drive?: boolean;
 }
 
 class UsageError extends Error {}
@@ -410,23 +412,10 @@ async function serveCommand(parsed: Parsed, session: Session | null, io: CliIo, 
 
 // ---- v1 wiring ------------------------------------------------------------------------------------------------------------------
 
-async function v1Context(session: Session | null, dir: string | undefined, io: CliIo): Promise<{ session: Session | null; sessionDir: string | null; jobs: ReturnType<typeof createJobService> | null }> {
+async function v1Context(session: Session | null, dir: string | undefined, io: CliIo): Promise<{ session: Session | null; sessionDir: string | null; jobs: JobService | null }> {
   if (session === null || dir === undefined || dir === "") return { session: null, sessionDir: null, jobs: null };
   const sessionDir = resolve(io.cwd, dir);
-  const adapters = await loadAdapters(sessionDir);
-  const jobs = createJobService({
-    session,
-    sessionDir,
-    qex: createQexClient(),
-    adapters: adapters.ok ? adapters.value : [],
-    catalogueFor: async (repo, adapter) => {
-      try {
-        return (JSON.parse(await readFile(resolve(sessionDir, "catalogues", repo, `${adapter}.json`), "utf8")) as { catalogue: never }).catalogue;
-      } catch {
-        return null;
-      }
-    },
-  });
+  const jobs = await createSessionJobService(session, sessionDir, { drive: io.drive === true });
   return { session, sessionDir, jobs };
 }
 

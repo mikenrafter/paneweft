@@ -16,9 +16,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { executeOperation } from "../core/operations.ts";
 import type { Session } from "../core/session.ts";
-import { loadAdapters } from "../v1/adapters.ts";
-import { createJobService } from "../v1/jobs.ts";
-import { createQexClient } from "../v1/qex.ts";
+import { createSessionJobService } from "../v1/service.ts";
 import { V1_TOOL_NAMES } from "../v1/schemas.ts";
 import { executeV1Operation, v1ToolDescriptors } from "../v1/tools.ts";
 import { readFile } from "node:fs/promises";
@@ -63,10 +61,7 @@ export async function runMcpStdio(session: Session | null): Promise<void> {
   const v1 = async () => {
     if (session === null) return { session: null, sessionDir: null, jobs: null };
     const sessionDir = resolve(session.dir);
-    const adapters = await loadAdapters(sessionDir);
-    const jobs = createJobService({ session, sessionDir, qex: createQexClient(), adapters: adapters.ok ? adapters.value : [], catalogueFor: async (repo, adapter) => {
-      try { return (JSON.parse(await readFile(resolve(sessionDir, "catalogues", repo, `${adapter}.json`), "utf8")) as { catalogue: never }).catalogue; } catch { return null; }
-    } });
+    const jobs = await createSessionJobService(session, sessionDir);
     return { session, sessionDir, jobs };
   };
   server.setRequestHandler(CallToolRequestSchema, async (request) => {

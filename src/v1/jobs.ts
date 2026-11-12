@@ -77,6 +77,9 @@ export interface JobServiceDeps {
   catalogueFor?: (repo: string, adapter: string) => Promise<Catalogue | null>;
   crashAt?: (point: CrashPoint) => void | Promise<void>;
   clock?: () => Date;
+  /** F20: called with the id of every job this service submitted or found unfinished, so something advances it when nobody polls (src/v1/driver.ts). Never required for correctness:
+   * `status` and `cancel` advance a job from any process, and a failing hook is ignored. */
+  drive?: (jobId: string) => void;
   /** The environment the passthrough names are read from; the process's own by default. */
   env?: NodeJS.ProcessEnv;
   /** Bounded wait for qex to reach a terminal state after cancel/kill (milliseconds). */
@@ -817,6 +820,12 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     return current.ok && compareFingerprints(captured, current.value).status === "fresh";
   }
 
+  /** Hands an unfinished job to the driver hook (F20). */
+  function kick(id: string, state: State | undefined): void {
+    if (deps.drive === undefined || (state !== undefined && TERMINAL_JOB_STATES.includes(state.state))) return;
+    try { deps.drive(id); } catch { /* the job is advanced by whoever polls it */ }
+  }
+
   async function begin(mode: "run" | "catalogue", request: CollectRequest | { requestId: string; repo: string; adapter: string }, raw: Record<string, unknown>): Promise<Result<JobView>> {
     if (!REQUEST_ID.test(request.requestId)) return err("INVALID_ARGUMENT", `"${request.requestId}" is not a request id (letters, digits, dot, dash, underscore; at most 64)`, { errors: [{ code: "PATTERN", pointer: "/requestId", constraint: `pattern: ${REQUEST_ID.source}`, hint: "Use a fresh short id; the same id with the same parameters returns the same job." }] });
     const examples = "examples" in request ? request.examples : [];
@@ -831,6 +840,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
       if (canonicalJson(existing.params) !== canonicalJson(params)) return err("CONFLICT", `the request id "${id}" already names a collection with different parameters; use a new request id for a deliberate rerun`, { details: { requestId: id } });
       const advanced = await advance(id);
       if (!advanced.ok) return advanced;
+      kick(id, advanced.value.state);
       return ok(view(id, advanced.value.intent, advanced.value.state, false));
     }
     const adapter = adapterFor(params);
@@ -864,6 +874,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     if (!created.ok) return created;
     if (!created.value.created) {
       const advanced = await advance(id);
+      if (advanced.ok) kick(id, advanced.value.state);
       return advanced.ok ? ok(view(id, advanced.value.intent, advanced.value.state, false)) : advanced;
     }
     await crash("after-intent");
@@ -872,6 +883,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     // retry may already have submitted the job by now
     const submitted = await ensureSubmitted(id, created.value.intent);
     if (!submitted.ok) return submitted;
+    kick(id, submitted.value);
     return ok(view(id, created.value.intent, submitted.value, true));
   }
 
