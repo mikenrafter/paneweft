@@ -67,6 +67,9 @@ export interface StoredPage {
   key: PageKey;
   pageId: string;
   rows: Array<Record<string, unknown>>;
+  /** Positions of the earlier stored pages that could not be read (missing or corrupt). Row ids are unique over the view, and that is proven only
+   * against the first page and the pages that were read: this page's ids are not compared with the rows of these. Empty: proven against all. */
+  unprovenAgainst: number[];
 }
 
 export interface V1Reader {
@@ -249,37 +252,41 @@ export async function loadViewPages(session: Session, key: Omit<PageKey, "positi
   return ok({ session, runId: key.runId, record, graph, view, refs });
 }
 
-/** The stored page at `position`, if it is a valid page of the view that owns it. `seen` holds the row ids of the view so far (its first page and
- * every earlier page) and is extended with this page's: row ids are unique over the view. Checks, in order: the reference exists; the body file
+/** What a page's reading leaves for the page after it: the row ids of the view so far (the first page and every page that WAS read) and the positions
+ * that could not be read. A page that is not there or not valid fails only itself; it adds nothing to `seen`, and the pages after it are checked
+ * against the pages that are present, with the gap recorded as `unprovenAgainst`. */
+interface PrefixState { seen: Set<string>; unread: number[] }
+const pagePrefixes = new WeakMap<ViewPages, { tail: Promise<PrefixState>; pages: Array<Promise<Result<StoredPage>>> }>();
+
+/** The stored page at `position`, if it is a valid page of the view that owns it. Row ids are unique over the view; a page is checked against the
+ * first page and every earlier page that could be read. Checks, in order: the reference exists; the body file
  * exists (NOT_FOUND) and is JSON of the right shape; its rows hash to the address the reference names and are as many as it counts; every row is
  * a row of the view's list (schema, declared columns, unique ids); every row target is an object of the capture. */
-type PagePrefix = Result<{ seen: Set<string>; page?: StoredPage }>;
-const pagePrefixes = new WeakMap<ViewPages, { tail: Promise<PagePrefix>; pages: Array<Promise<Result<StoredPage>>> }>();
-
-/** CLAIM(S29): the reader owns all preceding-page validation, including concurrent direct reads [page-reader.test.ts]. */
+/** CLAIM(S29): the reader owns all preceding-page validation, including concurrent direct reads [page-reader.test.ts].
+ * CLAIM(S40): a page's own NOT_FOUND or corruption fails only that page; later pages are still served [page-reader.test.ts]. */
 export async function readPageAt(view: ViewPages, position: number): Promise<Result<StoredPage>> {
   if (!Number.isInteger(position) || position < 1 || position > view.refs.length) return err("NOT_FOUND", "invalid stored page position");
   let prefix = pagePrefixes.get(view);
   if (prefix === undefined) {
-    prefix = { tail: Promise.resolve(ok({ seen: new Set(rowIds((view.view.data as { rows?: unknown } | undefined)?.rows)) })), pages: [] };
+    prefix = { tail: Promise.resolve({ seen: new Set(rowIds((view.view.data as { rows?: unknown } | undefined)?.rows)), unread: [] }), pages: [] };
     pagePrefixes.set(view, prefix);
   }
   // Build the promise chain synchronously, so concurrent callers share one validation per prefix without mutating a shared seen set.
   while (prefix.pages.length < position) {
     const at = prefix.pages.length + 1;
-    const next: Promise<PagePrefix> = prefix.tail.then(async (previous) => {
-      if (!previous.ok) return previous;
-      const seen = new Set(previous.value.seen);
+    const step: Promise<{ state: PrefixState; page: Result<StoredPage> }> = prefix.tail.then(async (previous) => {
+      const seen = new Set(previous.seen);
       const result = await readOnePage(view, at, seen);
-      return result.ok ? ok({ seen, page: result.value }) : result;
+      if (!result.ok) return { state: { seen: previous.seen, unread: [...previous.unread, at] }, page: result };
+      return { state: { seen, unread: previous.unread }, page: ok({ ...result.value, unprovenAgainst: previous.unread }) };
     });
-    prefix.pages.push(next.then((result) => result.ok ? ok(result.value.page as StoredPage) : result));
-    prefix.tail = next;
+    prefix.pages.push(step.then((done) => done.page));
+    prefix.tail = step.then((done) => done.state);
   }
   return prefix.pages[position - 1] as Promise<Result<StoredPage>>;
 }
 
-async function readOnePage(view: ViewPages, position: number, seen: Set<string>): Promise<Result<StoredPage>> {
+async function readOnePage(view: ViewPages, position: number, seen: Set<string>): Promise<Result<Omit<StoredPage, "unprovenAgainst">>> {
   const key: PageKey = { runId: view.runId, captureId: view.graph.captureId, objectId: view.view.objectId, viewId: view.view.viewId, position };
   const where = `page ${position} of view "${key.viewId}" of object "${key.objectId}" in run "${key.runId}"`;
   const ref = view.refs.find((candidate) => candidate.position === position);
