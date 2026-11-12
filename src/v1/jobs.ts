@@ -609,6 +609,32 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     void leased;
   }
 
+  /** The cancel outcome a terminal state stands for: `cancelled` only when the job's real outcome is cancelled; any other terminal state is the job's own. */
+  const cancelOutcome = (state: JobStateName): CancelResult["outcome"] => (state === "cancelled" ? "cancelled" : "cancel-too-late");
+
+  /** CLAIM(T2-lease): finishes a stopped job for cancel, and records cancel's own note, INSIDE the lease. When another operation holds the lease (a waiting
+   * status importing the job) nothing is written here: the persisted state is polled, as a waiting status does (S41), until it is terminal or `deadline`
+   * passes, and the lease is tried again every STATUS_TAKEOVER_MS in case the holder left. Returns the state last read; the caller decides what a
+   * state that is not terminal means. */
+  async function finishWithin(id: string, intent: Intent, adapter: AdapterRecord, stopped: QexJob, deadline: number, actions?: Array<"cancel" | "kill">): Promise<State | undefined> {
+    for (;;) {
+      const taken = await withLease(id, async () => {
+        await finish(id, intent, adapter, stopped);
+        const after = await readState(id);
+        if (actions !== undefined && after !== undefined && TERMINAL_JOB_STATES.includes(after.state)) await writeState(id, { state: after.state, cancel: { outcome: cancelOutcome(after.state), qexActions: actions } });
+        return after;
+      });
+      if (taken.held) return taken.value;
+      const retryAt = Math.min(deadline, Date.now() + STATUS_TAKEOVER_MS);
+      while (Date.now() < retryAt) {
+        await sleep(Math.max(1, Math.min(STATUS_POLL_MS, retryAt - Date.now())));
+        const state = await readState(id);
+        if (state !== undefined && TERMINAL_JOB_STATES.includes(state.state)) return state;
+      }
+      if (Date.now() >= deadline) return readState(id);
+    }
+  }
+
   /** One step of the lifecycle: recover, observe qex, import when it stopped. Idempotent; safe to call from any instance. */
   async function advanceOwned(id: string, known?: QexJob): Promise<Result<{ intent: Intent; state: State | undefined }>> {
     const intent = await readIntent(id);
@@ -784,9 +810,9 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
       const qexId = state.qexId;
       const queried = await deps.qex.status(qexId);
       if (queried.ok && QEX_TERMINAL_STATES.includes(queried.value.state)) {
-        await finish(id, intent, adapter, queried.value);
-        const after = await readState(id);
-        return ok({ outcome: after?.state === "cancelled" ? "cancelled" : "cancel-too-late", state: after?.state ?? "importing", qexActions: [], ...(after?.terminal === undefined ? {} : { collectionStatus: after.terminal.collectionStatus }) });
+        const after = await finishWithin(id, intent, adapter, queried.value, Date.now() + cancelWaitMs);
+        if (after === undefined || !TERMINAL_JOB_STATES.includes(after.state)) return ok({ outcome: "indeterminate", state: after?.state ?? "importing", qexActions: [] });
+        return ok({ outcome: cancelOutcome(after.state), state: after.state, qexActions: [], ...(after.terminal === undefined ? {} : { collectionStatus: after.terminal.collectionStatus }) });
       }
       await writeDurably(join(jobDir(id), "cancel.json"), JSON.stringify({ requested: true, at: now() }));
       const actions: Array<"cancel" | "kill"> = ["cancel"];
@@ -810,11 +836,9 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
         await sleep(50);
       }
       if (final === undefined) return ok({ outcome: "indeterminate", state: "running", qexActions: actions });
-      await finish(id, intent, adapter, final);
-      const after = await readState(id);
-      const result: CancelResult = { outcome: "cancelled", state: after?.state ?? "cancelled", qexActions: actions, ...(after?.terminal === undefined ? {} : { collectionStatus: after.terminal.collectionStatus }) };
-      await writeState(id, { state: result.state, cancel: { outcome: result.outcome, qexActions: actions } });
-      return ok(result);
+      const after = await finishWithin(id, intent, adapter, final, Date.now() + cancelWaitMs, actions);
+      if (after === undefined || !TERMINAL_JOB_STATES.includes(after.state)) return ok({ outcome: "indeterminate", state: after?.state ?? "running", qexActions: actions });
+      return ok({ outcome: cancelOutcome(after.state), state: after.state, qexActions: actions, ...(after.terminal === undefined ? {} : { collectionStatus: after.terminal.collectionStatus }) });
     },
   };
 }

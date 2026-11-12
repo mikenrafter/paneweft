@@ -12,6 +12,7 @@ import { must, mustFail } from "../../test/helpers/must.ts";
 import { Capture, defineType } from "../../packages/paneweft-ts/src/index.ts";
 import { specLimits } from "../../packages/paneweft-ts/test/support.ts";
 import { err } from "../core/errors.ts";
+import type { QexClient } from "./qex.ts";
 import { buildQexSubmitArgv, createJobService, type CrashPoint, type JobService } from "./jobs.ts";
 import { openV1Reader } from "./read.ts";
 
@@ -797,6 +798,63 @@ describe("[T1] a capture that cannot be imported is refused at admission", () =>
     expect(diagnostics.find((d: any) => d.id.startsWith("diag-import")).message).toContain("disk is full");
     expect(must(await service.status("t1b"), "status again")).toMatchObject({ state: "failed" });
     expect(must(await service.cancel("t1b"), "cancel")).toMatchObject({ outcome: "already-terminal", state: "failed" });
+  });
+});
+
+// ---- T2, T3: cancel writes only inside the lease, and says cancelled only when qex stopped the job because of the cancel -----------------------
+
+/** A qex whose `wait` blocks until released: a status that waits through it holds the job's lease for as long as the test wants. */
+function gatedWait(qex: QexClient): { client: QexClient; release: () => void; reached: () => boolean } {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let reached = false;
+  return { client: { ...qex, wait: async (id, ms) => { reached = true; await gate; return qex.wait(id, ms); } }, release, reached: () => reached };
+}
+const historyOf = (dir: string, id: string): string[] => JSON.parse(readFileSync(join(dir, "jobs", id, "state.json"), "utf8")).history.map((entry: any) => entry.state);
+
+describe("[T2] cancel never writes job state outside the lease", () => {
+  // WHY CLAIM(T2-lease): a waiting status holds the lease; cancel's finish then did nothing, cancel read `queued`, answered cancelled and wrote that stale
+  // state to state.json outside the lease (it could overwrite a terminal state). Rejects a finish-and-record outside withLease.
+  it("answers indeterminate and leaves state.json alone when the lease holder does not finish in time", async () => {
+    const { session, dir, qex, adapter } = await world();
+    const holderQex = gatedWait(qex.client);
+    const catalogueFor = async () => catalogue;
+    const holder = createJobService({ session, sessionDir: dir, qex: holderQex.client, adapters: [adapter], catalogueFor, cancelWaitMs: 3000 });
+    const canceller = createJobService({ session, sessionDir: dir, qex: qex.client, adapters: [adapter], catalogueFor, cancelWaitMs: 1500 });
+    qex.control({ hold: true });
+    must(await holder.collect(request("t2")), "collect");
+    const following = holder.status("t2", { waitSeconds: 25 });
+    await vi.waitFor(() => expect(holderQex.reached(), "the status holds the lease inside qex.wait").toBe(true), { timeout: 15_000, interval: 25 });
+    const before = readFileSync(join(dir, "jobs", "t2", "state.json"), "utf8");
+    const result = must(await canceller.cancel("t2"), "cancel");
+    expect(result.outcome, JSON.stringify(result)).toBe("indeterminate");
+    expect(readFileSync(join(dir, "jobs", "t2", "state.json"), "utf8"), "cancel wrote state it did not own").toBe(before);
+    holderQex.release();
+    const final = must(await following, "the holder finishes the job");
+    expect(final).toMatchObject({ state: "cancelled" });
+    const states = historyOf(dir, "t2");
+    expect(states.indexOf("cancelled"), `terminal state is last: ${states.join(",")}`).toBe(states.length - 1);
+  });
+
+  // WHY CLAIM(T2-lease): the other legal answer: cancel waits for the holder's terminal state (as the status of S41 does) and reports it. Rejects an
+  // immediate reply with the pre-terminal state.
+  it("waits for the lease holder's terminal state and reports it", async () => {
+    const { session, dir, qex, adapter } = await world();
+    const holderQex = gatedWait(qex.client);
+    const catalogueFor = async () => catalogue;
+    const holder = createJobService({ session, sessionDir: dir, qex: holderQex.client, adapters: [adapter], catalogueFor, cancelWaitMs: 3000 });
+    const canceller = createJobService({ session, sessionDir: dir, qex: qex.client, adapters: [adapter], catalogueFor, cancelWaitMs: 15_000 });
+    qex.control({ hold: true });
+    must(await holder.collect(request("t2b")), "collect");
+    const following = holder.status("t2b", { waitSeconds: 25 });
+    await vi.waitFor(() => expect(holderQex.reached()).toBe(true), { timeout: 15_000, interval: 25 });
+    const cancelling = canceller.cancel("t2b");
+    expect(await within(cancelling, 700), "cancel waits while the holder has not finished").toBe("pending");
+    holderQex.release();
+    expect(must(await cancelling, "cancel")).toMatchObject({ outcome: "cancelled", state: "cancelled" });
+    expect(must(await following, "holder")).toMatchObject({ state: "cancelled" });
+    const states = historyOf(dir, "t2b");
+    expect(states.indexOf("cancelled"), `terminal state is last: ${states.join(",")}`).toBe(states.length - 1);
   });
 });
 
