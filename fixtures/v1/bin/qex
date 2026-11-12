@@ -29,7 +29,7 @@ const allJobs = () => readdirSync(join(DIR, "jobs")).filter((n) => n.endsWith(".
 const TERMINAL = ["completed", "failed", "killed", "timeout", "cancelled", "expired", "oom", "skipped"];
 const now = () => Math.floor(Date.now() / 1000);
 const signalNumber = (signal) => (signal === null || signal === undefined ? null : typeof signal === "number" ? signal : constants.signals[signal] ?? null);
-function publicJob({ env, timeout_ms, ...job }) { return job; }
+function publicJob({ env, base_env, timeout_ms, ...job }) { return job; }
 const die = (code, message) => { if (message) console.error(message); process.exit(code); };
 
 function takeOption(list, flag, hasValue = true) {
@@ -68,6 +68,9 @@ function submit(args) {
   const name = takeOption(options, "--name") ?? "job";
   const cwd = takeOption(options, "--cwd") ?? process.cwd();
   const env = Object.fromEntries(takeAll(options, "--env").map((pair) => [pair.slice(0, pair.indexOf("=")), pair.slice(pair.indexOf("=") + 1)]));
+  // like qex: the job gets a copy of the submitter's whole environment (`all`, the default), or only HOME, LANG, LOGNAME, PATH, SHELL and USER of it (`minimal`; the fake also keeps its own FAKE_* switches, which are the world of the test, not a shell), then the --env pairs
+  const capture = takeOption(options, "--env-capture") ?? "all";
+  const baseEnv = capture === "all" ? null : capture === "none" ? {} : Object.fromEntries(Object.keys(process.env).filter((key) => ["HOME", "LANG", "LOGNAME", "PATH", "SHELL", "USER"].includes(key) || key.startsWith("FAKE_")).map((key) => [key, process.env[key]]));
   const timeoutText = takeOption(options, "--timeout");
   for (const flag of ["--cpu", "--mem", "--tag", "--priority"]) takeAll(options, flag);
   const timeoutMs = c.timeoutAfterMs ?? (timeoutText === undefined ? null : Number.parseFloat(timeoutText) * ({ s: 1000, m: 60_000, h: 3_600_000 }[timeoutText.replace(/[\d.]/g, "")] ?? 1000));
@@ -76,7 +79,7 @@ function submit(args) {
     if (existing) { console.log(existing.id); process.exit(0); }
   }
   const sequence = allJobs().length + 1;
-  const job = { id: `fq-${sequence}`, sequence, name, state: "queued", command: commandLine, cwd, env, dedupe_key: dedupeKey ?? null, pid: null, last_pid: null, exit_code: null, signal: null, submitted_at: now(), started_at: null, finished_at: null, tags: [], error: null, attempts: 1, timeout_ms: timeoutMs };
+  const job = { id: `fq-${sequence}`, sequence, name, state: "queued", command: commandLine, cwd, env, dedupe_key: dedupeKey ?? null, base_env: baseEnv, pid: null, last_pid: null, exit_code: null, signal: null, submitted_at: now(), started_at: null, finished_at: null, tags: [], error: null, attempts: 1, timeout_ms: timeoutMs };
   writeJob(job);
   if (!c.hold) start(job.id, c.startDelayMs ?? 0);
   if (c.crashAfterAck) process.exit(137);
@@ -96,7 +99,7 @@ function supervise(id) {
     // S5: a job that was cancelled or killed while it waited out its start delay never starts; only a queued or starting job may begin.
     if (!job || !["queued", "starting"].includes(job.state)) return process.exit(0);
     const logFd = openSync(join(DIR, `${id}.log`), "a");
-    const child = spawn(job.command[0], job.command.slice(1), { cwd: job.cwd, env: { ...process.env, ...job.env }, detached: true, stdio: ["ignore", logFd, logFd] });
+    const child = spawn(job.command[0], job.command.slice(1), { cwd: job.cwd, env: { ...(job.base_env ?? process.env), ...job.env }, detached: true, stdio: ["ignore", logFd, logFd] });
     // real qex 0.33.0 (a command that does not exist): state `failed`, exit_code null, no signal, and `error` says what could not start
     child.on("error", (error) => { const j = readJob(id); writeJob({ ...j, state: "failed", exit_code: null, pid: null, finished_at: now(), error: `qex could not start \`${job.command[0]}\`: ${error.code === "ENOENT" ? "No such file or directory (os error 2)" : error.message}. Test the program name and the PATH value.` }); process.exit(0); });
     writeJob({ ...job, state: "running", pid: child.pid, last_pid: child.pid, started_at: now() });

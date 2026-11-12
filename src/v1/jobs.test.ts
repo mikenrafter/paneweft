@@ -25,7 +25,7 @@ async function world(options: { crashAt?: (p: CrashPoint) => void | Promise<void
   const { session, dir } = await open();
   const qex = fake();
   const adapter = fakeCargoAdapter();
-  const service = (extra: { crashAt?: (p: CrashPoint) => void | Promise<void> } = {}): JobService => createJobService({ session, sessionDir: dir, qex: qex.client, adapters: [adapter], catalogueFor: async () => catalogue, cancelWaitMs: options.cancelWaitMs ?? 3000, ...(extra.crashAt ? { crashAt: extra.crashAt } : options.crashAt ? { crashAt: options.crashAt } : {}) });
+  const service = (extra: { crashAt?: (p: CrashPoint) => void | Promise<void>; env?: NodeJS.ProcessEnv } = {}): JobService => createJobService({ session, sessionDir: dir, qex: qex.client, adapters: [adapter], ...(extra.env ? { env: extra.env } : {}), catalogueFor: async () => catalogue, cancelWaitMs: options.cancelWaitMs ?? 3000, ...(extra.crashAt ? { crashAt: extra.crashAt } : options.crashAt ? { crashAt: options.crashAt } : {}) });
   return { session, dir, qex, adapter, service };
 }
 const request = (requestId: string, extra: object = {}) => ({ requestId, repo: "vg", adapter: "cargo", examples: ["watch.pending"], ...extra });
@@ -37,10 +37,10 @@ describe("[N1] two-phase submission", () => {
   // proves: CLAIM(N1-two-phase) CLAIM(IV16)
   it("submits with the dedupe key, window and id file", async () => {
     const { qex, adapter, dir, service } = await world();
-    must(await service().collect(request("job-a")), "collect");
+    must(await service({ env: {} }).collect(request("job-a")), "collect");
     const submit = qex.calls().find((c) => c[0] === "submit")!;
     const jobDir = join(dir, "jobs", "job-a");
-    expect(submit.slice(0, submit.indexOf("--"))).toEqual(["submit", "--dedupe-key", `paneweft:${JSON.parse(readFileSync(join(dir, "collection-session.json"), "utf8")).id}:job-a`, "--dedupe-window", "24h", "--id-file", join(jobDir, "qex.id"), "--cwd", adapter.workspaceRoot, "--name", "paneweft-job-a", "--cpu", "1", "--mem", "1GB", "--tag", "paneweft", "--timeout", "60s", "--env", "CARGO_TERM_COLOR=never", "--env", "PANEWEFT_ATTEMPT=1", "--env", "PANEWEFT_COLLECT=1", "--env", "PANEWEFT_RUN_ID=run-job-a", "--env", `PANEWEFT_STAGING_DIR=${join(jobDir, "staging", "run-job-a")}`]);
+    expect(submit.slice(0, submit.indexOf("--"))).toEqual(["submit", "--dedupe-key", `paneweft:${JSON.parse(readFileSync(join(dir, "collection-session.json"), "utf8")).id}:job-a`, "--dedupe-window", "24h", "--id-file", join(jobDir, "qex.id"), "--cwd", adapter.workspaceRoot, "--name", "paneweft-job-a", "--cpu", "1", "--mem", "1GB", "--tag", "paneweft", "--timeout", "60s", "--env-capture", "minimal", "--env", "CARGO_TERM_COLOR=never", "--env", "PANEWEFT_ATTEMPT=1", "--env", "PANEWEFT_COLLECT=1", "--env", "PANEWEFT_RUN_ID=run-job-a", "--env", `PANEWEFT_STAGING_DIR=${join(jobDir, "staging", "run-job-a")}`]);
     expect(submit[submit.indexOf("--") + 1]).toBe(adapter.executable);
     expect(submit.slice(submit.indexOf("--") + 2).slice(0, 2)).toEqual(["test", "--manifest-path"]);
   });

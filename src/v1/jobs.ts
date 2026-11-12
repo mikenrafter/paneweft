@@ -77,6 +77,8 @@ export interface JobServiceDeps {
   catalogueFor?: (repo: string, adapter: string) => Promise<Catalogue | null>;
   crashAt?: (point: CrashPoint) => void | Promise<void>;
   clock?: () => Date;
+  /** The environment the passthrough names are read from; the process's own by default. */
+  env?: NodeJS.ProcessEnv;
   /** Bounded wait for qex to reach a terminal state after cancel/kill (milliseconds). */
   cancelWaitMs?: number;
 }
@@ -97,12 +99,29 @@ export function jobDedupeKey(sessionId: string, requestId: string): string {
   return `paneweft:${sessionId}:${requestId}`;
 }
 
-/** The exact `qex submit` argument vector (no shell). Pure. */
-export function buildQexSubmitArgv(adapter: AdapterRecord, requestId: string, process: ProcessSpec, jobDirectory: string, timeoutMs: number, dedupeKey: string, idFileName = "qex.id"): string[] {
+/** Names the job takes from the process that submits it when that process has them, for every adapter (F21): the toolchain homes a rustup proxy needs and the locale/terminal/temp
+ * settings a runner reads. An adapter's `env.passthrough` adds to this list and its `env.set` wins over it. */
+export const PASSTHROUGH_ENV = ["RUSTUP_HOME", "CARGO_HOME", "RUSTUP_TOOLCHAIN", "CARGO_TARGET_DIR", "TMPDIR", "LC_ALL", "TERM", "SSL_CERT_FILE", "SSL_CERT_DIR"] as const;
+
+/** The environment variables handed to a job on top of qex's minimal capture: the passthrough names the submitter has, then the process's own (the adapter's fixed `set`, then PANEWEFT_*). */
+export function jobEnvironment(adapter: AdapterRecord, spec: ProcessSpec, hostEnv: NodeJS.ProcessEnv): Record<string, string> {
+  const inherited: Record<string, string> = {};
+  for (const name of [...PASSTHROUGH_ENV, ...(adapter.env?.passthrough ?? [])]) {
+    const value = hostEnv[name];
+    if (typeof value === "string" && !name.startsWith("PANEWEFT_")) inherited[name] = value;
+  }
+  return { ...inherited, ...spec.env };
+}
+
+/** The exact `qex submit` argument vector (no shell). Pure. The job does NOT copy the submitter's environment (`--env-capture minimal`): a CLI call from a login shell and an
+ * MCP call from a client with a bare environment run the same job (F21). */
+export function buildQexSubmitArgv(adapter: AdapterRecord, requestId: string, process: ProcessSpec, jobDirectory: string, timeoutMs: number, dedupeKey: string, idFileName = "qex.id", hostEnv: NodeJS.ProcessEnv = globalThis.process.env): string[] {
   const argv = ["submit", "--dedupe-key", dedupeKey, "--dedupe-window", "24h", "--id-file", join(jobDirectory, idFileName), "--cwd", process.cwd, "--name", `paneweft-${requestId}`, "--cpu", adapter.queue.cpu, "--mem", adapter.queue.mem];
   for (const tag of adapter.queue.tags ?? []) argv.push("--tag", tag);
   argv.push("--timeout", `${Math.max(1, Math.ceil(timeoutMs / 1000))}s`);
-  for (const key of Object.keys(process.env).sort()) argv.push("--env", `${key}=${process.env[key]}`);
+  argv.push("--env-capture", "minimal");
+  const environment = jobEnvironment(adapter, process, hostEnv);
+  for (const key of Object.keys(environment).sort()) argv.push("--env", `${key}=${environment[key]}`);
   argv.push("--", process.executable, ...process.argv);
   return argv;
 }
@@ -207,10 +226,17 @@ function thrownLine(log: string): string {
   return lines.find((line) => /^(?:[A-Za-z]*Error|Error)(?:\[[A-Z0-9_]+\])?: \S/.test(line)) ?? [...lines].reverse().find((line) => line.trim().length > 0) ?? "no output";
 }
 
-/** F7: a runner that never got to run anything is a `runner` failure that says so, whatever the adapter. Today that is qex's own "could not start" (the executable is gone). */
-function runnerNotStarted(qexJob: QexJob, adapter: AdapterRecord): Diagnostic | undefined {
-  if (qexJob.state !== "failed" || qexJob.exit_code !== null || qexJob.signal !== null || typeof qexJob.error !== "string" || qexJob.error.length === 0) return undefined;
-  return { id: "diag-runner-1", category: "runner", message: `the runner could not start: ${qexJob.error}`.slice(0, 2000), nextAction: `Check that ${adapter.executable} exists and runs (the adapter names it); if the toolchain moved, register the adapter again with: paneweft adapter add (owner action).` } as Diagnostic;
+/** F7, F21: a runner that never got to run anything is a `runner` failure that says so, whatever the adapter: qex's own "could not start" (the executable is gone), and a rustup proxy
+ * that was started without the variables that tell it where its toolchains are (RUSTUP_HOME; rustup then has "no default configured"). */
+function runnerNotStarted(qexJob: QexJob, log: string, adapter: AdapterRecord): Diagnostic | undefined {
+  if (qexJob.state === "failed" && qexJob.exit_code === null && qexJob.signal === null && typeof qexJob.error === "string" && qexJob.error.length > 0) {
+    return { id: "diag-runner-1", category: "runner", message: `the runner could not start: ${qexJob.error}`.slice(0, 2000), nextAction: `Check that ${adapter.executable} exists and runs (the adapter names it); if the toolchain moved, register the adapter again with: paneweft adapter add (owner action).` } as Diagnostic;
+  }
+  const rustup = /error: rustup could not choose a version of (\S+) to run[^\n]*/.exec(log);
+  if (rustup !== null) {
+    return { id: "diag-runner-1", category: "runner", message: `the runner could not start: ${rustup[0]}`.slice(0, 2000), stderrSlice: log.slice(-3500), nextAction: `${adapter.executable} is a rustup proxy and the job did not have the variables it needs to find a toolchain. Fix the job environment in the adapter record, so a CLI and an MCP call run the same job: register the adapter again with paneweft adapter add and "env": { "set": { "RUSTUP_HOME": "<your rustup home>", "CARGO_HOME": "<your cargo home>" } } (owner action), or register the toolchain's own cargo binary.` } as Diagnostic;
+  }
+  return undefined;
 }
 
 /** F7: the catalogue export of a vitest adapter died. collect-vitest.mjs exits 3 for a manifest it could read but not use (its message is printed), and anything else is an
@@ -389,7 +415,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
         const adapter = adapterFor(intent.params);
         if (resolved === undefined || adapter === undefined) return err("INTERNAL", `job "${id}" has no resolved process to submit`);
         await takeBeforeSample(id, adapter);
-        const submitted = await deps.qex.submit(buildQexSubmitArgv(adapter, intent.exportFirst === true && stage === "export" ? `${id}-catalogue` : id, resolved.process, jobDir(id), resolved.timeoutMs, dedupeKey, idFileNameOf(intent, stage)));
+        const submitted = await deps.qex.submit(buildQexSubmitArgv(adapter, intent.exportFirst === true && stage === "export" ? `${id}-catalogue` : id, resolved.process, jobDir(id), resolved.timeoutMs, dedupeKey, idFileNameOf(intent, stage), deps.env ?? globalThis.process.env));
         if (!submitted.ok) return submitted;
         qexId = submitted.value.id;
         how = "qex submit";
@@ -472,7 +498,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
       scope.push(adapter.kind === "cargo" ? `${name} (${target === "lib" ? "lib" : `test ${target}`})` : `${name} (${file})`);
     }
     if (parts.length === 0 || qexJob.exit_code !== 0) {
-      const notStarted = runnerNotStarted(qexJob, adapter);
+      const notStarted = runnerNotStarted(qexJob, log, adapter);
       if (notStarted !== undefined) return { status: "failed", snapshotIds: [], diagnostics: [notStarted] };
       if (adapter.kind === "vitest") return { status: "failed", snapshotIds: [], diagnostics: [vitestExportDiagnostic(qexJob, log)] };
       const compile = compileDiagnostics(log, staging.typecheck, adapter.kind);
@@ -577,7 +603,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
         const sample = sampleConsistency(before, after.value);
         run.inputFingerprint = { digest: before.digest, memberCount: before.members.length, sampledConsistency: sample.status, members: before.members };
       }
-      const notStarted = runnerNotStarted(qexJob, adapter);
+      const notStarted = runnerNotStarted(qexJob, log, adapter);
       if (notStarted !== undefined) diagnostics.push(notStarted);
       if (compile === "failed") diagnostics.push(...compileDiagnostics(log, typecheck, adapter.kind));
       for (const invocation of run.invocations) {

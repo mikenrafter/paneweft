@@ -36,6 +36,15 @@
         "viewBudgetMs": { "type": "integer", "minimum": 1 }
       }
     },
+    "env": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The environment of every job of this adapter (F21). A job gets qex's minimal environment (HOME, LANG, LOGNAME, PATH, SHELL, USER of the submitting process), then the names in `passthrough` that the submitting process has (a list the host adds to: RUSTUP_HOME, CARGO_HOME, RUSTUP_TOOLCHAIN, CARGO_TARGET_DIR, TMPDIR, LC_ALL, TERM, SSL_CERT_FILE, SSL_CERT_DIR), then `set`, which wins. Values in `set` do not depend on who submits, so a CLI call and an MCP call run the same job; a passthrough name does.",
+      "properties": {
+        "set": { "type": "object", "propertyNames": { "pattern": "^(?!PANEWEFT_)[A-Za-z_][A-Za-z0-9_]{0,127}$" }, "additionalProperties": { "type": "string", "maxLength": 4096, "pattern": "^[^\\u0000]*$" }, "maxProperties": 64 },
+        "passthrough": { "type": "array", "maxItems": 64, "uniqueItems": true, "items": { "type": "string", "pattern": "^(?!PANEWEFT_)[A-Za-z_][A-Za-z0-9_]{0,127}$" } }
+      }
+    },
     "queue": { "type": "object", "additionalProperties": false, "required": ["wrapper", "cpu", "mem"], "properties": { "wrapper": { "const": "qex" }, "cpu": { "type": "string" }, "mem": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } } } }
   }
 }

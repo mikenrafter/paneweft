@@ -188,7 +188,7 @@ export function buildProcess(adapter: AdapterRecord, selection: Selection, mode:
       for (const example of selection.examples) argv.push("--exact", example.selector.name);
       argv.push("--test-threads=1");
     }
-    return ok({ executable: adapter.executable, argv, cwd: root, env: { CARGO_TERM_COLOR: "never", ...env } });
+    return ok({ executable: adapter.executable, argv, cwd: root, env: { CARGO_TERM_COLOR: "never", ...adapter.env?.set, ...env } });
   }
   const argv = [VITEST_COLLECT_SCRIPT, "--staging", runtime.stagingDir, "--root", packageDir, "--tsconfig", "tsconfig.json"];
   if (mode === "catalogue") argv.push("--catalogue", "--manifest", "paneweft.views.ts");
@@ -196,7 +196,7 @@ export function buildProcess(adapter: AdapterRecord, selection: Selection, mode:
     if (selection.examples.length === 0) return err("INVALID_ARGUMENT", "a vitest collection selects at least one example");
     argv.push("--vitest", join(packageDir, "node_modules/vitest/vitest.mjs"), "--config", "vitest.config.ts", "--name-pattern", selection.examples.map((example) => `^${escapeRegex(example.selector.name)}$`).join("|"));
   }
-  return ok({ executable: adapter.executable, argv, cwd: packageDir, env });
+  return ok({ executable: adapter.executable, argv, cwd: packageDir, env: { ...adapter.env?.set, ...env } });
 }
 
 /** libtest accepts `--exact` ONCE ("Option 'exact' given more than once") and then any number of test names, whereas the cargo-test/1

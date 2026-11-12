@@ -46,6 +46,18 @@ export interface Adapter {
     viewRows?: number;
     viewBudgetMs?: number;
   };
+  /**
+   * The environment of every job of this adapter (F21). A job gets qex's minimal environment (HOME, LANG, LOGNAME, PATH, SHELL, USER of the submitting process), then the names in `passthrough` that the submitting process has (a list the host adds to: RUSTUP_HOME, CARGO_HOME, RUSTUP_TOOLCHAIN, CARGO_TARGET_DIR, TMPDIR, LC_ALL, TERM, SSL_CERT_FILE, SSL_CERT_DIR), then `set`, which wins. Values in `set` do not depend on who submits, so a CLI call and an MCP call run the same job; a passthrough name does.
+   */
+  env?: {
+    set?: {
+      [k: string]: string;
+    };
+    /**
+     * @maxItems 64
+     */
+    passthrough?: string[];
+  };
   queue: {
     wrapper: "qex";
     cpu: string;
