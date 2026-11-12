@@ -205,6 +205,17 @@ extras - explicit exclusions; paths relative to the root (`../../Cargo.lock` for
 lines `<path>\0<sha256>\n`. Before/after sampling is `consistent-sampled` | `mixed-input`; an edit restored between the samples is
 undetectable and the note says so. A recompile never refreshes an old observation: freshness compares the run's stored members.
 
+**The inventory file (F27).** `paneweft.inventory.json` sits at the adapter root (`workspaceRoot/entry`), is checked in, and is
+`{"schemaVersion":"paneweft.inventory/1","views":[{"id","module"}],"examples":[{"id","module","typeId"}]}` with entries sorted by id.
+`module` is the module the compiled catalogue names for the id: the crate-relative module path for Rust (`watch::paneweft_views`), the
+repository-relative file path for TypeScript. It guards against LOSS: a declared id the catalogue lacks, a module that exports nothing
+any more, a changed return type, a duplicate. An id the catalogue has and the file does not list ("unlisted") is an addition in
+progress: a `collect` runs anyway and stores the catalogue with `inventoryDrift.unlisted`, and every discovery reply carries a notice
+naming the ids and the command; `catalogue refresh` (the check) fails on it. `paneweft inventory update --repo R --adapter A` (owner
+or developer command, CLI only: it writes into the repository) writes the file from the stored catalogue: it adds the missing entries,
+takes the catalogue's module and type for ids it already lists, keeps declared ids the catalogue lacks and says so, and drops them
+only with `--prune`.
+
 ## 11. Tools and replies
 
 Ten tools (`src/schemas/v1/tools/`); nine required, `scaffold_example` optional. Replies are `paneweft.reply/2` (`reply.schema.json`);

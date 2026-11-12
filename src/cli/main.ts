@@ -24,6 +24,9 @@ import { loadAdapters, registerAdapter } from "../v1/adapters.ts";
 import type { JobService } from "../v1/jobs.ts";
 import { createSessionJobService } from "../v1/service.ts";
 import { digestRenderer, openTrustStore } from "../v1/renderer.ts";
+import { INVENTORY_FILE, loadInventory, updateInventory } from "../v1/inventory.ts";
+import { writeDurably } from "../v1/durable.ts";
+import type { Catalogue } from "../generated/v1/Catalogue.ts";
 
 export interface CliIo {
   stdin: string | null;
@@ -46,6 +49,8 @@ interface Command {
   flags: Record<string, Sugar>;
   /** repeatable value flags (collected by name) */
   repeatable?: string[];
+  /** flags that take no value (their presence is the setting) */
+  switches?: string[];
   positional?: { name: string };
   /** v1: the tool argument the positional fills (collection status JOB, failure DIAGNOSTIC). */
   positionalArgument?: string;
@@ -80,7 +85,7 @@ const COMMANDS: Command[] = [
   { words: ["serve"], summary: "serve the local viewer for a session", flags: { "--host": () => undefined, "--port": () => undefined, "--assets": () => undefined }, repeatable: ["--repo"], example: "paneweft serve --port 0 --repo r=." },
   { words: ["mcp"], summary: "serve the tools over stdio MCP", flags: {}, example: "paneweft mcp" },
 ];
-const TOP_LEVEL = ["components", "describe", "validate", "render", "register", "open", "navigate", "inspect", "search", "notebook", "example", "repo", "serve", "mcp", "types", "views", "examples", "scaffold", "collect", "collection", "result", "failure", "adapter", "renderers", "catalogue"];
+const TOP_LEVEL = ["components", "describe", "validate", "render", "register", "open", "navigate", "inspect", "search", "notebook", "example", "repo", "serve", "mcp", "types", "views", "examples", "scaffold", "collect", "collection", "result", "failure", "adapter", "renderers", "catalogue", "inventory"];
 
 // ---- v1: the agent tools (kebab-case words over the same handlers as MCP) and the owner-only commands ---------------------------------
 
@@ -124,10 +129,11 @@ const OWNER_COMMANDS: Command[] = [
   { words: ["adapter", "list"], summary: "list the registered adapters", flags: { "--format": () => undefined }, example: "paneweft adapter list --format json" },
   { words: ["renderers", "trust"], summary: "trust a repo-owned renderer by its content digest (owner decision; CLI only)", flags: { "--repo": () => undefined, "--id": () => undefined, "--digest": () => undefined }, example: "paneweft renderers trust --repo cm --id mapping-card --digest e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" },
   { words: ["renderers", "list"], summary: "list the renderers under a registered root with their digests and trust", flags: { "--repo": () => undefined, "--format": () => undefined }, example: "paneweft renderers list --repo cm" },
+  { words: ["inventory", "update"], summary: "write paneweft.inventory.json from the stored catalogue: lists every id the catalogue has, keeps declared ids it lacks unless --prune (owner/developer command; CLI only)", flags: { "--repo": () => undefined, "--adapter": () => undefined }, switches: ["--prune"], example: "paneweft inventory update --repo vg --adapter cargo" },
   { words: ["catalogue", "refresh"], summary: "rebuild the stored catalogue ahead of time by running the reserved export tests through qex (owner/developer command; a collect exports it itself)", flags: { "--repo": () => undefined, "--adapter": () => undefined, "--request-id": () => undefined }, example: "paneweft catalogue refresh --repo vg --adapter cargo" },
 ];
 COMMANDS.push(...V1_COMMANDS.map(v1Command), ...OWNER_COMMANDS);
-const GROUP_SUMMARY: Record<string, string> = { notebook: "create, get and update notebook pages", repo: "register and list repository roots (CLI only)", example: "record or run examples", scaffold: "print a patch for a new view or example (writes nothing)", collection: "status and cancel of collection jobs", adapter: "register and list collection adapters (CLI only)", renderers: "trust and list repo-owned renderers (CLI only)", catalogue: "refresh the compiled catalogue" };
+const GROUP_SUMMARY: Record<string, string> = { notebook: "create, get and update notebook pages", repo: "register and list repository roots (CLI only)", example: "record or run examples", scaffold: "print a patch for a new view or example (writes nothing)", collection: "status and cancel of collection jobs", adapter: "register and list collection adapters (CLI only)", renderers: "trust and list repo-owned renderers (CLI only)", catalogue: "refresh the compiled catalogue", inventory: "write the checked-in view inventory from the stored catalogue (CLI only)" };
 
 
 function helpText(): string {
@@ -157,7 +163,7 @@ function commandHelp(words: string[]): string {
     return [`usage: paneweft ${words[0]} <subcommand> [options]`, "", "subcommands:", ...subcommands.map((command) => `  ${command.words[1]}  ${command.summary}`), ""].join("\n");
   }
   const command = COMMANDS.find((candidate) => candidate.words.join(" ") === words.join(" ")) as Command;
-  const flags = [...(command.tool === undefined ? [] : COMMON_FLAGS), ...Object.keys(command.flags), ...(command.repeatable ?? [])];
+  const flags = [...(command.tool === undefined ? [] : COMMON_FLAGS), ...Object.keys(command.flags), ...(command.repeatable ?? []), ...(command.switches ?? [])];
   const lines = [`usage: paneweft ${command.words.join(" ")}${command.positional ? ` ${command.positional.name}` : ""} [options]`, "", command.summary];
   if (flags.length > 0) lines.push("", `options: ${flags.join(" ")}`);
   lines.push("", `example: ${command.example}`);
@@ -210,13 +216,14 @@ function parseArguments(argv: string[]): Parsed | { help: string } {
   const values = new Map<string, string>();
   const repeated = new Map<string, string[]>();
   const positional: string[] = [];
-  const allowed = new Set<string>([...(command.tool !== undefined ? COMMON_FLAGS : []), ...Object.keys(command.flags), ...(command.repeatable ?? [])]);
+  const allowed = new Set<string>([...(command.tool !== undefined ? COMMON_FLAGS : []), ...Object.keys(command.flags), ...(command.repeatable ?? []), ...(command.switches ?? [])]);
   for (; index < argv.length; index++) {
     const token = argv[index] as string;
     if (token === "--help" || token === "-h") return { help: commandHelp(command.words) };
     if (token === "--session") { session = valueOf("--session"); continue; }
     if (token.startsWith("-")) {
       if (!allowed.has(token)) throw new UsageError(`unknown option ${token} for ${command.words.join(" ")}`);
+      if ((command.switches ?? []).includes(token)) { values.set(token, "true"); continue; }
       const value = valueOf(token);
       if ((command.repeatable ?? []).includes(token)) repeated.set(token, [...(repeated.get(token) ?? []), value]);
       else values.set(token, value);
@@ -471,6 +478,27 @@ async function ownerCommand(parsed: Parsed, session: Session | null, dir: string
     io.stdout(format === "json" ? JSON.stringify({ schemaVersion: "paneweft.renderers/1", repo, renderers: rows }) : rows.map((row) => `${row.id} ${row.digest ?? "(incomplete)"} ${row.trusted ? "trusted" : "untrusted"}\n`).join(""));
     return 0;
   }
+  if (word === "inventory update") {
+    const repo = required(parsed, "--repo");
+    const adapterId = required(parsed, "--adapter");
+    const loaded = await loadAdapters(sessionDir);
+    if (!loaded.ok) return printError(loaded.error, io);
+    const adapter = loaded.value.find((candidate) => candidate.repo === repo && candidate.id === adapterId);
+    if (adapter === undefined) return errorBody("NOT_FOUND", `no adapter "${adapterId}" is registered for repository "${repo}": ${loaded.value.map((candidate) => `${candidate.repo}/${candidate.id}`).join(", ") || "none registered"}`, io);
+    const stored = await readFile(resolve(sessionDir, "catalogues", repo, `${adapterId}.json`), "utf8").then((text) => JSON.parse(text) as { catalogue: Catalogue }, () => undefined);
+    if (stored === undefined) return errorBody("NOT_FOUND", `no catalogue is stored for ${repo}/${adapterId}: collect an example first (the collection exports and stores the catalogue), then update the inventory`, io);
+    const root = resolve(adapter.workspaceRoot, adapter.entry);
+    const current = await loadInventory(root);
+    if (!current.ok) return errorBody("INVALID_ARGUMENT", current.message, io);
+    const update = updateInventory(stored.catalogue, current.value, parsed.values.has("--prune"));
+    await writeDurably(resolve(root, INVENTORY_FILE), `${JSON.stringify(update.inventory, null, 2)}\n`);
+    const parts = [`inventory ${resolve(root, INVENTORY_FILE)}: added ${update.added.views.length} views and ${update.added.examples.length} examples`];
+    if (update.changed.length > 0) parts.push(`updated the module or type of ${update.changed.join(", ")}`);
+    if (update.pruned.length > 0) parts.push(`dropped ${update.pruned.join(", ")}`);
+    else if (update.missing.length > 0) parts.push(`kept ${update.missing.join(", ")}, which the catalogue lacks (pass --prune to drop them once the removal is intended)`);
+    io.stdout(`${parts.join("; ")}\n`);
+    return 0;
+  }
   // catalogue refresh
   const context = await v1Context(session, dir, io);
   const jobs = context.jobs;
@@ -518,7 +546,7 @@ export async function runCli(argv: string[], io: CliIo): Promise<number> {
       if (word === "example run") return await runExampleCommand(parsed, session, io);
       if (word === "repo add" || word === "repo list") return await repoCommand(parsed, session, io);
       if (word === "serve") return await serveCommand(parsed, session, io, dir);
-      if (["adapter add", "adapter list", "renderers trust", "renderers list", "catalogue refresh"].includes(word)) return await ownerCommand(parsed, session, dir, io);
+      if (["adapter add", "adapter list", "renderers trust", "renderers list", "catalogue refresh", "inventory update"].includes(word)) return await ownerCommand(parsed, session, dir, io);
       if ((V1_TOOL_NAMES as readonly string[]).includes(command.tool as string)) {
         const context = await v1Context(session, dir, io);
         return print(io, await executeV1Operation(context, command.tool as string, args));

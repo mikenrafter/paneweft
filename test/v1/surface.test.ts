@@ -83,7 +83,7 @@ describe("[MCP] advertised tools", () => {
     } finally {
       await mcp.close();
     }
-    expect(V1_OWNER_ONLY_COMMANDS).toEqual([["adapter", "add"], ["adapter", "list"], ["renderers", "trust"], ["renderers", "list"], ["catalogue", "refresh"]]);
+    expect(V1_OWNER_ONLY_COMMANDS).toEqual([["adapter", "add"], ["adapter", "list"], ["renderers", "trust"], ["renderers", "list"], ["catalogue", "refresh"], ["inventory", "update"]]);
     for (const words of V1_OWNER_ONLY_COMMANDS) {
       const run = await runCliInProcess([...words, "--help"]);
       expect([run.exitCode, run.stdout].join(" "), words.join(" ")).toMatch(/^0 usage: paneweft /);

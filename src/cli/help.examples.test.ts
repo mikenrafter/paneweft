@@ -18,7 +18,7 @@ const COMMANDS: string[][] = [
   ["notebook", "create"], ["notebook", "get"], ["notebook", "update"], ["example", "record"], ["example", "run"], ["repo", "add"], ["repo", "list"], ["serve"], ["mcp"],
   // v1 (docs/v1-red-contract.md section 11): the agent tools and the owner-only commands, pinned by name like the v0 ones
   ["types"], ["views"], ["examples"], ["scaffold", "view"], ["scaffold", "example"], ["collect"], ["collection", "status"], ["collection", "cancel"], ["result"], ["failure"],
-  ["adapter", "add"], ["adapter", "list"], ["renderers", "trust"], ["renderers", "list"], ["catalogue", "refresh"],
+  ["adapter", "add"], ["adapter", "list"], ["renderers", "trust"], ["renderers", "list"], ["catalogue", "refresh"], ["inventory", "update"],
 ];
 /** These two run until interrupted, so their example is checked against the command's own option list instead of being run. */
 const LONG_RUNNING = new Set(["serve", "mcp"]);
@@ -112,7 +112,7 @@ describe("[#2] every command's --help carries one concrete, working example", ()
     const top = (await runCliInProcess(["--help"])).stdout.split("\n").filter((line) => /^ {2}\S/.test(line)).map((line) => line.trim().split(/\s+/)[0] as string);
     const known = new Set(COMMANDS.map((command) => command[0] as string));
     expect([...known].sort()).toEqual([...top].sort());
-    for (const group of ["notebook", "example", "repo", "scaffold", "collection", "adapter", "renderers", "catalogue"]) {
+    for (const group of ["notebook", "example", "repo", "scaffold", "collection", "adapter", "renderers", "catalogue", "inventory"]) {
       const listed = (await runCliInProcess([group, "--help"])).stdout.split("\n").filter((line) => /^ {2}\S/.test(line)).map((line) => line.trim().split(/\s+/)[0] as string);
       expect(COMMANDS.filter((command) => command[0] === group).map((command) => command[1]).sort()).toEqual([...listed].sort());
     }

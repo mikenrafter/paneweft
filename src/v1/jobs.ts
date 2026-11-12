@@ -20,6 +20,7 @@ import type { TestRun } from "../generated/v1/TestRun.ts";
 import { buildProcess, checkCollectRequest, foldExactFilters, parseCargoLists, reconcile, selectExamples, type AdapterRecord, type ProcessSpec, type Selection } from "./adapters.ts";
 import { readStaging } from "./staging.ts";
 import { admitLowering, validateObjectGraph } from "./capture.ts";
+import { loadInventory } from "./inventory.ts";
 import { checkInventory, mergeCatalogue, type CataloguePart, type InventoryProblem } from "./catalogue.ts";
 import { qualifyDiagnosticId } from "./diagnostic-id.ts";
 import { compareFingerprints, computeFingerprint, sampleConsistency, type Fingerprint } from "./fingerprint.ts";
@@ -198,20 +199,6 @@ async function storedCatalogue(sessionDir: string, repo: string, adapter: string
   } catch {
     return null;
   }
-}
-
-/** The repository's checked-in `paneweft.inventory.json` (S15): absent is fine, present must be a valid inventory. */
-async function loadInventory(root: string): Promise<{ ok: true; value: Inventory | undefined } | { ok: false; message: string }> {
-  const text = await readFile(join(root, "paneweft.inventory.json"), "utf8").catch(() => undefined);
-  if (text === undefined) return { ok: true, value: undefined };
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch (cause) {
-    return { ok: false, message: `paneweft.inventory.json is not JSON: ${(cause as Error).message}` };
-  }
-  const faults = validateAgainstV1("urn:paneweft:schema:v1:inventory:1", parsed);
-  return faults.length > 0 ? { ok: false, message: `paneweft.inventory.json is not a paneweft.inventory/1 document: ${faults[0]?.pointer} ${faults[0]?.constraint}` } : { ok: true, value: parsed as Inventory };
 }
 
 function inventoryMessage(problem: InventoryProblem): string {
@@ -495,7 +482,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     return (JSON.parse(text) as { name?: string }).name ?? "package";
   }
 
-  async function finalizeCatalogue(id: string, adapter: AdapterRecord, qexJob: QexJob, log: string, resolved: Resolved): Promise<{ status: NonNullable<JobView["collectionStatus"]>; snapshotIds: string[]; diagnostics: Diagnostic[]; catalogue?: Catalogue }> {
+  async function finalizeCatalogue(id: string, adapter: AdapterRecord, qexJob: QexJob, log: string, resolved: Resolved, strictInventory: boolean): Promise<{ status: NonNullable<JobView["collectionStatus"]>; snapshotIds: string[]; diagnostics: Diagnostic[]; catalogue?: Catalogue }> {
     const staging = await readStaging(resolved.stagingDir, resolved.limits?.effective.collectionBytes);
     const diagnostics: Diagnostic[] = [];
     const name = await packageName(adapter);
@@ -531,12 +518,18 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
       diagnostics.push({ id: "diag-inventory-1", category: "registration", message: inventory.message, nextAction: "Fix paneweft.inventory.json (a paneweft.inventory/1 document), then refresh the catalogue again." } as Diagnostic);
       return { status: "failed", snapshotIds: [], diagnostics };
     }
+    let unlisted: Array<{ id: string; module: string }> = [];
     if (inventory.value !== undefined) {
       const checked = checkInventory(merged.value, inventory.value);
-      if (!checked.ok) {
-        for (const [index, problem] of checked.problems.entries()) diagnostics.push({ id: `diag-inventory-${index + 1}`, category: "registration", message: inventoryMessage(problem).slice(0, 2000), invariant: "the compiled catalogue matches the checked-in inventory", nextAction: "If the removal or addition is intended, update paneweft.inventory.json in the same reviewed change; otherwise restore the import or the declaration, then refresh the catalogue." } as Diagnostic);
+      // F27: what the inventory guards is a LOSS. An id the catalogue has and the file does not list is an addition in progress (the skill updates the inventory after the
+      // collect), so a collect tolerates it and the record reports it; `catalogue refresh` is the check and stays strict.
+      const additions = checked.problems.filter((problem): problem is Extract<InventoryProblem, { kind: "unlisted" }> => problem.kind === "unlisted");
+      const blocking = strictInventory ? checked.problems : checked.problems.filter((problem) => problem.kind !== "unlisted");
+      if (blocking.length > 0) {
+        for (const [index, problem] of blocking.entries()) diagnostics.push({ id: `diag-inventory-${index + 1}`, category: "registration", message: inventoryMessage(problem).slice(0, 2000), invariant: "the compiled catalogue matches the checked-in inventory", nextAction: `If the addition is intended, run \`paneweft inventory update --repo ${adapter.repo} --adapter ${adapter.id}\` and review the change to paneweft.inventory.json; if a removal is intended, update the file in the same reviewed change (\`paneweft inventory update ... --prune\`); otherwise restore the import or the declaration. Then refresh the catalogue.` } as Diagnostic);
         return { status: "failed", snapshotIds: [], diagnostics };
       }
+      unlisted = additions.map((problem) => ({ id: problem.id, module: problem.module }));
     }
     // S14: the record holds the sources the job STARTED from, with the consistency of the sample before and the sample after; a source edited while
     // the export ran leaves a mixed sample, which is never fresh.
@@ -548,7 +541,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
       fingerprint = { ...before, sampledConsistency: sample.status, ...(sample.status === "mixed-input" ? { sampleNote: sample.note, changedDuringExport: sample.changed } : {}) };
     } else if (after.ok) fingerprint = { ...after.value, sampledConsistency: "unverified", unverified: noSample };
     else fingerprint = { digest: "0".repeat(64), members: [], declaredExtras: [], exclusions: [], sampledConsistency: "unverified", unverified: after.error.message };
-    const record = { schemaVersion: "paneweft.catalogue-record/1", repo: adapter.repo, adapter: adapter.id, catalogue: merged.value, fingerprint, ...(inventory.value === undefined ? {} : { inventory: inventory.value }), collectedAt: now() };
+    const record = { schemaVersion: "paneweft.catalogue-record/1", repo: adapter.repo, adapter: adapter.id, catalogue: merged.value, fingerprint, ...(inventory.value === undefined ? {} : { inventory: inventory.value }), ...(unlisted.length === 0 ? {} : { inventoryDrift: { unlisted } }), collectedAt: now() };
     await writeDurably(join(deps.sessionDir, "catalogues", adapter.repo, `${adapter.id}.json`), JSON.stringify(record));
     return { status: "succeeded", snapshotIds: [], diagnostics, catalogue: merged.value };
   }
@@ -659,7 +652,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
    * export that failed, or an id the export does not declare, ends the job `failed` and runs nothing. Returns the terminal outcome, or `undefined` when the run
    * was decided. */
   async function finishExport(id: string, intent: Intent, adapter: AdapterRecord, qexJob: QexJob, log: string, exported: Resolved): Promise<{ status: NonNullable<JobView["collectionStatus"]>; snapshotIds: string[]; diagnostics: Diagnostic[] } | undefined> {
-    const catalogueOutcome = await finalizeCatalogue(id, adapter, qexJob, log, exported);
+    const catalogueOutcome = await finalizeCatalogue(id, adapter, qexJob, log, exported, false);
     if (catalogueOutcome.status !== "succeeded" || catalogueOutcome.catalogue === undefined) return { status: "failed", snapshotIds: [], diagnostics: catalogueOutcome.diagnostics };
     const params = intent.params;
     const selected = selectExamples(adapter, catalogueOutcome.catalogue, { examples: params.examples, ...(params.views === undefined ? {} : { views: params.views }) });
@@ -717,7 +710,7 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
         // a cancel that was requested before the export ended: no example of the run ever started, so the job is cancelled whatever the export did
         if (neverRan || (stage === "export" && cancelRequested)) outcome = { status: "cancelled", snapshotIds: [], diagnostics: [] };
         else if (stage === "export") outcome = await finishExport(id, intent, adapter, qexJob, log, resolved);
-        else if (intent.params.mode === "catalogue") outcome = await finalizeCatalogue(id, adapter, qexJob, log, resolved);
+        else if (intent.params.mode === "catalogue") outcome = await finalizeCatalogue(id, adapter, qexJob, log, resolved, true);
         else outcome = await finalizeRun(id, intent, adapter, qexJob, log, cancelRequested && qexJob.state === "killed", resolved);
       } catch (cause) {
         if (typeof cause === "object" && cause !== null && injected.has(cause)) throw cause;

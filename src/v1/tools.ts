@@ -153,7 +153,7 @@ function serveListing(spec: ReplySpec, args: { format: ReplyFormat; budget: numb
 
 // ---- reading the owner's configuration ---------------------------------------------------------------------------------------------
 
-interface CatalogueRecord { schemaVersion: "paneweft.catalogue-record/1"; repo: string; adapter: string; catalogue: Catalogue; fingerprint: Fingerprint & { unverified?: string; sampledConsistency?: Consistency; sampleNote?: string }; inventory?: Inventory; collectedAt: string }
+interface CatalogueRecord { schemaVersion: "paneweft.catalogue-record/1"; repo: string; adapter: string; catalogue: Catalogue; fingerprint: Fingerprint & { unverified?: string; sampledConsistency?: Consistency; sampleNote?: string }; inventory?: Inventory; /** Ids the compiled catalogue has and the checked-in inventory does not list (F27). */ inventoryDrift?: { unlisted: Array<{ id: string; module: string }> }; collectedAt: string }
 
 async function catalogueRecords(sessionDir: string, repo: string): Promise<CatalogueRecord[]> {
   const dir = join(sessionDir, "catalogues", repo);
@@ -225,6 +225,16 @@ function coverageFigures(record: CatalogueRecord, runs: TestRun[]): Omit<Coverag
   return { ...coverageOf(record.catalogue, record.inventory, runs), inventory: "checked" };
 }
 
+/** F27: the ids a collect tolerated although `paneweft.inventory.json` does not list them, and the command that lists them. */
+function driftNotices(records: CatalogueRecord[]): string[] {
+  return records.flatMap((record) => {
+    const unlisted = record.inventoryDrift?.unlisted ?? [];
+    if (unlisted.length === 0) return [];
+    const shown = unlisted.slice(0, 10).map((entry) => entry.id).join(", ");
+    return [`${unlisted.length} id(s) of adapter ${record.adapter} are in the compiled catalogue but not in paneweft.inventory.json (${shown}${unlisted.length > 10 ? ", ..." : ""}): the owner of the change runs \`paneweft inventory update --repo ${record.repo} --adapter ${record.adapter}\` and reviews the file`];
+  });
+}
+
 async function listTypes(call: Call): Promise<OperationOutcome> {
   const loaded = await loadForRepo(call, call.args.language);
   if (isOutcome(loaded)) return loaded;
@@ -251,7 +261,7 @@ async function listTypes(call: Call): Promise<OperationOutcome> {
   const sum = (pick: (figure: (typeof figures)[number]) => number | null): number | null => (figures.some((figure) => pick(figure) === null) ? null : figures.reduce((total, figure) => total + (pick(figure) as number), 0));
   const combined = { declared: sum((figure) => figure.declared), linked: sum((figure) => figure.linked), exercised: sum((figure) => figure.exercised), passing: sum((figure) => figure.passing), gaps: figures.flatMap((figure) => figure.gaps), inventory: figures.every((figure) => figure.inventory === "checked") ? "checked" : "none" };
   const single = many ? {} : { target: first.catalogue.target, linkedScope: first.catalogue.linkedScope, catalogueDigest: first.catalogue.digest, collectedAt: first.collectedAt };
-  return serveListing({ tool: "list_types", completeness: loaded.uncatalogued ? { status: "partial", reason: "no catalogue stored yet" } : { status: "complete" }, ...(loaded.uncatalogued ? { notices: [NO_CATALOGUE_NOTICE(call.args.repo as string)] } : {}), freshness: await mergedFreshness(call, records), unit: "types", total: types.size, items, details: { ...single, scopes, coverage: combined }, query: { tool: "list_types", repo: call.args.repo, language: call.args.language ?? null, query: call.args.query ?? null } }, call);
+  return serveListing({ tool: "list_types", completeness: loaded.uncatalogued ? { status: "partial", reason: "no catalogue stored yet" } : { status: "complete" }, notices: [...(loaded.uncatalogued ? [NO_CATALOGUE_NOTICE(call.args.repo as string)] : []), ...driftNotices(records)], freshness: await mergedFreshness(call, records), unit: "types", total: types.size, items, details: { ...single, scopes, coverage: combined }, query: { tool: "list_types", repo: call.args.repo, language: call.args.language ?? null, query: call.args.query ?? null } }, call);
 }
 
 async function lastCaptures(call: Call, repo: string): Promise<TestRun[]> {
@@ -301,7 +311,7 @@ async function listViews(call: Call): Promise<OperationOutcome> {
     const json = { id: view.id, title: view.title, question: view.question, component: view.component, priority: view.priority, source: view.source, renderer: view.renderer ?? null, ...(status === null ? {} : { rendererStatus: status }), exampleIds: examples, lastCapture: lastRun === undefined ? null : { runId: lastRun.runId, snapshotId: `snap-${lastRun.runId}` }, staleReasons: freshness.status === "stale" ? freshness.reasons ?? [] : [] };
     return { json, text: `${view.id} [${view.component}, priority ${view.priority}] ${view.title} -- ${view.question} (${view.source.path}:${view.source.line}); ${status === null ? "" : `renderer=${status.id} (${status.digest === null ? "no files" : `digest ${status.digest.slice(0, 12)}...`}, ${status.state === "ready" ? "trusted" : status.state}${status.trustCommand === undefined ? "" : `; owner runs: ${status.trustCommand}`}); `}examples=${examples.length === 0 ? "none" : examples.join(",")}; last capture=${lastRun === undefined ? "never" : lastRun.runId}` };
   });
-  const notices: string[] = loaded.uncatalogued ? [NO_CATALOGUE_NOTICE(call.args.repo as string)] : [];
+  const notices: string[] = [...(loaded.uncatalogued ? [NO_CATALOGUE_NOTICE(call.args.repo as string)] : []), ...driftNotices(records)];
   const covered = records.map((record) => `${record.catalogue.linkedScope.join(", ")} (linked scope; target ${record.catalogue.target.target ?? record.catalogue.target.package}, features ${record.catalogue.target.features.join(",") || "none"})`).join("; ");
   if (!known && !loaded.uncatalogued) {
     notices.push(`the type "${typeId}" is not in the ${records.length === 1 ? "catalogue" : "catalogues"} compiled for ${covered}. That is NOT a statement that it has no views: it may live in a target, feature set or module ${records.length === 1 ? "this catalogue" : "these catalogues"} did not cover.`);
@@ -331,7 +341,7 @@ async function listExamples(call: Call): Promise<OperationOutcome> {
   });
   const first = records[0] as CatalogueRecord;
   const single = records.length > 1 ? {} : { linkedScope: first.catalogue.linkedScope, catalogueDigest: first.catalogue.digest };
-  return serveListing({ tool: "list_examples", completeness: loaded.uncatalogued ? { status: "partial", reason: "no catalogue stored yet" } : { status: "complete" }, ...(loaded.uncatalogued ? { notices: [NO_CATALOGUE_NOTICE(call.args.repo as string)] } : {}), freshness: await mergedFreshness(call, records), unit: "examples", total: examples.size, items, details: { ...single, scopes: await scopesOf(call, records, runs) }, query: { tool: "list_examples", repo: call.args.repo, type: call.args.type ?? null, view: call.args.view ?? null, tag: call.args.tag ?? null } }, call);
+  return serveListing({ tool: "list_examples", completeness: loaded.uncatalogued ? { status: "partial", reason: "no catalogue stored yet" } : { status: "complete" }, notices: [...(loaded.uncatalogued ? [NO_CATALOGUE_NOTICE(call.args.repo as string)] : []), ...driftNotices(records)], freshness: await mergedFreshness(call, records), unit: "examples", total: examples.size, items, details: { ...single, scopes: await scopesOf(call, records, runs) }, query: { tool: "list_examples", repo: call.args.repo, type: call.args.type ?? null, view: call.args.view ?? null, tag: call.args.tag ?? null } }, call);
 }
 
 // ---- scaffolds (read-only generation) ------------------------------------------------------------------------------------------------

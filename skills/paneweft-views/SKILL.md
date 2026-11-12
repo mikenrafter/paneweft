@@ -28,8 +28,12 @@ Read the repo instructions and the paneweft manifest. State the question and the
    `cancel_collection` stops a job.
 6. Call `view_result`. Inspect the text and, when a browser is available, the rendering. Test facts, navigation, empty and error
    states and the relevant limits. A browser link alone is not evidence that the rendering was checked.
-7. Update the view inventory and docs, run the repository's required checks, and retain declarations and tests. Report commands,
-   run and snapshot ids, stale gaps, renderer trust needs and any visual check that could not run.
+7. Update the view inventory and the docs, run the repository's required checks, and retain declarations and tests. The inventory
+   is `paneweft.inventory.json` at the adapter root (format and module naming: `docs/v1-red-contract.md` section 10);
+   `paneweft inventory update --repo R --adapter A` writes it from the stored catalogue (it adds; a declared id the catalogue
+   lacks stays unless `--prune`), so review the diff. A `collect` runs without it and its replies report the unlisted ids; the
+   owner's catalogue check and CI fail on them. Report commands, run and snapshot ids, stale gaps, renderer trust needs and any
+   visual check that could not run.
 
 Command recipe (all commands take `--format json|text` and `--max-bytes`):
 
@@ -42,6 +46,7 @@ paneweft collect --request-id r1 --repo vigil --adapter cargo --example watch.ca
 paneweft collection status r1
 paneweft result --run run-r1 --view watch.events
 paneweft failure diag-inv-1
+paneweft inventory update --repo vigil --adapter cargo
 ```
 
 Registering an adapter (`paneweft adapter add`) and trusting a renderer digest (`paneweft renderers trust`) are owner decisions

@@ -33,7 +33,7 @@ describe("[IV22 groundwork] skills/paneweft-views/SKILL.md", () => {
   // proves: CLAIM(IV22-recipe)
   it("shell commands use real paneweft commands", () => {
     const commands = [...skill.matchAll(/^\s*paneweft ([a-z]+(?: [a-z]+)?)/gm)].map((m) => m[1]!.split(" ")[0]);
-    const known = new Set([...V1_COMMANDS.map((c) => c.words[0]), "adapter", "renderers", "repo", "catalogue", "serve", "components", "describe", "validate", "render"]);
+    const known = new Set([...V1_COMMANDS.map((c) => c.words[0]), "adapter", "renderers", "repo", "catalogue", "inventory", "serve", "components", "describe", "validate", "render"]);
     expect(commands.length).toBeGreaterThan(0);
     for (const word of commands) expect(known.has(word!), word).toBe(true);
   });

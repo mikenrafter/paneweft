@@ -25,4 +25,4 @@ export const V1_COMMANDS: readonly V1Command[] = [
 ];
 
 /** CLI-only commands that no MCP tool may mirror: registering an adapter and trusting a renderer digest are owner decisions. */
-export const V1_OWNER_ONLY_COMMANDS: readonly string[][] = [["adapter", "add"], ["adapter", "list"], ["renderers", "trust"], ["renderers", "list"], ["catalogue", "refresh"]];
+export const V1_OWNER_ONLY_COMMANDS: readonly string[][] = [["adapter", "add"], ["adapter", "list"], ["renderers", "trust"], ["renderers", "list"], ["catalogue", "refresh"], ["inventory", "update"]];
