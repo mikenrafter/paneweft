@@ -6,9 +6,9 @@ import { fileURLToPath } from "node:url";
 const sdk = (path: string) => fileURLToPath(new URL(`../../../packages/paneweft-ts/src/${path}`, import.meta.url));
 
 export default defineConfig({
-  resolve: { alias: [{ find: "@paneweft/sdk/vitest", replacement: sdk("vitest.ts") }, { find: "@paneweft/sdk", replacement: sdk("index.ts") }] },
+  resolve: { alias: [{ find: "@paneweft/sdk/vitest-reporter", replacement: sdk("vitest-reporter.ts") }, { find: "@paneweft/sdk/vitest", replacement: sdk("vitest.ts") }, { find: "@paneweft/sdk", replacement: sdk("index.ts") }] },
   test: {
     include: ["tests/**/*.test.ts"],
-    reporters: ["default", sdk("vitest.ts")],
+    reporters: ["default", sdk("vitest-reporter.ts")],
   },
 });

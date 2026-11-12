@@ -235,7 +235,7 @@ type Suite = TestRun["suites"][number];
 
 const FAILING: ReadonlyArray<Outcome> = ["failed", "error", "blocked"];
 
-interface ReportedTest { name: string; state: string; errors?: string[]; retries?: number }
+interface ReportedTest { name: string; file?: string; state: string; errors?: string[]; retries?: number }
 interface VitestReport { tests?: ReportedTest[]; suites?: Array<{ file?: string; phase: Suite["phase"]; outcome: string; message?: string; examples?: string[] }>; unhandledErrors?: string[] }
 
 function pick(record: Record<string, unknown>, keys: string[]): Record<string, unknown> {
@@ -253,6 +253,10 @@ function synthetic(id: string, exampleId: string, outcome: Outcome, message: str
  * input fingerprint are placeholders here: the job service, which knows them, overwrites them. */
 export function reconcile(kind: "cargo" | "vitest", input: ReconcileInput): Result<TestRun> {
   const report: VitestReport = kind === "vitest" && input.native !== null && typeof input.native === "object" ? (input.native as VitestReport) : {};
+  // F1: every test the reporter records names its file. Vitest 3.2's TestModule has no `relativeModuleId`; a reporter that did not derive the file from `moduleId`
+  // wrote records without one and this host used to accept them. Refused, visibly: the failure names the test and the entry to list in the vitest config.
+  const fileless = (report.tests ?? []).find((test) => typeof test.file !== "string" || test.file.length === 0);
+  if (fileless !== undefined) return err("RUNNER_OUTPUT_INVALID", `the vitest reporter wrote the test "${fileless.name}" without a file, so the record cannot be trusted; list the reporter '@paneweft/sdk/vitest-reporter' in the vitest config (the reporter in '@paneweft/sdk/vitest' does not load on Vitest 3) and update @paneweft/sdk`);
   const invocations: Invocation[] = [];
   const byExample = new Map<string, Invocation[]>();
   const missing: string[] = [];

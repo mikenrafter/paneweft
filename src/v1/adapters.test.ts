@@ -208,3 +208,22 @@ it.each(["cargo", "vitest"] as const)("[S37] %s signal also clears verification 
   expect(run.examples.every((e) => !e.verified)).toBe(true);
   expect(run.suites.some((s) => s.phase === "binary" && s.outcome === "failed" && s.message?.includes("SIGSEGV"))).toBe(true);
 });
+
+describe("[F1] the reporter record names its file", () => {
+  const input = (tests: unknown[]) => ({ runId: "run-x", selected: ["mapping.work"], testNames: { "mapping.work": "example:mapping.work" }, exit: { code: 0, signal: null, timedOut: false, cancelled: false }, compile: "ok" as const, skipped: [], filtered: [], invocations: [], native: { schemaVersion: "paneweft.vitest-report/1", runId: "run-x", tests, suites: [], unhandledErrors: [] } });
+
+  // why: F1. On Vitest 3.2 the reporter wrote test records with no `file` (TestModule has no `relativeModuleId`) and the host accepted them silently.
+  // A reporter record with no file is an SDK or reporter defect and is refused, naming the test and the reporter entry to use.
+  // proves: CLAIM(F1-host-refuses-fileless)
+  it("refuses a vitest report whose test has no file", () => {
+    const refused = mustFail(reconcile("vitest", input([{ name: "example:mapping.work", state: "passed", errors: [], retries: 0 }])), "no file");
+    expect(refused.message).toContain("example:mapping.work");
+    expect(refused.message).toContain("@paneweft/sdk/vitest-reporter");
+    const empty = mustFail(reconcile("vitest", input([{ name: "example:mapping.work", file: "", state: "passed", errors: [], retries: 0 }])), "empty file");
+    expect(empty.message).toContain("example:mapping.work");
+  });
+
+  it("accepts a vitest report whose tests all have a file", () => {
+    must(reconcile("vitest", input([{ name: "example:mapping.work", file: "tests/a.test.ts", state: "passed", errors: [], retries: 0 }])), "with a file");
+  });
+});

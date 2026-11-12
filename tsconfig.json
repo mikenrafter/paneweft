@@ -17,6 +17,7 @@
     "skipLibCheck": true,
     "paths": {
       "@paneweft/sdk": ["./packages/paneweft-ts/src/index.ts"],
+      "@paneweft/sdk/vitest-reporter": ["./packages/paneweft-ts/src/vitest-reporter.ts"],
       "@paneweft/sdk/vitest": ["./packages/paneweft-ts/src/vitest.ts"]
     }
   },

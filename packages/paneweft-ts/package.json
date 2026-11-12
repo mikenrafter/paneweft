@@ -6,7 +6,18 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./vitest": "./src/vitest.ts"
+    "./vitest": "./src/vitest.ts",
+    "./vitest-reporter": "./src/vitest-reporter.ts"
   },
-  "files": ["src"]
+  "files": [
+    "src"
+  ],
+  "peerDependencies": {
+    "vitest": ">=3.2 <6"
+  },
+  "peerDependenciesMeta": {
+    "vitest": {
+      "optional": true
+    }
+  }
 }

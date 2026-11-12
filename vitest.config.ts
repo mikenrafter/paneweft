@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 export default defineConfig({
   resolve: {
     alias: [
+      { find: "@paneweft/sdk/vitest-reporter", replacement: fileURLToPath(new URL("./packages/paneweft-ts/src/vitest-reporter.ts", import.meta.url)) },
       { find: "@paneweft/sdk/vitest", replacement: fileURLToPath(new URL("./packages/paneweft-ts/src/vitest.ts", import.meta.url)) },
       { find: "@paneweft/sdk", replacement: fileURLToPath(new URL("./packages/paneweft-ts/src/index.ts", import.meta.url)) },
     ],

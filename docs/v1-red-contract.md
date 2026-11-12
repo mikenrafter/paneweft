@@ -15,7 +15,7 @@ Week-one scope is amendment S1; claims outside it are tagged `later` in the repo
 | Layer | Where | Boundary the tests use |
 |---|---|---|
 | Rust SDK | `crates/paneweft`, `crates/paneweft-macros` | `Capture`, `Context`, `Inspectable`, `example::invoke`, `Catalogue` |
-| TS SDK | `packages/paneweft-ts` (`@paneweft/sdk`, `@paneweft/sdk/vitest`) | `Capture`, `defineType`, `runExample`, `compileCatalogue` |
+| TS SDK | `packages/paneweft-ts` (`@paneweft/sdk`, `@paneweft/sdk/vitest`, `@paneweft/sdk/vitest-reporter`: the reporter alone, which never imports `vitest`) | `Capture`, `defineType`, `runExample`, `compileCatalogue` |
 | Wire | `src/schemas/v1/*.schema.json` | raw Ajv (`validateAgainstV1`) |
 | Host | `src/v1/*.ts` | the exported functions; `executeV1Operation` for the tools |
 | CLI | `src/cli/v1-commands.ts` (table; wiring is green) | `paneweft <words>` as a process |

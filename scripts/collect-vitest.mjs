@@ -10,7 +10,7 @@
 // not typecheck), exits 2, and the host reports a compile failure with the tsc diagnostics. Vitest then runs with the collector's
 // environment (PANEWEFT_*); the repository's vitest config lists the paneweft reporter, which writes <staging>/reporter.json.
 // Catalogue mode imports the repository's explicit manifest under tsx (so tsconfig paths apply) and writes
-// <staging>/catalogue/manifest.json; it never runs an example.
+// <staging>/catalogue/manifest.json; it never runs an example, and `vitest` itself resolves to an inert module there (catalogue-vitest-stub.mjs, F2).
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -69,7 +69,9 @@ if (flag("--catalogue")) {
   const tsx = import.meta.resolve("tsx/esm");
   const manifest = join(root, option("--manifest") ?? "paneweft.views.ts");
   const inventory = option("--inventory") === undefined ? [] : ["--inventory", option("--inventory")];
-  process.exit(await run(process.execPath, ["--import", tsx, fileURLToPath(import.meta.url), "--catalogue-child", "--manifest", manifest, "--staging", staging, "--root", root, ...inventory], { cwd: root, env: { ...process.env, TSX_TSCONFIG_PATH: join(root, tsconfig) } }));
+  // the stub is registered after tsx, so its hook sees `vitest` first (F2): the export evaluates the manifest and the example modules, never the test runner
+  const stub = new URL("./catalogue-vitest-stub.mjs", import.meta.url).href;
+  process.exit(await run(process.execPath, ["--import", tsx, "--import", stub, fileURLToPath(import.meta.url), "--catalogue-child", "--manifest", manifest, "--staging", staging, "--root", root, ...inventory], { cwd: root, env: { ...process.env, TSX_TSCONFIG_PATH: join(root, tsconfig) } }));
 }
 
 // run mode: typecheck, then vitest
