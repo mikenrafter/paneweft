@@ -336,7 +336,16 @@ async function listExamples(call: Call): Promise<OperationOutcome> {
 // ---- scaffolds (read-only generation) ------------------------------------------------------------------------------------------------
 
 interface Patch { path: string; text: string }
-interface ScaffoldPlan { patches: Patch[]; outputTest: Patch; registration: string; template: string; /** TypeScript: the token a new example uses, and where it is declared (`declared` false: the scaffold's own module). */ token?: { symbol: string; module: string; declared: boolean } }
+interface ScaffoldPlan {
+  patches: Patch[];
+  outputTest: Patch;
+  registration: string;
+  template: string;
+  /** TypeScript: the token a new example uses, and where it is declared (`declared` false: the scaffold's own module). */
+  token?: { symbol: string; module: string; declared: boolean };
+  /** TypeScript, `declared` false: the module that declares the token and nothing else; whatever uses the token must return it too (S12). */
+  tokenPatch?: Patch;
+}
 
 /** The module specifier that imports `target` (a repository-relative path) from a file in the directory `from`. */
 const importFrom = (from: string, target: string): string => {
@@ -435,21 +444,22 @@ function scaffoldView(kind: "cargo" | "vitest", args: { typeId: string; source: 
   const modulePath = join(dirname(args.source.path), `${args.source.symbol}.paneweft.ts`);
   const relative = relativePath(dirname(modulePath), args.source.path);
   const tokenName = `${args.source.symbol}Token`;
+  const declaration = [
+    `// Development-only instrumentation of ${args.source.symbol}; never import it from a production entry point.`,
+    "import { defineType } from \"@paneweft/sdk\";",
+    `import type { ${args.source.symbol} } from ${JSON.stringify(relative.startsWith(".") ? relative : `./${relative}`)};`,
+    "",
+    `export const ${tokenName} = defineType<${args.source.symbol}>({`,
+    `  id: ${JSON.stringify(args.typeId)},`,
+    `  source: { path: ${JSON.stringify(args.source.path)}, symbol: ${JSON.stringify(args.source.symbol)} },`,
+    "});",
+    "",
+  ];
   return {
     template: "ts-token-view-v1",
-    patches: [{ path: modulePath, text: [
-      `// Development-only instrumentation of ${args.source.symbol}; never import it from a production entry point.`,
-      "import { defineType } from \"@paneweft/sdk\";",
-      `import type { ${args.source.symbol} } from ${JSON.stringify(relative.startsWith(".") ? relative : `./${relative}`)};`,
-      "",
-      `export const ${tokenName} = defineType<${args.source.symbol}>({`,
-      `  id: ${JSON.stringify(args.typeId)},`,
-      `  source: { path: ${JSON.stringify(args.source.path)}, symbol: ${JSON.stringify(args.source.symbol)} },`,
-      "});",
-      "",
-      ...view(tokenName),
-    ].join("\n") }],
+    patches: [{ path: modulePath, text: [...declaration, ...view(tokenName)].join("\n") }],
     token: { symbol: tokenName, module: modulePath, declared: false },
+    tokenPatch: { path: modulePath, text: declaration.join("\n") },
     outputTest,
     registration: `TypeScript: add an entry for "${modulePath}" to paneweft.views.ts with \`types: [${tokenName}]\` and \`views: [${name}]\`, then refresh the catalogue.`,
   };
@@ -546,11 +556,34 @@ async function scaffold(call: Call, tool: "scaffold_view" | "scaffold_example"):
   const token = kind === "vitest" ? await declaredToken(adapter, record.catalogue, typeId) : undefined;
   const plan = scaffoldView(kind, { typeId, source, question, component: (call.args.component as "shape" | "list" | undefined) ?? "shape", claim, ...(token === undefined ? {} : { token }) });
   if (tool === "scaffold_example") {
-    const token = plan.token as NonNullable<ScaffoldPlan["token"]>;
     const example = (call.args.example as string | undefined) ?? `${slug(source.symbol)}.new`;
-    plan.patches = [{ path: plan.outputTest.path, text: kind === "cargo"
-      ? `#[cfg(all(test, feature = "paneweft"))]\nmod examples {\n    #[paneweft::example(id = ${JSON.stringify(example)}, claims = [${JSON.stringify(claim)}])]\n    fn ${slug(example)}() -> ${source.symbol} {\n        // TODO: build the value with the real constructor; do not invent fields.\n        unimplemented!("TODO: construct ${source.symbol}")\n    }\n}\n`
-      : `import { example } from "@paneweft/sdk";\nimport { ${token.symbol} } from ${JSON.stringify(importFrom("tests", token.module))};${token.declared ? "" : " // declared by the module scaffold_view proposes for this type"}\n\nexport const ${slug(example)} = example({ id: ${JSON.stringify(example)}, type: ${token.symbol}, claims: [${JSON.stringify(claim)}], run(cx) {\n  // TODO: build the value with the real code, then record a check\n  cx.check(${JSON.stringify(claim)}, () => { throw new Error("TODO: write the expected assertion"); });\n  throw new Error("TODO: construct ${source.symbol}");\n} });\n` }];
+    if (kind === "cargo") {
+      plan.patches = [{ path: plan.outputTest.path, text: `#[cfg(all(test, feature = "paneweft"))]\nmod examples {\n    #[paneweft::example(id = ${JSON.stringify(example)}, claims = [${JSON.stringify(claim)}])]\n    fn ${slug(example)}() -> ${source.symbol} {\n        // TODO: build the value with the real constructor; do not invent fields.\n        unimplemented!("TODO: construct ${source.symbol}")\n    }\n}\n` }];
+      plan.registration = "Rust: nothing to import; `#[paneweft::example]` registers the example descriptor with linkme. Make sure the test binary calls `paneweft::test_adapter!();` once, refresh the catalogue, then collect the example by its id.";
+    } else {
+      // S12: the example brings everything it imports. The token declaration the plan proposed (when the repository declares none) is returned
+      // WITH the example, the example is registered in the manifest (not the view the plan shared), and a test file runs it.
+      const token = plan.token as NonNullable<ScaffoldPlan["token"]>;
+      const name = slug(example);
+      const examplePath = `tests/${name}.examples.ts`;
+      const testPath = `tests/${name}.paneweft.test.ts`;
+      const exampleText = `import { example } from "@paneweft/sdk";\nimport { ${token.symbol} } from ${JSON.stringify(importFrom("tests", token.module))};${token.declared ? "" : " // declared by the first patch of this reply"}\n\nexport const ${name} = example({ id: ${JSON.stringify(example)}, type: ${token.symbol}, claims: [${JSON.stringify(claim)}], run(cx) {\n  // TODO: build the value with the real code, then record a check\n  cx.check(${JSON.stringify(claim)}, () => { throw new Error("TODO: write the expected assertion"); });\n  throw new Error("TODO: construct ${source.symbol}");\n} });\n`;
+      plan.patches = [...(plan.tokenPatch === undefined ? [] : [plan.tokenPatch]), { path: examplePath, text: exampleText }];
+      plan.outputTest = { path: testPath, text: [
+        "import { exampleTest } from \"@paneweft/sdk/vitest\";",
+        `import { ${name} } from ${JSON.stringify(`./${name}.examples.ts`)};`,
+        "",
+        "// WHY: the example must build the value with the real code and record checks with independently expected values; this fails until it does.",
+        `// CLAIM: ${claim}`,
+        `exampleTest(${name});`,
+        "",
+      ].join("\n") };
+      plan.registration = [
+        `TypeScript: in paneweft.views.ts import { ${name} } from ${JSON.stringify(`./${examplePath}`)} and add { path: ${JSON.stringify(examplePath)}, examples: [${name}] } to the modules of the manifest.`,
+        ...(token.declared ? [] : [`The token is new: also import { ${token.symbol} } from ${JSON.stringify(`./${token.module}`)} and add { path: ${JSON.stringify(token.module)}, types: [${token.symbol}] } to the modules.`]),
+        `${testPath} runs the example under vitest. Then refresh the catalogue.`,
+      ].join(" ");
+    }
   }
   const recipe = { command: `paneweft collect --request-id <id> --repo ${record.repo} --adapter ${record.adapter} --example <example-id>`, adapter: record.adapter };
   return servePatches(call, { tool, completeness: { status: "complete" }, freshness: await scopeFreshness(call, record), unit: "patches", total: plan.patches.length, notices, query: { tool, repo: call.args.repo, type: requested, question: call.args.question ?? null, component: call.args.component ?? null, example: call.args.example ?? null }, details: { typeId, source, template: plan.template, outputTest: plan.outputTest, registration: plan.registration, recipe } }, plan.patches);

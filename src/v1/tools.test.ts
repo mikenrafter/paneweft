@@ -3,10 +3,10 @@
 // test/v1/surface.test.ts.
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { cpSync, readFileSync, readdirSync, writeFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { FIXTURES, collectionImport, fakeCargoAdapter, git, loadFixture, makeRepo, useFakeQex, useV1Sessions, write } from "../../test/helpers/v1-world.ts";
+import { FIXTURES, REPO_ROOT, collectionImport, fakeCargoAdapter, git, loadFixture, makeRepo, useFakeQex, useV1Sessions, write } from "../../test/helpers/v1-world.ts";
 import { must } from "../../test/helpers/must.ts";
 import { useTempDirs } from "../../test/helpers/tmp.ts";
 import { importCollection } from "./import.ts";
@@ -425,6 +425,97 @@ describe("[S12] scaffolds can be used from the text reply", () => {
     expect(module.text).toContain('import type { Backup } from "./models.ts";');
     expect(module.text).toMatch(/export const BackupToken = defineType<Backup>\(\{/);
     expect(module.text).not.toContain('from "./Backup.paneweft.ts"');
+  });
+});
+
+describe("[S12r2] a scaffold's files compile together", () => {
+  /** A copy of the containmarks-lite fixture package that type-checks on its own: absolute paths to this repository's SDK and node_modules. */
+  async function scaffoldWorld() {
+    const { session, dir } = await open();
+    const root = tmp("cmcompile");
+    cpSync(join(FIXTURES, "packages/containmarks-lite"), root, { recursive: true });
+    rmSync(join(root, "node_modules"), { recursive: true, force: true }); // a checkout may carry its own; the copy resolves this repository's
+    symlinkSync(join(REPO_ROOT, "node_modules"), join(root, "node_modules"));
+    writeFileSync(join(root, "tsconfig.json"), JSON.stringify({
+      compilerOptions: { target: "ES2023", lib: ["ES2023", "DOM"], module: "NodeNext", moduleResolution: "NodeNext", types: ["node"], typeRoots: [join(REPO_ROOT, "node_modules/@types")], strict: true, noUncheckedIndexedAccess: true, verbatimModuleSyntax: true, isolatedModules: true, allowImportingTsExtensions: true, noEmit: true, skipLibCheck: true, baseUrl: ".", paths: { "@paneweft/sdk": [join(REPO_ROOT, "packages/paneweft-ts/src/index.ts")], "@paneweft/sdk/vitest": [join(REPO_ROOT, "packages/paneweft-ts/src/vitest.ts")] } },
+      include: ["src", "tests", "paneweft.views.ts"],
+    }));
+    appendFileSync(join(root, "src/models.ts"), "export interface Backup {\n  name: string;\n}\n");
+    const cm = loadFixture<any>("v1/catalogues/containmarks.catalogue.json");
+    const withBackup = structuredClone(cm);
+    withBackup.types.push({ typeId: "containmarks::Backup", source: { path: "src/models.ts", symbol: "Backup" } });
+    mkdirSync(join(dir, "catalogues", "cm"), { recursive: true });
+    writeFileSync(join(dir, "catalogues", "cm", "vitest.json"), JSON.stringify({ schemaVersion: "paneweft.catalogue-record/1", repo: "cm", adapter: "vitest", catalogue: withBackup, fingerprint: { digest: "0".repeat(64), members: [], declaredExtras: [], exclusions: [] }, collectedAt: "2026-11-11T12:00:00Z" }));
+    writeFileSync(join(dir, "adapters.json"), JSON.stringify({ adapters: [fakeCargoAdapter({ id: "vitest", kind: "vitest", grammar: "vitest-run/1", repo: "cm", workspaceRoot: root, entry: "." })] }));
+    const context: V1Context = { session, sessionDir: dir, jobs: null };
+    const scaffold = async (tool: string, args: Record<string, unknown>) => {
+      const outcome = await executeV1Operation(context, tool, { format: "json", repo: "cm", maxBytes: 32768, ...args });
+      expect(outcome.ok, outcome.body.slice(0, 300)).toBe(true);
+      return JSON.parse(outcome.body).details as { patches: Array<{ path: string; text: string }>; outputTest: { path: string; text: string }; registration: string };
+    };
+    /** Writes what the reply hands out (patches, then the output test) into the package: a patch to an existing file is appended to it. */
+    const apply = (reply: { patches: Array<{ path: string; text: string }>; outputTest: { path: string; text: string } }): void => {
+      for (const file of [...reply.patches, reply.outputTest]) {
+        mkdirSync(join(root, file.path, ".."), { recursive: true });
+        if (existsSync(join(root, file.path))) appendFileSync(join(root, file.path), `\n${file.text}`);
+        else writeFileSync(join(root, file.path), file.text);
+      }
+    };
+    const typecheck = (): string => {
+      const result = spawnSync(process.execPath, [join(REPO_ROOT, "node_modules/typescript/bin/tsc"), "-p", join(root, "tsconfig.json")], { encoding: "utf8" });
+      return `${result.stdout}${result.stderr}`.trim();
+    };
+    return { scaffold, apply, typecheck, root };
+  }
+
+  // why: S12 (round 2). scaffold_example replaced the plan's patches with the example file alone, so for a type whose module declares no token the
+  // example imported `BackupToken` from a module the reply never supplied. The files the reply returns must type-check TOGETHER, in a copy of
+  // a fixture package: a token declared in the repository, and a token the reply must supply itself. Rejects a scaffold that returns an
+  // import of a module nobody wrote.
+  // proves: CLAIM(S12-scaffold)
+  it.each([
+    ["scaffold_view", "containmarks::ContainerMappingRecord", "a token the repository declares"],
+    ["scaffold_example", "containmarks::ContainerMappingRecord", "a token the repository declares"],
+    ["scaffold_view", "containmarks::Backup", "a token the scaffold must declare"],
+    ["scaffold_example", "containmarks::Backup", "a token the scaffold must declare"],
+  ] as const)("%s for %s (%s) type-checks in a copy of the package", async (tool, type, _why) => {
+    const world = await scaffoldWorld();
+    expect(world.typecheck(), "the fixture package type-checks before the scaffold").toBe("");
+    const reply = await world.scaffold(tool, { type, ...(tool === "scaffold_view" ? { question: "What does it hold?" } : { example: "thing.new" }) });
+    world.apply(reply);
+    expect(world.typecheck(), `the files of ${tool} do not compile together`).toBe("");
+  }, 60_000);
+
+  // why: S12 (round 2). The example scaffold keeps the token declaration patch when no module declares a token, and its registration step
+  // is for the EXAMPLE (the file that defines it and the manifest entry that carries it), not for the view the scaffold used to share a plan with.
+  // proves: CLAIM(S12-scaffold)
+  it("returns the token module with the example and registers the example", async () => {
+    const world = await scaffoldWorld();
+    const reply = await world.scaffold("scaffold_example", { type: "containmarks::Backup", example: "thing.new" });
+    expect(reply.patches.map((patch) => patch.path)).toEqual(["src/Backup.paneweft.ts", "tests/thing_new.examples.ts"]);
+    expect(reply.patches[0]!.text).toMatch(/export const BackupToken = defineType<Backup>\(\{/);
+    expect(reply.patches[0]!.text).not.toContain(".view(");
+    expect(reply.registration).toContain('path: "tests/thing_new.examples.ts"');
+    expect(reply.registration).toContain("examples: [thing_new]");
+    expect(reply.registration).toContain('path: "src/Backup.paneweft.ts"');
+    expect(reply.registration).toContain("types: [BackupToken]");
+    expect(reply.outputTest.path).toBe("tests/thing_new.paneweft.test.ts");
+    expect(reply.outputTest.text).toContain("exampleTest(thing_new);");
+    const declared = await world.scaffold("scaffold_example", { type: "containmarks::ContainerMappingRecord", example: "mapping.fresh" });
+    expect(declared.patches.map((patch) => patch.path)).toEqual(["tests/mapping_fresh.examples.ts"]);
+    expect(declared.registration).toContain("examples: [mapping_fresh]");
+    expect(declared.registration).not.toContain("types:");
+  }, 60_000);
+
+  // why: S12 (round 2). The Rust example scaffold's registration step was the view recipe (`#[paneweft::views]`); an example registers through
+  // `#[paneweft::example]`.
+  // proves: CLAIM(S12-scaffold)
+  it("a Rust example scaffold registers through the example attribute", async () => {
+    const { text, call } = await toolWorld();
+    void text;
+    const { payload } = await call("scaffold_example", { repo: "vg", type: "vigil::watch::WatchFile", example: "watch.new", maxBytes: 32768 });
+    expect(payload.details.registration).toContain("#[paneweft::example]");
+    expect(payload.details.registration).not.toContain("#[paneweft::views]");
   });
 });
 
