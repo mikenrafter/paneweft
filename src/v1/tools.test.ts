@@ -583,6 +583,59 @@ describe("[S12r2] a scaffold's files compile together", () => {
   });
 });
 
+describe("[D4] the Rust scaffold compiles", () => {
+  /** A copy of the Boat fixture crate, catalogued as `boat::Boat`, whose path dependency points at this repository's SDK. */
+  async function boatWorld() {
+    const { session, dir } = await open();
+    const root = tmp("boat");
+    cpSync(join(FIXTURES, "crates/boat"), root, { recursive: true });
+    writeFileSync(join(root, "Cargo.toml"), readFileSync(join(root, "Cargo.toml"), "utf8").replace("../../../crates/paneweft", join(REPO_ROOT, "crates/paneweft")));
+    cpSync(join(REPO_ROOT, "Cargo.lock"), join(root, "Cargo.lock")); // the versions the SDK itself builds with, so the check needs no network
+    const withBoat = structuredClone(catalogue);
+    withBoat.types.push({ typeId: "boat::Boat", source: { path: "src/lib.rs", symbol: "Boat" } });
+    mkdirSync(join(dir, "catalogues", "vg"), { recursive: true });
+    writeFileSync(join(dir, "catalogues", "vg", "cargo.json"), JSON.stringify({ schemaVersion: "paneweft.catalogue-record/1", repo: "vg", adapter: "cargo", catalogue: withBoat, fingerprint: { digest: "0".repeat(64), members: [], declaredExtras: [], exclusions: [] }, collectedAt: "2026-11-11T12:00:00Z" }));
+    writeFileSync(join(dir, "adapters.json"), JSON.stringify({ adapters: [fakeCargoAdapter({ workspaceRoot: root })] }));
+    const context: V1Context = { session, sessionDir: dir, jobs: null };
+    const scaffold = async (tool: string, args: Record<string, unknown>) => {
+      const outcome = await executeV1Operation(context, tool, { format: "json", repo: "vg", maxBytes: 32768, ...args });
+      expect(outcome.ok, outcome.body.slice(0, 300)).toBe(true);
+      return JSON.parse(outcome.body).details as { patches: Array<{ path: string; text: string }>; outputTest: { path: string; text: string }; registration: string };
+    };
+    const check = (): { status: number | null; output: string } => {
+      const result = spawnSync("cargo", ["check", "--tests", "--features", "paneweft", "--offline", "--message-format", "short"], { cwd: root, encoding: "utf8", env: { ...process.env, CARGO_TARGET_DIR: join(REPO_ROOT, "target", "scaffold-check") } });
+      return { status: result.status, output: `${result.stdout}${result.stderr}` };
+    };
+    return { scaffold, check, root };
+  }
+
+  // why: D4 / S12 (round 3). The Rust example scaffold put `fn boat_new() -> Boat` inside a nested `mod examples`, which does not see the type of
+  // the module around it: the generated example did not compile, and nothing compiled it. The patch must import the type it returns from
+  // `super`. Rejects a scaffold whose nested module names a type it does not import.
+  // proves: CLAIM(S12-scaffold)
+  it("imports the selected type into the module that holds the example", async () => {
+    const { call } = await toolWorld();
+    const { payload } = await call("scaffold_example", { repo: "vg", type: "vigil::watch::WatchFile", example: "watch.new", maxBytes: 32768 });
+    const patch = payload.details.patches[0].text as string;
+    expect(patch).toMatch(/mod examples \{\s+(\/\/[^\n]*\n\s+)?use super::WatchFile;/);
+  });
+
+  // why: D4 / S12 (round 3). The scaffold is code a person pastes: one generated Rust example is compiled, with the SDK and its feature, in a copy
+  // of a small crate whose type (`Boat`) already carries a views impl. The control proves the copy builds before the patch is applied.
+  // Rejects any generated Rust that is never compiled.
+  // proves: CLAIM(S12-scaffold)
+  it("compiles the generated example for Boat next to the type", async () => {
+    const world = await boatWorld();
+    const before = world.check();
+    expect(before.status, `the fixture crate builds before the scaffold: ${before.output.slice(-600)}`).toBe(0);
+    const reply = await world.scaffold("scaffold_example", { type: "boat::Boat", example: "boat.new" });
+    expect(reply.patches.map((patch) => patch.path)).toEqual(["src/lib.rs"]);
+    appendFileSync(join(world.root, "src/lib.rs"), `\n${reply.patches[0]!.text}`);
+    const after = world.check();
+    expect(after.status, `the generated example does not compile:\n${after.output.slice(-900)}`).toBe(0);
+  }, 300_000);
+});
+
 describe("[S13] a diagnostic id names its run", () => {
   const settled = async (call: (tool: string, args?: Record<string, unknown>) => Promise<{ payload: any }>, job: string) => vi.waitFor(async () => { const s = await call("collection_status", { job }); expect(["failed", "succeeded"]).toContain(s.payload.items[0].state); return s.payload.items[0]; }, { timeout: 20_000, interval: 50 });
 

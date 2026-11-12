@@ -558,7 +558,7 @@ async function scaffold(call: Call, tool: "scaffold_view" | "scaffold_example"):
   if (tool === "scaffold_example") {
     const example = (call.args.example as string | undefined) ?? `${slug(source.symbol)}.new`;
     if (kind === "cargo") {
-      plan.patches = [{ path: plan.outputTest.path, text: `#[cfg(all(test, feature = "paneweft"))]\nmod examples {\n    #[paneweft::example(id = ${JSON.stringify(example)}, claims = [${JSON.stringify(claim)}])]\n    fn ${slug(example)}() -> ${source.symbol} {\n        // TODO: build the value with the real constructor; do not invent fields.\n        unimplemented!("TODO: construct ${source.symbol}")\n    }\n}\n` }];
+      plan.patches = [{ path: plan.outputTest.path, text: `#[cfg(all(test, feature = "paneweft"))]\nmod examples {\n    // the example returns a value of the type declared in the module around this one; adjust the path if the type is declared deeper\n    use super::${source.symbol};\n\n    #[paneweft::example(id = ${JSON.stringify(example)}, claims = [${JSON.stringify(claim)}])]\n    fn ${slug(example)}() -> ${source.symbol} {\n        // TODO: build the value with the real constructor; do not invent fields.\n        unimplemented!("TODO: construct ${source.symbol}")\n    }\n}\n` }];
       plan.registration = "Rust: nothing to import; `#[paneweft::example]` registers the example descriptor with linkme. Make sure the test binary calls `paneweft::test_adapter!();` once, refresh the catalogue, then collect the example by its id.";
     } else {
       // S12: the example brings everything it imports. The token declaration the plan proposed (when the repository declares none) is returned
