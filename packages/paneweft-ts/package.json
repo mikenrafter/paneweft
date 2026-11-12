@@ -5,12 +5,22 @@
   "description": "Paneweft TypeScript SDK: typed views and executable examples beside the code they explain. Development-only: never import it from a production entry point.",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./vitest": "./src/vitest.ts",
-    "./vitest-reporter": "./src/vitest-reporter.ts"
+    ".": {
+      "types": "./types/index.d.ts",
+      "default": "./src/index.ts"
+    },
+    "./vitest": {
+      "types": "./types/vitest.d.ts",
+      "default": "./src/vitest.ts"
+    },
+    "./vitest-reporter": {
+      "types": "./types/vitest-reporter.d.ts",
+      "default": "./src/vitest-reporter.ts"
+    }
   },
   "files": [
-    "src"
+    "src",
+    "types"
   ],
   "peerDependencies": {
     "vitest": ">=3.2 <6"
