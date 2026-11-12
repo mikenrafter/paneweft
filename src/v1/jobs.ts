@@ -613,20 +613,29 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
     await mkdir(stagingDir, { recursive: true });
     await writeDurably(runStageFile(id), JSON.stringify(run));
     await crash("export:after-run-stage");
+    // CLAIM(T5-cancel-recheck): cancel.json is written without the lease, so the early read of `finish` can be older than a cancel; read it again right before
+    // the run is decided, and a cancel that is there ends the job cancelled: no run is submitted.
+    if (await cancelIsRequested(id)) return { status: "cancelled", snapshotIds: [], diagnostics: [] };
     await writeState(id, { state: "submitted", stage: "run", qexId: null, observedStop: undefined, indeterminate: undefined }, `the catalogue exported by qex job ${qexJob.id} resolved ${selected.value.examples.length} example(s); the run is next`);
     return undefined;
   }
 
+  const cancelIsRequested = async (id: string): Promise<boolean> => (await readJson<{ requested?: boolean }>(join(jobDir(id), "cancel.json")))?.requested === true;
+
   /** Imports (or, for a catalogue job, stores) the results of a qex job that stopped, then writes the terminal state. For the export stage of an exportFirst
    * job the "terminal state" is the decision of the run (finishExport). */
   async function finish(id: string, intent: Intent, adapter: AdapterRecord, qexJob: QexJob): Promise<void> {
-    const cancelRequested = (await readJson<{ requested?: boolean }>(join(jobDir(id), "cancel.json")))?.requested === true;
+    const cancelRequested = await cancelIsRequested(id);
     const neverRan = qexJob.state === "cancelled" || qexJob.state === "skipped";
     // CLAIM(T3-cancel-too-late): a run is `cancelled` only when a cancel was requested AND qex stopped the job for it (killed), or the job never ran
     // (above). A job that completed, failed or timed out on its own keeps its real outcome, whatever was asked after it stopped.
     const leased = await withLease(id, async () => {
       const terminal = await readState(id);
       if (terminal !== undefined && TERMINAL_JOB_STATES.includes(terminal.state)) return;
+      // CLAIM(T5-stage-identity): a finish belongs to the qex job of the stage on disk. A caller that read a job before the export stage switched to the run
+      // (a cancel, a recovery) holds the previous stage's job; finishing the current stage with it would import an empty staging directory and end the job
+      // while the real run continues. The caller re-reads the state and deals with the job that is current.
+      if (terminal !== undefined && terminal.qexId !== qexJob.id) return;
       const stage = stageOf(intent, terminal);
       const resolved = await resolvedOf(id, intent, stage);
       if (resolved === undefined) throw new Error(`job "${id}" has no resolved ${stage} stage to finish`);
@@ -892,38 +901,47 @@ export function createJobService(rawDeps: JobServiceDeps): JobService {
       if (!submitted.ok) return submitted;
       state = submitted.value;
       if (state.qexId === null) return ok({ outcome: "indeterminate", state: state.state, qexActions: [] });
-      const qexId = state.qexId;
-      const queried = await deps.qex.status(qexId);
-      if (queried.ok && QEX_TERMINAL_STATES.includes(queried.value.state)) {
-        const after = await finishWithin(id, intent, adapter, queried.value, Date.now() + cancelWaitMs);
-        if (after === undefined || !TERMINAL_JOB_STATES.includes(after.state)) return ok({ outcome: "indeterminate", state: after?.state ?? "importing", qexActions: [] });
-        return ok({ outcome: cancelOutcome(after.state), state: after.state, qexActions: [], ...(after.terminal === undefined ? {} : { collectionStatus: after.terminal.collectionStatus }) });
-      }
-      await writeDurably(join(jobDir(id), "cancel.json"), JSON.stringify({ requested: true, at: now() }));
-      const actions: Array<"cancel" | "kill"> = ["cancel"];
-      const cancelled = await deps.qex.cancel(qexId);
-      if (!cancelled.ok) {
-        actions.push("kill");
-        const killed = await deps.qex.kill(qexId);
-        if (!killed.ok) {
-          const again = await deps.qex.status(qexId);
-          if (!(again.ok && QEX_TERMINAL_STATES.includes(again.value.state))) return err("RUNNER_FAILED", `neither qex cancel nor qex kill stopped job ${qexId}: ${killed.error.message}`, { retryable: true });
+      let qexId = state.qexId;
+      // The job a cancel acts on can change under it: an exportFirst job moves from its export to its run while the cancel holds the export's qex job. The
+      // second round (at most: the run is the last stage) stops the job that is current once the first round's finish has stepped aside (T5).
+      for (;;) {
+        const queried = await deps.qex.status(qexId);
+        // CLAIM(T6-cancel-first): the request is recorded before a stopped job is decided, so a finish of a stopped export ends the job cancelled instead of
+        // deciding its run.
+        await writeDurably(join(jobDir(id), "cancel.json"), JSON.stringify({ requested: true, at: now() }));
+        const actions: Array<"cancel" | "kill"> = [];
+        let stopped: QexJob | undefined;
+        if (queried.ok && QEX_TERMINAL_STATES.includes(queried.value.state)) stopped = queried.value;
+        else {
+          actions.push("cancel");
+          const cancelled = await deps.qex.cancel(qexId);
+          if (!cancelled.ok) {
+            actions.push("kill");
+            const killed = await deps.qex.kill(qexId);
+            if (!killed.ok) {
+              const again = await deps.qex.status(qexId);
+              if (!(again.ok && QEX_TERMINAL_STATES.includes(again.value.state))) return err("RUNNER_FAILED", `neither qex cancel nor qex kill stopped job ${qexId}: ${killed.error.message}`, { retryable: true });
+            }
+          }
+          const deadline = Date.now() + cancelWaitMs;
+          while (Date.now() < deadline) {
+            const check = await deps.qex.status(qexId);
+            if (check.ok && QEX_TERMINAL_STATES.includes(check.value.state)) {
+              stopped = check.value;
+              break;
+            }
+            await sleep(50);
+          }
+          if (stopped === undefined) return ok({ outcome: "indeterminate", state: "running", qexActions: actions });
         }
-      }
-      const deadline = Date.now() + cancelWaitMs;
-      let final: QexJob | undefined;
-      while (Date.now() < deadline) {
-        const check = await deps.qex.status(qexId);
-        if (check.ok && QEX_TERMINAL_STATES.includes(check.value.state)) {
-          final = check.value;
-          break;
+        const after = await finishWithin(id, intent, adapter, stopped, Date.now() + cancelWaitMs, actions.length === 0 ? undefined : actions);
+        if (after !== undefined && !TERMINAL_JOB_STATES.includes(after.state) && after.stage === "run" && after.qexId !== null && after.qexId !== qexId) {
+          qexId = after.qexId;
+          continue;
         }
-        await sleep(50);
+        if (after === undefined || !TERMINAL_JOB_STATES.includes(after.state)) return ok({ outcome: "indeterminate", state: after?.state ?? (actions.length === 0 ? "importing" : "running"), qexActions: actions });
+        return ok({ outcome: cancelOutcome(after.state), state: after.state, qexActions: actions, ...(after.terminal === undefined ? {} : { collectionStatus: after.terminal.collectionStatus }) });
       }
-      if (final === undefined) return ok({ outcome: "indeterminate", state: "running", qexActions: actions });
-      const after = await finishWithin(id, intent, adapter, final, Date.now() + cancelWaitMs, actions);
-      if (after === undefined || !TERMINAL_JOB_STATES.includes(after.state)) return ok({ outcome: "indeterminate", state: after?.state ?? "running", qexActions: actions });
-      return ok({ outcome: cancelOutcome(after.state), state: after.state, qexActions: actions, ...(after.terminal === undefined ? {} : { collectionStatus: after.terminal.collectionStatus }) });
     },
   };
 }

@@ -1009,3 +1009,67 @@ describe("[T4] a collect needs no owner-only catalogue step", () => {
     expect(w.qex.jobs()).toHaveLength(2);
   });
 });
+
+// ---- T5-T7: a finish belongs to the qex job of the stage on disk, and a cancel is never lost across the export -> run switch --------------------------
+
+/** The qex client of one service whose FIRST `status` answer is held back after qex has answered: the caller keeps what it saw while the test moves the job on. */
+function staleStatus(qex: QexClient): { client: QexClient; seen: () => boolean; release: () => void } {
+  let release: () => void = () => {};
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let seen = false;
+  let used = false;
+  return { client: { ...qex, status: async (id) => { const real = await qex.status(id); if (used) return real; used = true; seen = true; await gate; return real; } }, seen: () => seen, release };
+}
+const stateOf = (dir: string, id: string): any => JSON.parse(readFileSync(join(dir, "jobs", id, "state.json"), "utf8"));
+
+describe("[T5] a finish belongs to the qex job of the stage on disk", () => {
+  // WHY CLAIM(T5-stage-identity): cancel read the export's stopped qex job; a status then finished the export and submitted the run; cancel's finish ran
+  // against the RUN stage with the EXPORT's job, found an empty staging directory and ended the job failed while the real run kept going uncancelled.
+  // Rejects a finish that never compares its qex job with the job of the stage on disk (state.qexId).
+  it("a cancel that saw the export stop cancels the run the status submitted, and never finalizes the run from the export job", async () => {
+    const w = await freshWorld();
+    must(await w.service().collect(request("t5")), "collect");
+    await vi.waitFor(() => expect(w.qex.jobs()[0]?.state).toBe("completed"), { timeout: 15_000, interval: 25 });
+    w.qex.control({ hold: true });
+    const stale = staleStatus(w.qex.client);
+    const canceller = createJobService({ session: w.session, sessionDir: w.dir, qex: stale.client, adapters: [w.adapter], cancelWaitMs: 3000 });
+    const cancelling = canceller.cancel("t5");
+    await vi.waitFor(() => expect(stale.seen(), "cancel holds the export's stopped job").toBe(true), { timeout: 15_000, interval: 10 });
+    const moved = must(await w.service().status("t5"), "status finishes the export and submits the run");
+    expect(moved, "the run is submitted and queued").toMatchObject({ state: "queued", qexId: "fq-2" });
+    stale.release();
+    const result = must(await cancelling, "cancel");
+    expect(result, JSON.stringify(result)).toMatchObject({ outcome: "cancelled", state: "cancelled", collectionStatus: "cancelled" });
+    expect(w.qex.jobs().map((job) => job.state), "the export completed, the run was cancelled by qex").toEqual(["completed", "cancelled"]);
+    expect(historyOf(w.dir, "t5"), "the run was never imported from the export job").not.toContain("failed");
+    expect(w.qex.executions(), "the run never executed").toHaveLength(1);
+    expect(must(await w.service().status("t5"), "status again")).toMatchObject({ state: "cancelled" });
+  });
+
+  // WHY CLAIM(T5-cancel-recheck): finishExport read cancel.json only at the start of the finish, so a cancel written after that read still got its run
+  // submitted. The re-read under the lease, right before the run is decided, ends the job cancelled. Rejects a finishExport that trusts the early read.
+  it("a cancel written after the export finish read cancel.json still ends the job cancelled and submits no run", async () => {
+    const w = await freshWorld();
+    const lateCancel = w.service({ crashAt: (point) => { if ((point as string) === "export:after-run-stage") writeFileSync(join(w.dir, "jobs", "t5b", "cancel.json"), JSON.stringify({ requested: true, at: new Date().toISOString() })); } });
+    must(await lateCancel.collect(request("t5b")), "collect");
+    const view = await settle(lateCancel, "t5b", ["succeeded", "failed", "cancelled"]);
+    expect(view, JSON.stringify(view)).toMatchObject({ state: "cancelled", collectionStatus: "cancelled" });
+    expect(w.qex.executions(), "only the export executed").toHaveLength(1);
+    expect(w.qex.jobs()).toHaveLength(1);
+  });
+});
+
+describe("[T6] a cancel is recorded before a stopped export is decided", () => {
+  // WHY CLAIM(T6-cancel-first): cancel found the export already stopped, finished it without writing cancel.json, the finish decided the run, and the next status
+  // submitted it; cancel itself answered indeterminate. A stopped export with a requested cancel is a cancelled job.
+  it("cancel after the export stopped but before it was processed ends the job cancelled and runs nothing", async () => {
+    const w = await freshWorld();
+    must(await w.service().collect(request("t6")), "collect");
+    await vi.waitFor(() => expect(w.qex.jobs()[0]?.state).toBe("completed"), { timeout: 15_000, interval: 25 });
+    const result = must(await w.service().cancel("t6"), "cancel");
+    expect(result, JSON.stringify(result)).toMatchObject({ outcome: "cancelled", state: "cancelled", collectionStatus: "cancelled" });
+    expect(must(await w.service().status("t6", { waitSeconds: 2 }), "status")).toMatchObject({ state: "cancelled" });
+    expect(w.qex.executions(), "no run was submitted after the cancel").toHaveLength(1);
+    expect(w.qex.jobs()).toHaveLength(1);
+  });
+});
