@@ -48,11 +48,21 @@ pub struct ViewMeta {
     pub priority: i32,
 }
 
+/// The bytes reserved for the record frame of ONE invocation of a view on ONE object (S23). A view id is not a key: an object's child may run
+/// the same view while its parent's invocation is still open, and a refused invocation never held a reservation at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct Reservation {
+    object: usize,
+    invocation: u64,
+}
+
 /// One computed view of an object: the result, and whether the view declared its reads best-effort.
 pub struct ViewEntry {
     pub meta: ViewMeta,
     pub result: ViewResult,
     pub best_effort: bool,
+    /// What `Context::enter_view` reserved for this invocation; `None` when no reservation was made (a pushed result, a refused view).
+    pub(crate) reservation: Option<Reservation>,
 }
 
 /// Successful views stay alongside per-view diagnostics.
@@ -64,22 +74,22 @@ impl ViewSetResult {
     pub fn new() -> ViewSetResult { ViewSetResult { views: Vec::new() } }
 
     pub fn push(&mut self, meta: ViewMeta, result: ViewResult) {
-        self.views.push(ViewEntry { meta, result, best_effort: false });
+        self.views.push(ViewEntry { meta, result, best_effort: false, reservation: None });
     }
 
     /// Runs one view function under `cx`: a panic fails this view alone (spec decision 10), and a `cx.best_effort()` call made by
     /// the view is recorded on its entry. The `views` attribute generates one call per annotated method.
     pub fn run<F: FnOnce(&mut Context<'_>) -> ViewResult>(&mut self, cx: &mut Context<'_>, meta: ViewMeta, view: F) {
-        if !cx.enter_view(meta) {
+        let Some(reservation) = cx.enter_view(meta) else {
             // no room in the byte budget even for the frame of the view record: it is not run, and the omission is named
             let message = format!("view {} was not run: the byte budget of this capture is used up", meta.id);
-            self.views.push(ViewEntry { meta, result: Err(ViewError::new("limit", message)), best_effort: false });
+            self.views.push(ViewEntry { meta, result: Err(ViewError::new("limit", message)), best_effort: false, reservation: None });
             return;
-        }
+        };
         let outcome = catch_unwind(AssertUnwindSafe(|| view(cx)));
         let best_effort = cx.leave_view();
         let result = outcome.unwrap_or_else(|payload| Err(ViewError::new("view-exception", format!("view {} panicked: {}", meta.id, panic_message(payload.as_ref())))));
-        self.views.push(ViewEntry { meta, result, best_effort });
+        self.views.push(ViewEntry { meta, result, best_effort, reservation: Some(reservation) });
     }
 }
 
@@ -217,8 +227,10 @@ pub(crate) struct State {
     /// values, edges, view records and their data, stored page bodies and diagnostics. Nothing is measured after the fact.
     meter: Rc<Meter>,
     faulted: bool,
-    /// What `Context::enter_view` already paid for the frame of the view record, by view id.
-    prepaid: HashMap<&'static str, u64>,
+    /// What `Context::enter_view` already paid for the frame of each open view record, by object and invocation (S23).
+    reservations: HashMap<Reservation, u64>,
+    /// The next invocation number of a view.
+    next_invocation: u64,
     /// Time spent publishing children, so a parent view's budget measures only its own computation.
     nested_ns: Rc<Cell<u128>>,
 }
@@ -253,7 +265,8 @@ impl State {
             omitted: BTreeMap::new(),
             meter: Rc::new(Meter::new(limits.root_bytes, limits.collection_bytes)),
             faulted: false,
-            prepaid: HashMap::new(),
+            reservations: HashMap::new(),
+            next_invocation: 0,
             nested_ns: Rc::new(Cell::new(0)),
         }
     }
@@ -459,6 +472,13 @@ impl State {
                 }
             }
             Err(payload) => {
+                // the set that held the open invocations is gone: their reservations are returned, or they stay spent for the whole capture
+                let lost: Vec<Reservation> = self.reservations.keys().filter(|key| key.object == index).copied().collect();
+                for key in lost {
+                    if let Some(bytes) = self.reservations.remove(&key) {
+                        self.meter.refund(bytes);
+                    }
+                }
                 let message = format!("views() of {} panicked: {}", self.objects[index].type_id, panic_message(payload.as_ref()));
                 self.add_diagnostic("view-exception", &message, None, None, None);
             }
@@ -467,9 +487,10 @@ impl State {
     }
 
     fn record_view(&mut self, index: usize, entry: ViewEntry, object_best_effort: bool) {
-        let ViewEntry { meta, result, best_effort } = entry;
+        let ViewEntry { meta, result, best_effort, reservation } = entry;
         let object_id = self.objects[index].id.clone();
-        let prepaid = self.prepaid.remove(meta.id).unwrap_or(0);
+        // only THIS invocation's reservation is settled: a child that ran the same view (or was refused) holds, or gives back, its own
+        let prepaid = reservation.and_then(|key| self.reservations.remove(&key)).unwrap_or(0);
         if self.objects[index].views.iter().any(|existing| existing == meta.id) {
             self.meter.refund(prepaid);
             self.add_diagnostic("registration", &format!("object {object_id} computed two views with the id {}", meta.id), Some(meta.id), None, None);
@@ -621,20 +642,22 @@ pub struct Context<'a> {
 
 impl<'a> Context<'a> {
     /// Pays for the frame of the view record BEFORE the view runs, so a field or table that takes all the room cannot leave its own view
-    /// without one; `record_view` settles the difference. Returns false (and counts the omission) when there is no room for the frame.
-    pub(crate) fn enter_view(&mut self, meta: ViewMeta) -> bool {
+    /// without one; `record_view` settles the difference. Returns the reservation, or `None` (and counts the omission) when there is no room for the frame.
+    pub(crate) fn enter_view(&mut self, meta: ViewMeta) -> Option<Reservation> {
         let object_id = self.state.objects[self.object].id.clone();
         let frame = json!({"viewId": meta.id, "objectId": object_id, "title": meta.title, "question": meta.question, "component": meta.component, "priority": meta.priority, "evidence": {"provenance": "observed", "runId": self.state.options.run_id}, "completeness": {"status": "partial", "reason": "row-limit", "omitted": {"rows": {"known": true, "count": 1_000_000_000u64}, "strings": {"known": true, "count": 1_000_000_000u64}}}, "pages": []});
         let prepaid = json_bytes(&frame) + json_bytes(&json!(meta.id)) + 2 + 160;
         if prepaid > self.state.meter.room().saturating_sub(RESERVE) {
             self.state.count("views", 1);
-            return false;
+            return None;
         }
         self.state.meter.spend(prepaid);
-        self.state.prepaid.insert(meta.id, prepaid);
+        let reservation = Reservation { object: self.object, invocation: self.state.next_invocation };
+        self.state.next_invocation += 1;
+        self.state.reservations.insert(reservation, prepaid);
         self.view = Some(meta.id);
         self.view_best_effort = false;
-        true
+        Some(reservation)
     }
 
     pub(crate) fn leave_view(&mut self) -> bool {
